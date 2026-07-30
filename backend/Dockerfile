@@ -16,6 +16,9 @@ ENV UV_LINK_MODE=copy
 
 WORKDIR /app/
 
+# Celery Beat writes its pid and persistent schedule only below these paths.
+RUN mkdir -p /var/run/celery /var/lib/celery
+
 # Place executables in the environment at the front of the path
 # Ref: https://docs.astral.sh/uv/guides/integration/docker/#using-the-environment
 ENV PATH="/app/.venv/bin:$PATH"

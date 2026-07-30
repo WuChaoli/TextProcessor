@@ -3,11 +3,14 @@ services:
   redis:
     image: redis:7-alpine
     restart: always
+    command: ["redis-server", "--appendonly", "yes"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       retries: 5
       timeout: 5s
+    volumes:
+      - textprocessor-redis-data:/data
 
   db:
     image: postgres:18
@@ -182,6 +185,14 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling-api:5001}
       - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - celery -A app.core.celery_app:celery_app inspect ping --destination=celery@$$HOSTNAME --timeout=5 | grep -q pong
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   extraction-beat:
     image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
@@ -203,6 +214,8 @@ services:
       - app.core.celery_app:celery_app
       - beat
       - --loglevel=INFO
+      - --pidfile=/var/run/celery/beat.pid
+      - --schedule=/var/lib/celery/beat-schedule
     env_file:
       - .env
     environment:
@@ -212,6 +225,16 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - CELERY_BROKER_URL=redis://redis:6379/0
+    volumes:
+      - celery-beat-data:/var/lib/celery
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - test -s /var/run/celery/beat.pid && kill -0 "$$(cat /var/run/celery/beat.pid)" && test -e /var/lib/celery/beat-schedule
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   frontend:
     image: '${DOCKER_IMAGE_FRONTEND?Variable not set}:${TAG-latest}'
@@ -244,6 +267,8 @@ services:
       - traefik.http.routers.${STACK_NAME?Variable not set}-frontend-http.middlewares=https-redirect
 volumes:
   app-db-data:
+  celery-beat-data:
+  textprocessor-redis-data:
 
 networks:
   traefik-public:

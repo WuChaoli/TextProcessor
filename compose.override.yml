@@ -111,6 +111,16 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    develop:
+      watch:
+        - path: ./backend
+          action: sync+restart
+          target: /app/backend
+          ignore:
+            - ./backend/.venv
+            - .venv
+        - path: ./backend/pyproject.toml
+          action: rebuild
 
   docling-api:
     restart: "no"

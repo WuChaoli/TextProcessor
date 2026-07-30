@@ -1,55 +1,116 @@
 [CmdletBinding()]
 param(
-    [string]$BaseUrl = "http://localhost:5001",
-    [string]$ApiKey = $env:DOCLING_SERVE_API_KEY
+    [string]$BaseUrl,
+    [string]$ApiKey = $env:DOCLING_SERVE_API_KEY,
+    [string]$ComposeProjectName,
+    [string[]]$ComposeFiles = @("compose.yml", "compose.docling.yml"),
+    [switch]$AllowPublishedPort
 )
 
 $ErrorActionPreference = "Stop"
 
-if ([string]::IsNullOrWhiteSpace($ApiKey)) {
-    throw "DOCLING_SERVE_API_KEY is required."
+function Get-ComposeArguments {
+    $arguments = @()
+    if (-not [string]::IsNullOrWhiteSpace($ComposeProjectName)) {
+        $arguments += @("-p", $ComposeProjectName)
+    }
+    foreach ($composeFile in $ComposeFiles) {
+        $arguments += @("-f", $composeFile)
+    }
+    return $arguments
 }
 
+function Invoke-Compose {
+    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+
+    & docker compose @script:composeArguments @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Docker Compose command failed."
+    }
+}
+
+if ($ComposeFiles.Count -eq 0) {
+    throw "At least one Compose file is required."
+}
+
+$script:composeArguments = Get-ComposeArguments
 $expectedServices = @("docling-redis", "docling-api", "docling-worker")
-$runningServices = docker compose -f compose.yml -f compose.docling.yml ps --services --status running
-if ($LASTEXITCODE -ne 0) {
-    throw "Unable to inspect the Docling Compose services."
-}
-
+$runningServices = @(Invoke-Compose ps --services --status running)
 foreach ($service in $expectedServices) {
     if ($runningServices -notcontains $service) {
         throw "Docling service is not running: $service"
     }
 }
 
-$unauthorizedStatus = 0
-try {
-    Invoke-WebRequest -Uri "$BaseUrl/v1/convert/file/async" -Method Post | Out-Null
+$publishedPort = @(& docker compose @script:composeArguments port docling-api 5001 2>$null)
+if ($LASTEXITCODE -notin @(0, 1)) {
+    throw "Unable to inspect the Docling API port mapping."
 }
-catch {
-    $unauthorizedStatus = [int]$_.Exception.Response.StatusCode
-}
-if ($unauthorizedStatus -notin @(401, 403)) {
-    throw "Docling API key enforcement failed; received HTTP $unauthorizedStatus."
+if (-not $AllowPublishedPort -and $publishedPort.Count -gt 0) {
+    throw "Docling API must not publish host port 5001 outside an explicit local override."
 }
 
-$headers = @{"X-API-Key" = $ApiKey}
-$openApi = Invoke-RestMethod -Uri "$BaseUrl/openapi.json" -Headers $headers
-$requiredPaths = @(
+$containerProbe = @'
+import urllib.error
+import urllib.request
+
+base_url = "http://localhost:5001"
+try:
+    urllib.request.urlopen(base_url + "/v1/convert/file/async", timeout=5)
+except urllib.error.HTTPError as error:
+    if error.code not in (401, 403):
+        raise SystemExit(1)
+else:
+    raise SystemExit(1)
+
+request = urllib.request.Request(
+    base_url + "/openapi.json",
+    headers={"X-API-Key": __import__("os").environ["DOCLING_SERVE_API_KEY"]},
+)
+with urllib.request.urlopen(request, timeout=10) as response:
+    document = response.read().decode("utf-8")
+for path in (
     "/v1/convert/file/async",
     "/v1/status/poll/{task_id}",
-    "/v1/result/{task_id}"
-)
-foreach ($path in $requiredPaths) {
-    if ($null -eq $openApi.paths.$path) {
-        throw "Docling OpenAPI path is missing: $path"
+    "/v1/result/{task_id}",
+):
+    if ('"' + path + '"') not in document:
+        raise SystemExit(1)
+'@
+
+if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    Invoke-Compose exec -T docling-api python -c $containerProbe | Out-Null
+}
+else {
+    if ([string]::IsNullOrWhiteSpace($ApiKey)) {
+        throw "DOCLING_SERVE_API_KEY is required when BaseUrl is set."
+    }
+    $unauthorizedStatus = 0
+    try {
+        Invoke-WebRequest -Uri "$BaseUrl/v1/convert/file/async" -Method Post | Out-Null
+    }
+    catch {
+        $unauthorizedStatus = [int]$_.Exception.Response.StatusCode
+    }
+    if ($unauthorizedStatus -notin @(401, 403)) {
+        throw "Docling API key enforcement failed."
+    }
+
+    $headers = @{"X-API-Key" = $ApiKey}
+    $openApi = Invoke-RestMethod -Uri "$BaseUrl/openapi.json" -Headers $headers
+    foreach ($path in @(
+        "/v1/convert/file/async",
+        "/v1/status/poll/{task_id}",
+        "/v1/result/{task_id}"
+    )) {
+        if ($null -eq $openApi.paths.$path) {
+            throw "Docling OpenAPI path is missing: $path"
+        }
     }
 }
 
-$apiImage = docker compose -f compose.yml -f compose.docling.yml images --format json docling-api |
-    ConvertFrom-Json
-$workerImage = docker compose -f compose.yml -f compose.docling.yml images --format json docling-worker |
-    ConvertFrom-Json
+$apiImage = Invoke-Compose images --format json docling-api | ConvertFrom-Json
+$workerImage = Invoke-Compose images --format json docling-worker | ConvertFrom-Json
 if ($apiImage.ID -ne $workerImage.ID) {
     throw "Docling API and worker do not use the same image."
 }
