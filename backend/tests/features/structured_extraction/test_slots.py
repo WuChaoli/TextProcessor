@@ -1,12 +1,13 @@
 import threading
+import time
 import uuid
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import text
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
@@ -40,22 +41,6 @@ class PausingCapacityLockRepository(ProcessorSlotRepository):
             self._lock_acquired.set()
             if not self._release_lock.wait(timeout=5):
                 raise TimeoutError("test did not release processor capacity lock")
-            yield
-
-
-class ObservingCapacityLockRepository(ProcessorSlotRepository):
-    def __init__(
-        self,
-        session: Session,
-        passed_capacity_lock: threading.Event,
-    ) -> None:
-        super().__init__(session)
-        self._passed_capacity_lock = passed_capacity_lock
-
-    @contextmanager
-    def _processor_capacity_lock(self, processor_name: str) -> Generator[None]:
-        with super()._processor_capacity_lock(processor_name):
-            self._passed_capacity_lock.set()
             yield
 
 
@@ -202,8 +187,6 @@ def test_postgresql_capacity_lock_blocks_second_acquisition_until_release() -> N
     now = datetime(2026, 7, 30, tzinfo=UTC)
     first_lock_acquired = threading.Event()
     release_first_lock = threading.Event()
-    second_started = threading.Event()
-    second_passed_capacity_lock = threading.Event()
 
     with Session(engine) as setup_session:
         setup_session.add(
@@ -230,47 +213,73 @@ def test_postgresql_capacity_lock_blocks_second_acquisition_until_release() -> N
             )
         setup_session.commit()
 
-    def acquire_first(task_id: uuid.UUID) -> ProcessorSlot | None:
-        with Session(engine) as slot_session:
-            return PausingCapacityLockRepository(
-                slot_session,
-                first_lock_acquired,
-                release_first_lock,
-            ).acquire(
-                task_id=task_id,
-                processor_name=processor_name,
-                max_in_flight=1,
-                lease_duration=timedelta(seconds=30),
-                now=now,
-            )
-
-    def acquire_second(task_id: uuid.UUID) -> ProcessorSlot | None:
-        with Session(engine) as slot_session:
-            second_started.set()
-            return ObservingCapacityLockRepository(
-                slot_session,
-                second_passed_capacity_lock,
-            ).acquire(
-                task_id=task_id,
-                processor_name=processor_name,
-                max_in_flight=1,
-                lease_duration=timedelta(seconds=30),
-                now=now,
-            )
-
     try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            first = executor.submit(acquire_first, task_ids[0])
-            try:
-                assert first_lock_acquired.wait(timeout=5)
-                second = executor.submit(acquire_second, task_ids[1])
-                assert second_started.wait(timeout=5)
-                assert not second_passed_capacity_lock.wait(timeout=0.5)
-                with pytest.raises(FutureTimeoutError):
-                    second.result(timeout=0.5)
-            finally:
-                release_first_lock.set()
-            acquired = [first.result(timeout=5), second.result(timeout=5)]
+        with Session(engine) as first_session, Session(engine) as second_session:
+            first_pid = (
+                first_session.connection()
+                .execute(text("SELECT pg_backend_pid()"))
+                .scalar_one()
+            )
+            second_pid = (
+                second_session.connection()
+                .execute(text("SELECT pg_backend_pid()"))
+                .scalar_one()
+            )
+            assert first_pid != second_pid
+
+            def acquire_first(task_id: uuid.UUID) -> ProcessorSlot | None:
+                return PausingCapacityLockRepository(
+                    first_session,
+                    first_lock_acquired,
+                    release_first_lock,
+                ).acquire(
+                    task_id=task_id,
+                    processor_name=processor_name,
+                    max_in_flight=1,
+                    lease_duration=timedelta(seconds=30),
+                    now=now,
+                )
+
+            def acquire_second(task_id: uuid.UUID) -> ProcessorSlot | None:
+                return ProcessorSlotRepository(second_session).acquire(
+                    task_id=task_id,
+                    processor_name=processor_name,
+                    max_in_flight=1,
+                    lease_duration=timedelta(seconds=30),
+                    now=now,
+                )
+
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(acquire_first, task_ids[0])
+                try:
+                    assert first_lock_acquired.wait(timeout=5)
+                    second = executor.submit(acquire_second, task_ids[1])
+                    deadline = time.monotonic() + 5
+                    observed_wait: tuple[object, object] | None = None
+                    observed_advisory_wait = False
+                    with engine.connect() as observer:
+                        while time.monotonic() < deadline:
+                            row = observer.execute(
+                                text(
+                                    "SELECT wait_event_type, wait_event "
+                                    "FROM pg_stat_activity WHERE pid = :pid"
+                                ),
+                                {"pid": second_pid},
+                            ).one_or_none()
+                            observed_wait = tuple(row) if row is not None else None
+                            if observed_wait == ("Lock", "advisory"):
+                                observed_advisory_wait = True
+                                break
+                            time.sleep(0.05)
+                    if not observed_advisory_wait:
+                        pytest.fail(
+                            "second PostgreSQL backend did not wait for advisory lock "
+                            f"before deadline; pid={second_pid}, "
+                            f"last_wait={observed_wait!r}"
+                        )
+                finally:
+                    release_first_lock.set()
+                acquired = [first.result(timeout=5), second.result(timeout=5)]
     finally:
         with Session(engine) as cleanup_session:
             for task_id in task_ids:
