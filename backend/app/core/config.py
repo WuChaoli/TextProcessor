@@ -1,5 +1,6 @@
 import secrets
 import warnings
+from pathlib import Path
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
@@ -54,6 +55,14 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str = ""
     POSTGRES_DB: str = ""
+    EXTRACTION_INPUT_ROOTS: list[Path] = []
+    EXTRACTION_OUTPUT_ROOTS: list[Path] = []
+    EXTRACTION_HTTP_ALLOWED_HOSTS: list[str] = []
+    EXTRACTION_HTTP_ALLOWED_CIDRS: list[str] = []
+    EXTRACTION_MAX_INPUT_BYTES: int = 100 * 1024 * 1024
+    EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
+    EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
+    CELERY_BROKER_URL: str = "redis://redis:6379/0"
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -112,6 +121,20 @@ class Settings(BaseSettings):
             "FIRST_SUPERUSER_PASSWORD", self.FIRST_SUPERUSER_PASSWORD
         )
 
+        return self
+
+    @model_validator(mode="after")
+    def _validate_extraction_roots(self) -> Self:
+        input_roots = {
+            path.resolve(strict=False) for path in self.EXTRACTION_INPUT_ROOTS
+        }
+        output_roots = {
+            path.resolve(strict=False) for path in self.EXTRACTION_OUTPUT_ROOTS
+        }
+        if input_roots & output_roots:
+            raise ValueError("结构化提取输入根目录和输出根目录不能重叠")
+        self.EXTRACTION_INPUT_ROOTS = sorted(input_roots, key=str)
+        self.EXTRACTION_OUTPUT_ROOTS = sorted(output_roots, key=str)
         return self
 
 
