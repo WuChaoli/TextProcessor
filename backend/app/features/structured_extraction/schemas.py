@@ -5,14 +5,7 @@ from typing import Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 
-TaskStatus = Literal[
-    "pending",
-    "queued",
-    "running",
-    "succeeded",
-    "failed",
-    "cancelled",
-]
+from app.features.structured_extraction.models import ExtractionTaskStatus
 
 
 class CamelModel(BaseModel):
@@ -45,7 +38,7 @@ class ExtractionTaskAccepted(CamelModel):
     task_id: uuid.UUID
     session_id: str
     file_id: str
-    status: TaskStatus
+    status: ExtractionTaskStatus
 
 
 class ExtractionResultPublic(CamelModel):
@@ -63,7 +56,7 @@ class ExtractionTaskPublic(CamelModel):
     task_id: uuid.UUID
     session_id: str
     file_id: str
-    status: TaskStatus
+    status: ExtractionTaskStatus
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -75,4 +68,3 @@ class ExtractionTaskPublic(CamelModel):
         if self.result is not None and self.error is not None:
             raise ValueError("result 和 error 不能同时存在")
         return self
-
