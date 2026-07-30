@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import JSON, DateTime, String, UniqueConstraint
+from sqlalchemy import JSON, DateTime, Enum, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -40,7 +40,12 @@ class ExtractionTask(SQLModel, table=True):
     selected_input_type: str = Field(max_length=16)
     target_path: str = Field(max_length=2048)
     status: ExtractionTaskStatus = Field(
-        sa_type=String(16),  # type: ignore[call-overload]
+        sa_type=Enum(
+            ExtractionTaskStatus,
+            native_enum=False,
+            values_callable=lambda values: [value.value for value in values],
+            length=16,
+        ),  # type: ignore[call-overload]
         index=True,
     )
     processing_phase: str | None = Field(default=None, max_length=64)
