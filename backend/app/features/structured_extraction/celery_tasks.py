@@ -17,6 +17,7 @@ from app.features.structured_extraction.errors import (
 from app.features.structured_extraction.orchestration import (
     ExtractionOrchestrator,
     ExtractionTaskScheduler,
+    is_retryable_processor_http_error,
 )
 from app.features.structured_extraction.repository import ExtractionTaskRepository
 
@@ -153,14 +154,21 @@ def submit_extraction_task(
     task_type: str,
     schema_version: int,
 ) -> None:
-    del self
     with Session(engine) as session:
-        handle_submit_task(
-            session,
-            task_id=task_id,
-            task_type=task_type,
-            schema_version=schema_version,
-        )
+        try:
+            handle_submit_task(
+                session,
+                task_id=task_id,
+                task_type=task_type,
+                schema_version=schema_version,
+            )
+        except ExtractionProcessingError as error:
+            if not is_retryable_processor_http_error(error):
+                raise
+            raise self.retry(
+                exc=error,
+                countdown=settings.EXTRACTION_WORKER.poll_interval_seconds,
+            ) from error
 
 
 @celery_app.task(  # type: ignore[untyped-decorator]
@@ -183,7 +191,7 @@ def poll_extraction_task(
                 schema_version=schema_version,
             )
         except ExtractionProcessingError as error:
-            if not error.transient:
+            if not is_retryable_processor_http_error(error):
                 raise
             raise self.retry(
                 exc=error,

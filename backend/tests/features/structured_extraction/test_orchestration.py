@@ -8,6 +8,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
 from app.core.config import ExtractionWorkerSettings
+from app.features.structured_extraction import celery_tasks
 from app.features.structured_extraction.adapters.protocol import (
     ExternalProcessorAdapter,
 )
@@ -104,6 +105,24 @@ class FakeExternalAdapter:
 class ForbiddenSlots:
     def acquire(self, **_kwargs: object) -> None:
         raise AssertionError("plain text route must not acquire a processor slot")
+
+
+class RetryRequested(Exception):
+    pass
+
+
+class RetryRecorder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[ExtractionProcessingError, int]] = []
+
+    def retry(
+        self,
+        *,
+        exc: ExtractionProcessingError,
+        countdown: int,
+    ) -> None:
+        self.calls.append((exc, countdown))
+        raise RetryRequested
 
 
 @pytest.fixture
@@ -297,6 +316,58 @@ def test_submit_claims_capacity_persists_external_id_and_schedules_poll(
     assert scheduler.poll_calls == [(task.id, 7)]
 
 
+@pytest.mark.parametrize("status_code", [429, 503])
+def test_submit_retries_explicit_safe_http_transient_without_extra_slot(
+    session: Session,
+    tmp_path: Path,
+    status_code: int,
+) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    input_root.mkdir()
+    output_root.mkdir()
+    source = input_root / "report.pdf"
+    source.write_bytes(b"%PDF-1.7\nplaceholder")
+    task = make_task(source=source, target=output_root / "report.md")
+    session.add(task)
+    session.commit()
+    scheduler = RecordingScheduler()
+    adapter = FakeExternalAdapter(
+        submit_error=ExtractionProcessingError(
+            ExtractionErrorCode.PROCESSING_FAILED,
+            f"processor returned HTTP {status_code}",
+            transient=True,
+        )
+    )
+    orchestrator = make_orchestrator(
+        session,
+        input_root=input_root,
+        output_root=output_root,
+        staging_root=staging_root,
+        scheduler=scheduler,
+        adapter_factory=lambda _processor: adapter,
+    )
+
+    with pytest.raises(ExtractionProcessingError) as first_raised:
+        orchestrator.submit(task.id)
+    with pytest.raises(ExtractionProcessingError):
+        orchestrator.submit(task.id)
+
+    session.refresh(task)
+    slots = session.exec(
+        select(ProcessorSlot).where(ProcessorSlot.task_id == task.id)
+    ).all()
+    assert first_raised.value.transient is True
+    assert task.status is ExtractionTaskStatus.RUNNING
+    assert task.processing_phase == "submitting"
+    assert task.external_task_id is None
+    assert len(adapter.submissions) == 2
+    assert len(slots) == 1
+    assert slots[0].state == "active"
+    assert scheduler.poll_calls == []
+
+
 def test_poll_processing_schedules_one_follow_up_without_blocking(
     session: Session,
     tmp_path: Path,
@@ -403,6 +474,30 @@ def test_poll_transient_result_fetch_clears_lease_for_celery_retry(
     )
 
 
+def test_poll_local_output_error_fails_without_retrying_poll_task(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    task, orchestrator, _scheduler, adapter = make_running_external_task(
+        session,
+        tmp_path,
+        status=ExternalTaskStatus(ExternalTaskState.SUCCEEDED),
+    )
+    adapter.fetch_error = ExtractionProcessingError(
+        ExtractionErrorCode.OUTPUT_WRITE_FAILED,
+        "cannot write local staging result",
+        transient=True,
+    )
+
+    orchestrator.poll(task.id)
+
+    session.refresh(task)
+    assert task.status is ExtractionTaskStatus.FAILED
+    assert task.error_code == ExtractionErrorCode.OUTPUT_WRITE_FAILED
+    assert task.next_poll_at is None
+    assert task.poll_lease_expires_at is None
+
+
 def test_uncertain_submission_is_not_automatically_resubmitted(
     session: Session,
     tmp_path: Path,
@@ -477,6 +572,62 @@ def test_duplicate_submit_delivery_does_not_submit_external_task_twice(
 
     assert len(adapter.submissions) == 1
     assert scheduler.poll_calls == [(task.id, 7)]
+
+
+@pytest.mark.parametrize("status_code", [429, 503])
+def test_submit_task_uses_bounded_retry_for_safe_http_transient(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    error = ExtractionProcessingError(
+        ExtractionErrorCode.PROCESSING_FAILED,
+        f"processor returned HTTP {status_code}",
+        transient=True,
+    )
+
+    def fail_submit(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(celery_tasks, "handle_submit_task", fail_submit)
+    retry = RetryRecorder()
+
+    with pytest.raises(RetryRequested):
+        celery_tasks.submit_extraction_task.run.__func__(
+            retry,
+            str(uuid.uuid4()),
+            "structured_extraction",
+            1,
+        )
+
+    assert retry.calls == [(error, 5)]
+    assert celery_tasks.submit_extraction_task.max_retries == 3
+
+
+def test_poll_task_does_not_retry_transient_local_output_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = ExtractionProcessingError(
+        ExtractionErrorCode.OUTPUT_WRITE_FAILED,
+        "cannot write local output",
+        transient=True,
+    )
+
+    def fail_poll(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    monkeypatch.setattr(celery_tasks, "handle_poll_task", fail_poll)
+    retry = RetryRecorder()
+
+    with pytest.raises(ExtractionProcessingError) as raised:
+        celery_tasks.poll_extraction_task.run.__func__(
+            retry,
+            str(uuid.uuid4()),
+            "structured_extraction",
+            1,
+        )
+
+    assert raised.value is error
+    assert retry.calls == []
 
 
 def make_running_external_task(

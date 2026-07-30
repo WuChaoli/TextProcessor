@@ -60,6 +60,10 @@ _TERMINAL_STATUSES = frozenset(
 )
 
 
+def is_retryable_processor_http_error(error: ExtractionProcessingError) -> bool:
+    return error.transient and error.code is ExtractionErrorCode.PROCESSING_FAILED
+
+
 class ExtractionTaskScheduler(Protocol):
     def enqueue_submit(self, task_id: uuid.UUID, *, countdown: int) -> None: ...
 
@@ -118,7 +122,16 @@ class ExtractionOrchestrator:
 
     def submit(self, task_id: uuid.UUID) -> None:
         task = self._session.get(ExtractionTask, task_id)
-        if task is None or task.status is not ExtractionTaskStatus.QUEUED:
+        if task is None:
+            return
+        if (
+            task.status is ExtractionTaskStatus.RUNNING
+            and task.external_task_id is None
+            and task.processing_phase == "submitting"
+        ):
+            self._resume_external_submission(task)
+            return
+        if task.status is not ExtractionTaskStatus.QUEUED:
             return
         try:
             self._publisher.ensure_target_available(Path(task.target_path))
@@ -168,7 +181,7 @@ class ExtractionOrchestrator:
         try:
             status = self._adapter_for(processor).get_status(external_task_id)
         except ExtractionProcessingError as error:
-            if error.transient:
+            if is_retryable_processor_http_error(error):
                 self._schedule_poll_retry(task, current_time)
                 raise
             self._fail_running(task, error)
@@ -361,11 +374,28 @@ class ExtractionOrchestrator:
             )
         except ConditionalTransitionFailed:
             return
+        self._submit_to_external(running, layout, processor)
+
+    def _resume_external_submission(self, task: ExtractionTask) -> None:
         try:
-            source = self._resolver.resolve(running, layout).path
+            processor = self._external_processor(task)
+            layout = StagingLayout.for_task(self._settings.staging_root, task.id)
+        except ExtractionProcessingError as error:
+            self._fail_running(task, error, release_slot=True)
+            return
+        self._submit_to_external(task, layout, processor)
+
+    def _submit_to_external(
+        self,
+        task: ExtractionTask,
+        layout: StagingLayout,
+        processor: ProcessorName,
+    ) -> None:
+        try:
+            source = self._resolver.resolve(task, layout).path
             submission = self._adapter_for(processor).submit(
                 source,
-                self._processing_context(running, processor),
+                self._processing_context(task, processor),
             )
             if submission.processor_name is not processor:
                 raise ExtractionProcessingError(
@@ -373,15 +403,17 @@ class ExtractionOrchestrator:
                     "外部处理器返回了错误的处理器标识",
                 )
         except ExtractionProcessingError as error:
-            self._fail_submission(running, error)
+            if is_retryable_processor_http_error(error):
+                raise
+            self._fail_submission(task, error)
             return
         except Exception:
-            self._fail_submission(running, self._internal_error())
+            self._fail_submission(task, self._internal_error())
             return
 
         submitted_at = get_datetime_utc()
         if not self._repository.update_running(
-            running.id,
+            task.id,
             external_task_id=submission.external_task_id,
             processor_version=submission.processor_version,
             profile_name=self._profile_name(processor),
@@ -393,7 +425,7 @@ class ExtractionOrchestrator:
         ):
             return
         self._scheduler.enqueue_poll(
-            running.id,
+            task.id,
             countdown=self._settings.poll_interval_seconds,
         )
 
@@ -429,7 +461,7 @@ class ExtractionOrchestrator:
             )
             layout.cleanup()
         except ExtractionProcessingError as error:
-            if error.transient:
+            if is_retryable_processor_http_error(error):
                 self._schedule_poll_retry(task, now)
                 raise
             self._fail_running(task, error)
@@ -437,10 +469,8 @@ class ExtractionOrchestrator:
             output_error = ExtractionProcessingError(
                 ExtractionErrorCode.OUTPUT_WRITE_FAILED,
                 "无法写入处理器归一化结果",
-                transient=True,
             )
-            self._schedule_poll_retry(task, now)
-            raise output_error from None
+            self._fail_running(task, output_error)
         except Exception:
             self._session.rollback()
             self._fail_running(task, self._internal_error())
