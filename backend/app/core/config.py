@@ -62,6 +62,7 @@ class ExtractionWorkerSettings(BaseModel):
     failed_staging_retention_seconds: int = Field(default=86400, ge=0)
     mineru_max_in_flight_tasks: int = Field(default=2, gt=0)
     docling_max_in_flight_tasks: int = Field(default=2, gt=0)
+    docx_visual_complexity_threshold: int = Field(default=5, ge=0)
     production_formats: tuple[str, ...] = (
         "text",
         "markdown",

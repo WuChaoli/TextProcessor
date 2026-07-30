@@ -67,6 +67,17 @@ def test_worker_settings_normalize_roots_and_require_positive_limits(
         )
 
 
+def test_docx_visual_complexity_threshold_cannot_be_negative(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValidationError):
+        ExtractionWorkerSettings(
+            staging_root=tmp_path / "staging",
+            output_roots=(tmp_path / "output",),
+            docx_visual_complexity_threshold=-1,
+        )
+
+
 def test_worker_value_objects_preserve_routing_context() -> None:
     context = ProcessingContext(
         task_id=uuid.UUID("018f0000-0000-7000-8000-000000000001"),
