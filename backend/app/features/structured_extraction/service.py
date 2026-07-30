@@ -93,12 +93,11 @@ class ExtractionTaskService:
                 self._repository.rollback()
                 marked_dispatched = False
             if not marked_dispatched:
-                logger.warning(
-                    "structured extraction dispatch marker write failed",
+                logger.info(
+                    "structured extraction dispatch marker not updated",
                     extra={
                         "task_id": str(task.id),
                         "caller_id": str(caller_id),
-                        "error_code": ExtractionErrorCode.INTERNAL_ERROR,
                     },
                 )
             return task

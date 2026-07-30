@@ -1,6 +1,7 @@
 import uuid
 from datetime import timedelta
 
+import pytest
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
@@ -13,7 +14,10 @@ from app.features.structured_extraction.models import (
     ExtractionTaskStatus,
     get_datetime_utc,
 )
-from app.features.structured_extraction.repository import ExtractionTaskRepository
+from app.features.structured_extraction.repository import (
+    ConditionalTransitionFailed,
+    ExtractionTaskRepository,
+)
 from app.models import User  # noqa: F401
 
 
@@ -157,3 +161,82 @@ def test_recovery_ignores_task_already_marked_dispatched() -> None:
 
         assert recovered == 0
         assert dispatcher.task_ids == []
+
+
+def test_duplicate_worker_claim_is_treated_as_benign(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with make_session() as session:
+        task = ExtractionTask(
+            caller_id=uuid.uuid4(),
+            session_id="session-duplicate",
+            file_id="file-1",
+            request_fingerprint="e" * 64,
+            file_storage_path="/allowed/input/sample.txt",
+            selected_input_type="local",
+            target_path="/allowed/output/sample.md",
+            status=ExtractionTaskStatus.QUEUED,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        def lose_claim(*_args: object, **_kwargs: object) -> None:
+            raise ConditionalTransitionFailed("another worker claimed task")
+
+        monkeypatch.setattr(
+            ExtractionTaskRepository,
+            "transition",
+            lose_claim,
+        )
+
+        handle_submit_task(
+            session,
+            task_id=str(task.id),
+            task_type="structured_extraction",
+            schema_version=1,
+        )
+
+        session.refresh(task)
+        assert task.status is ExtractionTaskStatus.QUEUED
+
+
+def test_recovery_marker_failure_does_not_abort_remaining_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dispatcher = RecordingDispatcher()
+    with make_session() as session:
+        tasks = [
+            ExtractionTask(
+                caller_id=uuid.uuid4(),
+                session_id=f"session-recovery-{index}",
+                file_id="file-1",
+                request_fingerprint=str(index) * 64,
+                file_storage_path="/allowed/input/sample.txt",
+                selected_input_type="local",
+                target_path=f"/allowed/output/sample-{index}.md",
+                status=ExtractionTaskStatus.QUEUED,
+                queued_at=get_datetime_utc() - timedelta(minutes=5),
+            )
+            for index in (1, 2)
+        ]
+        session.add_all(tasks)
+        session.commit()
+
+        def fail_marker(*_args: object, **_kwargs: object) -> bool:
+            raise RuntimeError("marker write failed")
+
+        monkeypatch.setattr(
+            ExtractionTaskRepository,
+            "mark_dispatched",
+            fail_marker,
+        )
+
+        recovered = recover_queued_tasks(
+            session,
+            dispatcher,
+            queued_before=get_datetime_utc() - timedelta(minutes=1),
+        )
+
+        assert recovered == 0
+        assert set(dispatcher.task_ids) == {task.id for task in tasks}

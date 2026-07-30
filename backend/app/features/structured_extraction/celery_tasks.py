@@ -17,7 +17,10 @@ from app.features.structured_extraction.models import (
     ExtractionTaskStatus,
     get_datetime_utc,
 )
-from app.features.structured_extraction.repository import ExtractionTaskRepository
+from app.features.structured_extraction.repository import (
+    ConditionalTransitionFailed,
+    ExtractionTaskRepository,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +49,19 @@ def recover_queued_tasks(
                 },
             )
             continue
-        if repository.mark_dispatched(task.id):
+        try:
+            marked_dispatched = repository.mark_dispatched(task.id)
+        except Exception:
+            repository.rollback()
+            logger.warning(
+                "structured extraction recovery marker write failed",
+                extra={
+                    "task_id": str(task.id),
+                    "error_code": ExtractionErrorCode.INTERNAL_ERROR,
+                },
+            )
+            continue
+        if marked_dispatched:
             recovered += 1
     return recovered
 
@@ -75,13 +90,16 @@ def handle_submit_task(
         return
 
     repository = ExtractionTaskRepository(session)
-    running = repository.transition(
-        task.id,
-        expected=ExtractionTaskStatus.QUEUED,
-        target=ExtractionTaskStatus.RUNNING,
-        started_at=get_datetime_utc(),
-        attempt_count=task.attempt_count + 1,
-    )
+    try:
+        running = repository.transition(
+            task.id,
+            expected=ExtractionTaskStatus.QUEUED,
+            target=ExtractionTaskStatus.RUNNING,
+            started_at=get_datetime_utc(),
+            attempt_count=task.attempt_count + 1,
+        )
+    except ConditionalTransitionFailed:
+        return
     repository.transition(
         running.id,
         expected=ExtractionTaskStatus.RUNNING,
