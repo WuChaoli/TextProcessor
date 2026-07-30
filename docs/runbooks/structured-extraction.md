@@ -45,9 +45,12 @@ docker compose -f compose.yml -f compose.docling.yml -f compose.override.yml up 
 验证器逐阶段报告 DB、两套 Redis、backend、worker、beat、MinerU 和 Docling
 的状态。MinerU 是外部服务，必须在启动环境中提供
 `EXTRACTION_WORKER__MINERU_BASE_URL`。默认只验证 worker 运行时的消息身份
-契约及 `acks_late`/recovery 配置；在专用验收环境可增加
-`-ExerciseWorkerLossRecovery`，它会向 worker 发送 `SIGKILL` 并等待同一服务
-恢复健康。不要在生产运行该选项。
+契约及 `acks_late`/recovery 配置。Redis 的
+`CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS` 默认值为 3660 秒，部署值必须覆盖最长的
+正常任务；这是容器突然终止后迟确认消息重新可见的上限。在专用验收环境可增加
+`-ExerciseWorkerLossRecovery`：验证器会使用临时 MinerU stub、短 visibility timeout，
+仅在外部 task id 已持久化且任务进入 polling 后向 worker 发送 `SIGKILL`，重启后断言
+同一任务成功且仅发布一个 Markdown 文件。不要在生产运行该选项。
 
 停止服务：
 

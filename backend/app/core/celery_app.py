@@ -13,6 +13,9 @@ celery_app.conf.update(
     result_backend=None,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    broker_transport_options={
+        "visibility_timeout": settings.CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS,
+    },
     beat_schedule={
         "recover-structured-extraction-tasks": {
             "task": "structured_extraction.recover",

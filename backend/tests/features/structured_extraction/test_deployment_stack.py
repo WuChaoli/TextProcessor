@@ -10,6 +10,22 @@ def test_celery_runtime_stack_uses_durable_broker_and_health_checks() -> None:
     assert "--appendonly" in compose
     assert "celery -A app.core.celery_app:celery_app inspect ping" in compose
     assert "condition: service_healthy" in compose
+    assert "extraction-worker:" in compose
+    assert "extraction-beat:" in compose
+    assert compose.count("redis:\n        condition: service_healthy") >= 3
+
+
+def test_celery_uses_configurable_redis_visibility_timeout() -> None:
+    config = (REPOSITORY_ROOT / "backend" / "app" / "core" / "config.py").read_text(
+        encoding="utf-8"
+    )
+    celery_app = (
+        REPOSITORY_ROOT / "backend" / "app" / "core" / "celery_app.py"
+    ).read_text(encoding="utf-8")
+
+    assert "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS" in config
+    assert "broker_transport_options" in celery_app
+    assert "visibility_timeout" in celery_app
 
 
 def test_beat_uses_controlled_pid_and_schedule_paths() -> None:
@@ -32,3 +48,26 @@ def test_docling_verifier_accepts_explicit_compose_project_and_files() -> None:
     assert "[string]$ComposeProjectName" in verifier
     assert "[string[]]$ComposeFiles" in verifier
     assert "@script:composeArguments" in verifier
+
+
+def test_stack_verifier_observes_real_broker_message_and_running_task_recovery() -> (
+    None
+):
+    verifier = (REPOSITORY_ROOT / "scripts" / "verify-extraction-stack.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert "CeleryExtractionTaskDispatcher" in verifier
+    assert "LINDEX celery 0" in verifier
+    assert "FromBase64String" in verifier
+    assert "stop extraction-worker" in verifier
+    assert "task10-mineru" in verifier
+    assert "--signal=KILL" in verifier
+    assert "running:polling:task10-mineru" in verifier
+    assert "succeeded::task10-mineru" in verifier
+    assert "Get-ChildItem" in verifier
+    assert "EXTRACTION_WORKER__PRODUCTION_FORMATS: '[\"pdf\"]'" in verifier
+    assert "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: 5" in verifier
+    assert "[Text.Encoding]::ASCII.GetBytes" in verifier
+    assert '"up", "-d", "--force-recreate"' in verifier
+    assert '"rm", "-sf", "task10-mineru"' in verifier
