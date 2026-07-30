@@ -4,10 +4,10 @@ import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Engine, func, update
+from sqlalchemy import Engine, func, or_, update
 from sqlalchemy import select as sa_select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -184,6 +184,75 @@ class ExtractionTaskRepository:
                 col(ExtractionTask.queued_at).is_not(None),
                 col(ExtractionTask.queued_at) <= queued_before,
             )
+            .order_by(ExtractionTask.queued_at, ExtractionTask.id)
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def list_recoverable_queued(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[ExtractionTask]:
+        statement = (
+            select(ExtractionTask)
+            .where(
+                ExtractionTask.status == ExtractionTaskStatus.QUEUED,
+                or_(
+                    col(ExtractionTask.last_dispatched_at).is_(None),
+                    col(ExtractionTask.next_poll_at) <= now,
+                ),
+            )
+            .order_by(
+                func.coalesce(ExtractionTask.next_poll_at, ExtractionTask.queued_at),
+                ExtractionTask.id,
+            )
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def list_recoverable_polls(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[ExtractionTask]:
+        statement = (
+            select(ExtractionTask)
+            .where(
+                ExtractionTask.status == ExtractionTaskStatus.RUNNING,
+                col(ExtractionTask.external_task_id).is_not(None),
+                col(ExtractionTask.next_poll_at).is_not(None),
+                col(ExtractionTask.next_poll_at) <= now,
+                or_(
+                    col(ExtractionTask.poll_lease_expires_at).is_(None),
+                    col(ExtractionTask.poll_lease_expires_at) <= now,
+                ),
+                or_(
+                    col(ExtractionTask.processing_deadline).is_(None),
+                    col(ExtractionTask.processing_deadline) > now,
+                ),
+            )
+            .order_by(ExtractionTask.next_poll_at, ExtractionTask.id)
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def list_expired_running(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[ExtractionTask]:
+        statement = (
+            select(ExtractionTask)
+            .where(
+                ExtractionTask.status == ExtractionTaskStatus.RUNNING,
+                col(ExtractionTask.processing_deadline).is_not(None),
+                col(ExtractionTask.processing_deadline) <= now,
+            )
+            .order_by(ExtractionTask.processing_deadline, ExtractionTask.id)
             .limit(limit)
         )
         return list(self._session.exec(statement).all())
@@ -212,6 +281,79 @@ class ExtractionTaskRepository:
             return False
         self._session.commit()
         return True
+
+    def mark_recovery_submit_scheduled(
+        self,
+        task_id: uuid.UUID,
+        *,
+        next_retry_at: datetime,
+    ) -> bool:
+        statement = (
+            update(ExtractionTask)
+            .where(
+                col(ExtractionTask.id) == task_id,
+                col(ExtractionTask.status) == ExtractionTaskStatus.QUEUED,
+            )
+            .values(
+                last_dispatched_at=get_datetime_utc(),
+                next_poll_at=next_retry_at,
+                updated_at=get_datetime_utc(),
+            )
+        )
+        result = self._session.exec(statement)
+        if not isinstance(result, CursorResult) or result.rowcount != 1:
+            self._session.rollback()
+            return False
+        self._session.commit()
+        return True
+
+    def update_queued(self, task_id: uuid.UUID, **fields: Any) -> bool:
+        return self._update_for_status(
+            task_id,
+            status=ExtractionTaskStatus.QUEUED,
+            **fields,
+        )
+
+    def update_running(self, task_id: uuid.UUID, **fields: Any) -> bool:
+        return self._update_for_status(
+            task_id,
+            status=ExtractionTaskStatus.RUNNING,
+            **fields,
+        )
+
+    def claim_poll(
+        self,
+        task_id: uuid.UUID,
+        *,
+        now: datetime,
+        lease_duration: timedelta,
+    ) -> ExtractionTask | None:
+        statement = (
+            update(ExtractionTask)
+            .where(
+                col(ExtractionTask.id) == task_id,
+                col(ExtractionTask.status) == ExtractionTaskStatus.RUNNING,
+                col(ExtractionTask.external_task_id).is_not(None),
+                col(ExtractionTask.next_poll_at).is_not(None),
+                col(ExtractionTask.next_poll_at) <= now,
+                or_(
+                    col(ExtractionTask.poll_lease_expires_at).is_(None),
+                    col(ExtractionTask.poll_lease_expires_at) <= now,
+                ),
+            )
+            .values(
+                processing_phase="polling",
+                poll_lease_expires_at=now + lease_duration,
+                updated_at=get_datetime_utc(),
+            )
+            .execution_options(synchronize_session=False)
+        )
+        result = self._session.exec(statement)
+        if not isinstance(result, CursorResult) or result.rowcount != 1:
+            self._session.rollback()
+            return None
+        self._session.commit()
+        return self._session.get(ExtractionTask, task_id)
 
     def transition(
         self,
@@ -244,6 +386,28 @@ class ExtractionTaskRepository:
         if task is None:
             raise ConditionalTransitionFailed(f"任务 {task_id} 不存在")
         return task
+
+    def _update_for_status(
+        self,
+        task_id: uuid.UUID,
+        *,
+        status: ExtractionTaskStatus,
+        **fields: Any,
+    ) -> bool:
+        statement = (
+            update(ExtractionTask)
+            .where(
+                col(ExtractionTask.id) == task_id,
+                col(ExtractionTask.status) == status,
+            )
+            .values(updated_at=get_datetime_utc(), **fields)
+        )
+        result = self._session.exec(statement)
+        if not isinstance(result, CursorResult) or result.rowcount != 1:
+            self._session.rollback()
+            return False
+        self._session.commit()
+        return True
 
     @staticmethod
     def _ensure_same_request(task: ExtractionTask, fingerprint: str) -> None:

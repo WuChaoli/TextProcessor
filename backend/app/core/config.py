@@ -59,6 +59,8 @@ class ExtractionWorkerSettings(BaseModel):
     poll_interval_seconds: int = Field(default=5, gt=0)
     processing_deadline_seconds: int = Field(default=3600, gt=0)
     poll_lease_seconds: int = Field(default=30, gt=0)
+    recovery_batch_size: int = Field(default=100, gt=0)
+    slot_quarantine_grace_seconds: int = Field(default=300, ge=0)
     failed_staging_retention_seconds: int = Field(default=86400, ge=0)
     mineru_max_in_flight_tasks: int = Field(default=2, gt=0)
     docling_max_in_flight_tasks: int = Field(default=2, gt=0)
