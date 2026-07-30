@@ -57,6 +57,13 @@ class AtomicPublisher:
             size_bytes=len(content),
         )
 
+    def ensure_target_available(self, target: Path) -> Path:
+        normalized_target = target.resolve(strict=False)
+        self._validate_target(normalized_target)
+        if normalized_target.exists():
+            raise output_conflict()
+        return normalized_target
+
     def publish(
         self,
         prepared: PreparedOutput,

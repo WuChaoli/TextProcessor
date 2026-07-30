@@ -1,12 +1,13 @@
 import logging
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Protocol
 
 from sqlmodel import Session
 
 from app.core.celery_app import celery_app
-from app.core.config import settings
+from app.core.config import ExtractionWorkerSettings, settings
 from app.core.db import engine
 from app.features.structured_extraction.dispatcher import (
     CeleryExtractionTaskDispatcher,
@@ -17,10 +18,8 @@ from app.features.structured_extraction.models import (
     ExtractionTaskStatus,
     get_datetime_utc,
 )
-from app.features.structured_extraction.repository import (
-    ConditionalTransitionFailed,
-    ExtractionTaskRepository,
-)
+from app.features.structured_extraction.orchestration import ExtractionOrchestrator
+from app.features.structured_extraction.repository import ExtractionTaskRepository
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +71,9 @@ def handle_submit_task(
     task_id: str,
     task_type: str,
     schema_version: int,
+    worker_settings: ExtractionWorkerSettings | None = None,
+    input_roots: tuple[Path, ...] | None = None,
+    max_input_bytes: int | None = None,
 ) -> None:
     if task_type != "structured_extraction" or schema_version != 1:
         raise ValueError("不支持的结构化提取任务消息")
@@ -89,24 +91,13 @@ def handle_submit_task(
     if task.status is not ExtractionTaskStatus.QUEUED:
         return
 
-    repository = ExtractionTaskRepository(session)
-    try:
-        running = repository.transition(
-            task.id,
-            expected=ExtractionTaskStatus.QUEUED,
-            target=ExtractionTaskStatus.RUNNING,
-            started_at=get_datetime_utc(),
-            attempt_count=task.attempt_count + 1,
-        )
-    except ConditionalTransitionFailed:
-        return
-    repository.transition(
-        running.id,
-        expected=ExtractionTaskStatus.RUNNING,
-        target=ExtractionTaskStatus.FAILED,
-        error_code=ExtractionErrorCode.PROCESSING_FAILED,
-        error_message="结构化提取处理器尚未启用",
-        finished_at=get_datetime_utc(),
+    ExtractionOrchestrator(
+        session,
+        worker_settings=worker_settings or settings.EXTRACTION_WORKER,
+        input_roots=input_roots or tuple(settings.EXTRACTION_INPUT_ROOTS),
+        max_input_bytes=max_input_bytes or settings.EXTRACTION_MAX_INPUT_BYTES,
+    ).submit(
+        task.id,
     )
 
 
