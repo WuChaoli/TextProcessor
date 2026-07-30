@@ -4,6 +4,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
+from celery.exceptions import Retry
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
@@ -589,18 +590,137 @@ def test_submit_task_uses_bounded_retry_for_safe_http_transient(
         raise error
 
     monkeypatch.setattr(celery_tasks, "handle_submit_task", fail_submit)
-    retry = RetryRecorder()
+    task = celery_tasks.submit_extraction_task._get_current_object()
+    task.push_request(
+        retries=task.max_retries - 1,
+        called_directly=False,
+        is_eager=True,
+    )
+    try:
+        with pytest.raises(Retry) as raised:
+            task.run(
+                str(uuid.uuid4()),
+                "structured_extraction",
+                1,
+            )
+    finally:
+        task.pop_request()
 
-    with pytest.raises(RetryRequested):
-        celery_tasks.submit_extraction_task.run.__func__(
-            retry,
-            str(uuid.uuid4()),
-            "structured_extraction",
-            1,
+    assert raised.value.when == 5
+    assert task.max_retries == 3
+
+
+def test_submit_retry_exhaustion_fails_and_quarantines_slot(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    input_root.mkdir()
+    output_root.mkdir()
+    source = input_root / "report.pdf"
+    source.write_bytes(b"%PDF-1.7\nplaceholder")
+    now = get_datetime_utc()
+    task = make_task(
+        source=source,
+        target=output_root / "report.md",
+        status=ExtractionTaskStatus.RUNNING,
+        processor_name=ProcessorName.MINERU,
+        processing_phase="submitting",
+        processing_deadline=now + timedelta(seconds=60),
+    )
+    session.add(task)
+    session.commit()
+    slots = ProcessorSlotRepository(session)
+    assert (
+        slots.acquire(
+            task_id=task.id,
+            processor_name=ProcessorName.MINERU,
+            max_in_flight=1,
+            lease_duration=timedelta(seconds=60),
         )
+        is not None
+    )
+    error = ExtractionProcessingError(
+        ExtractionErrorCode.PROCESSING_FAILED,
+        "processor returned HTTP 503",
+        transient=True,
+    )
 
-    assert retry.calls == [(error, 5)]
-    assert celery_tasks.submit_extraction_task.max_retries == 3
+    celery_tasks.handle_submit_retry_exhausted(
+        session,
+        task_id=str(task.id),
+        task_type="structured_extraction",
+        schema_version=1,
+        error=error,
+        worker_settings=ExtractionWorkerSettings(
+            staging_root=staging_root,
+            output_roots=(output_root,),
+            production_formats=("pdf",),
+        ),
+        input_roots=(input_root,),
+        max_input_bytes=1024 * 1024,
+    )
+
+    session.refresh(task)
+    slot = session.exec(
+        select(ProcessorSlot).where(ProcessorSlot.task_id == task.id)
+    ).one()
+    assert task.status is ExtractionTaskStatus.FAILED
+    assert task.error_code == ExtractionErrorCode.PROCESSOR_SUBMISSION_UNCERTAIN
+    assert task.processing_phase is None
+    assert task.external_task_id is None
+    assert task.next_poll_at is None
+    assert slot.state == "quarantined"
+
+
+def test_submit_task_exhaustion_does_not_schedule_another_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = ExtractionProcessingError(
+        ExtractionErrorCode.PROCESSING_FAILED,
+        "processor returned HTTP 503",
+        transient=True,
+    )
+    exhausted_calls: list[tuple[str, str, int, ExtractionProcessingError]] = []
+
+    def fail_submit(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    def record_exhaustion(
+        _session: Session,
+        *,
+        task_id: str,
+        task_type: str,
+        schema_version: int,
+        error: ExtractionProcessingError,
+    ) -> None:
+        exhausted_calls.append((task_id, task_type, schema_version, error))
+
+    def unexpected_retry(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("submit retry exhaustion must not schedule another retry")
+
+    monkeypatch.setattr(celery_tasks, "handle_submit_task", fail_submit)
+    monkeypatch.setattr(
+        celery_tasks,
+        "handle_submit_retry_exhausted",
+        record_exhaustion,
+    )
+    task = celery_tasks.submit_extraction_task._get_current_object()
+    monkeypatch.setattr(task, "retry", unexpected_retry)
+    task_id = str(uuid.uuid4())
+    task.push_request(
+        retries=task.max_retries,
+        called_directly=False,
+        is_eager=True,
+    )
+    try:
+        task.run(task_id, "structured_extraction", 1)
+    finally:
+        task.pop_request()
+
+    assert exhausted_calls == [(task_id, "structured_extraction", 1, error)]
 
 
 def test_poll_task_does_not_retry_transient_local_output_error(

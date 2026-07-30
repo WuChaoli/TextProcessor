@@ -104,6 +104,28 @@ def handle_submit_task(
     ).submit(parsed_task_id)
 
 
+def handle_submit_retry_exhausted(
+    session: Session,
+    *,
+    task_id: str,
+    task_type: str,
+    schema_version: int,
+    error: ExtractionProcessingError,
+    worker_settings: ExtractionWorkerSettings | None = None,
+    input_roots: tuple[Path, ...] | None = None,
+    max_input_bytes: int | None = None,
+    scheduler: ExtractionTaskScheduler | None = None,
+) -> None:
+    parsed_task_id = _validate_message(task_id, task_type, schema_version)
+    _orchestrator(
+        session,
+        worker_settings=worker_settings,
+        input_roots=input_roots,
+        max_input_bytes=max_input_bytes,
+        scheduler=scheduler,
+    ).fail_exhausted_submission_retry(parsed_task_id, error)
+
+
 def handle_poll_task(
     session: Session,
     *,
@@ -165,6 +187,16 @@ def submit_extraction_task(
         except ExtractionProcessingError as error:
             if not is_retryable_processor_http_error(error):
                 raise
+            max_retries = self.max_retries
+            if max_retries is not None and self.request.retries >= max_retries:
+                handle_submit_retry_exhausted(
+                    session,
+                    task_id=task_id,
+                    task_type=task_type,
+                    schema_version=schema_version,
+                    error=error,
+                )
+                return
             raise self.retry(
                 exc=error,
                 countdown=settings.EXTRACTION_WORKER.poll_interval_seconds,

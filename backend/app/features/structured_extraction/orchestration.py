@@ -250,6 +250,30 @@ class ExtractionOrchestrator:
         recovered += self._reap_quarantined_slots(current_time)
         return recovered
 
+    def fail_exhausted_submission_retry(
+        self,
+        task_id: uuid.UUID,
+        error: ExtractionProcessingError,
+    ) -> None:
+        """Close an external submission when Celery cannot safely retry again."""
+        if not is_retryable_processor_http_error(error):
+            return
+        task = self._session.get(ExtractionTask, task_id)
+        if (
+            task is None
+            or task.status is not ExtractionTaskStatus.RUNNING
+            or task.external_task_id is not None
+            or task.processing_phase != "submitting"
+        ):
+            return
+        self._fail_submission(
+            task,
+            ExtractionProcessingError(
+                ExtractionErrorCode.PROCESSOR_SUBMISSION_UNCERTAIN,
+                "外部处理器提交重试耗尽，无法确认提交结果",
+            ),
+        )
+
     def _prepare_queued_task(self, task: ExtractionTask) -> _PreparedTask:
         layout = StagingLayout.for_task(self._settings.staging_root, task.id)
         resolved = self._resolver.resolve(task, layout)
