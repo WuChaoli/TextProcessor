@@ -7,7 +7,9 @@ class InvalidStateTransition(ValueError):
     pass
 
 
-ALLOWED_TRANSITIONS: Final[dict[ExtractionTaskStatus, frozenset[ExtractionTaskStatus]]] = {
+ALLOWED_TRANSITIONS: Final[
+    dict[ExtractionTaskStatus, frozenset[ExtractionTaskStatus]]
+] = {
     ExtractionTaskStatus.PENDING: frozenset(
         {
             ExtractionTaskStatus.QUEUED,
@@ -40,4 +42,3 @@ def assert_transition(
 ) -> None:
     if target not in ALLOWED_TRANSITIONS[current]:
         raise InvalidStateTransition(f"非法任务状态转换: {current} -> {target}")
-

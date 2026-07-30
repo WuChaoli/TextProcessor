@@ -151,9 +151,7 @@ class ExtractionTaskRepository:
         result = self._session.execute(statement)
         if not isinstance(result, CursorResult) or result.rowcount != 1:
             self._session.rollback()
-            raise ConditionalTransitionFailed(
-                f"任务 {task_id} 当前状态不是 {expected}"
-            )
+            raise ConditionalTransitionFailed(f"任务 {task_id} 当前状态不是 {expected}")
         self._session.commit()
         task = self._session.get(ExtractionTask, task_id)
         if task is None:

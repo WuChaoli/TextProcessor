@@ -31,9 +31,7 @@ class RecordingDispatcher:
 @pytest.fixture
 def api_context(
     tmp_path: Path,
-) -> Generator[
-    tuple[TestClient, Session, User, RecordingDispatcher, dict[str, str]],
-]:
+) -> Generator[tuple[TestClient, Session, User, RecordingDispatcher, dict[str, str]],]:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -108,8 +106,14 @@ def test_create_rejects_changed_request_for_same_idempotency_key(
     ],
 ) -> None:
     client, _session, _user, _dispatcher, payload = api_context
-    assert client.post("/api/v1/structured-extraction/tasks", json=payload).status_code == 202
-    changed = {**payload, "targetPath": str(Path(payload["targetPath"]).with_name("other.md"))}
+    assert (
+        client.post("/api/v1/structured-extraction/tasks", json=payload).status_code
+        == 202
+    )
+    changed = {
+        **payload,
+        "targetPath": str(Path(payload["targetPath"]).with_name("other.md")),
+    }
 
     response = client.post("/api/v1/structured-extraction/tasks", json=changed)
 
@@ -167,9 +171,7 @@ def test_get_returns_snapshot_and_other_caller_gets_same_404(
     client, _session, user, _dispatcher, payload = api_context
     created = client.post("/api/v1/structured-extraction/tasks", json=payload).json()
 
-    response = client.get(
-        f"/api/v1/structured-extraction/tasks/{created['taskId']}"
-    )
+    response = client.get(f"/api/v1/structured-extraction/tasks/{created['taskId']}")
 
     assert response.status_code == 200
     assert response.json()["status"] == "queued"
@@ -181,12 +183,8 @@ def test_get_returns_snapshot_and_other_caller_gets_same_404(
         email="other@example.com",
         hashed_password="not-used",
     )
-    hidden = client.get(
-        f"/api/v1/structured-extraction/tasks/{created['taskId']}"
-    )
-    missing = client.get(
-        f"/api/v1/structured-extraction/tasks/{uuid.uuid4()}"
-    )
+    hidden = client.get(f"/api/v1/structured-extraction/tasks/{created['taskId']}")
+    missing = client.get(f"/api/v1/structured-extraction/tasks/{uuid.uuid4()}")
     assert hidden.status_code == missing.status_code == 404
     assert hidden.json() == missing.json()
     assert user.id != app.dependency_overrides[get_current_user]().id

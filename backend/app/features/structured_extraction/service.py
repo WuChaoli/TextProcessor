@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Protocol
 
@@ -13,6 +14,8 @@ from app.features.structured_extraction.models import (
 from app.features.structured_extraction.repository import ExtractionTaskRepository
 from app.features.structured_extraction.request_policy import RequestPolicy
 from app.features.structured_extraction.schemas import ExtractionTaskCreate
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractionTaskDispatcher(Protocol):
@@ -57,6 +60,14 @@ class ExtractionTaskService:
         try:
             self._dispatcher.enqueue_submit(task.id)
         except Exception:
+            logger.warning(
+                "structured extraction task queue submission failed",
+                extra={
+                    "task_id": str(task.id),
+                    "caller_id": str(caller_id),
+                    "error_code": ExtractionErrorCode.QUEUE_SUBMISSION_FAILED,
+                },
+            )
             self._repository.transition(
                 task.id,
                 expected=ExtractionTaskStatus.QUEUED,

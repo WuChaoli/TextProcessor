@@ -123,7 +123,9 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_extraction_roots(self) -> Self:
-        input_roots = {path.resolve(strict=False) for path in self.EXTRACTION_INPUT_ROOTS}
+        input_roots = {
+            path.resolve(strict=False) for path in self.EXTRACTION_INPUT_ROOTS
+        }
         output_roots = {
             path.resolve(strict=False) for path in self.EXTRACTION_OUTPUT_ROOTS
         }

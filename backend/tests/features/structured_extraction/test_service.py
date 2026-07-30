@@ -1,3 +1,4 @@
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,7 @@ def test_create_queues_new_task_once(
 def test_enqueue_failure_marks_task_failed_and_hides_broker_error(
     session: Session,
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     caller_id = uuid.uuid4()
     request, policy = make_request_and_policy(tmp_path)
@@ -111,7 +113,10 @@ def test_enqueue_failure_marks_task_failed_and_hides_broker_error(
         FakeDispatcher(failure=RuntimeError("redis-secret-detail")),
     )
 
-    with pytest.raises(ExtractionDomainError) as raised:
+    with (
+        caplog.at_level(logging.WARNING),
+        pytest.raises(ExtractionDomainError) as raised,
+    ):
         service.create_task(caller_id, request)
 
     assert raised.value.code is ExtractionErrorCode.QUEUE_SUBMISSION_FAILED
@@ -122,6 +127,13 @@ def test_enqueue_failure_marks_task_failed_and_hides_broker_error(
     assert task.error_code == ExtractionErrorCode.QUEUE_SUBMISSION_FAILED
     assert task.error_message == "任务提交失败"
     assert task.finished_at is not None
+    assert "redis-secret-detail" not in caplog.text
+    record = caplog.records[-1]
+    assert record.task_id == str(task.id)  # type: ignore[attr-defined]
+    assert record.caller_id == str(caller_id)  # type: ignore[attr-defined]
+    assert (  # type: ignore[attr-defined]
+        record.error_code is ExtractionErrorCode.QUEUE_SUBMISSION_FAILED
+    )
 
 
 def test_get_task_is_scoped_to_caller(

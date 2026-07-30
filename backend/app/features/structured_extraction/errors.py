@@ -24,4 +24,3 @@ class ExtractionDomainError(Exception):
         self.code = code
         self.safe_message = message
         self.http_status = http_status
-
