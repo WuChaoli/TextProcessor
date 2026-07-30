@@ -1,10 +1,16 @@
 import logging
 import uuid
+from datetime import datetime, timedelta
+from typing import Protocol
 
 from sqlmodel import Session
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
 from app.core.db import engine
+from app.features.structured_extraction.dispatcher import (
+    CeleryExtractionTaskDispatcher,
+)
 from app.features.structured_extraction.errors import ExtractionErrorCode
 from app.features.structured_extraction.models import (
     ExtractionTask,
@@ -14,6 +20,35 @@ from app.features.structured_extraction.models import (
 from app.features.structured_extraction.repository import ExtractionTaskRepository
 
 logger = logging.getLogger(__name__)
+
+
+class RecoveryDispatcher(Protocol):
+    def enqueue_submit(self, task_id: uuid.UUID) -> None: ...
+
+
+def recover_queued_tasks(
+    session: Session,
+    dispatcher: RecoveryDispatcher,
+    *,
+    queued_before: datetime,
+) -> int:
+    repository = ExtractionTaskRepository(session)
+    recovered = 0
+    for task in repository.list_undispatched_queued(queued_before=queued_before):
+        try:
+            dispatcher.enqueue_submit(task.id)
+        except Exception:
+            logger.warning(
+                "structured extraction recovery dispatch failed",
+                extra={
+                    "task_id": str(task.id),
+                    "error_code": ExtractionErrorCode.QUEUE_SUBMISSION_FAILED,
+                },
+            )
+            continue
+        if repository.mark_dispatched(task.id):
+            recovered += 1
+    return recovered
 
 
 def handle_submit_task(
@@ -71,4 +106,19 @@ def submit_extraction_task(
             task_id=task_id,
             task_type=task_type,
             schema_version=schema_version,
+        )
+
+
+@celery_app.task(  # type: ignore[untyped-decorator]
+    name="structured_extraction.recover_queued"
+)
+def recover_queued_extraction_tasks() -> int:
+    queued_before = get_datetime_utc() - timedelta(
+        seconds=settings.EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS
+    )
+    with Session(engine) as session:
+        return recover_queued_tasks(
+            session,
+            CeleryExtractionTaskDispatcher(),
+            queued_before=queued_before,
         )

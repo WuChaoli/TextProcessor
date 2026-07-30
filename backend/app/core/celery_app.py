@@ -13,4 +13,10 @@ celery_app.conf.update(
     result_backend=None,
     task_acks_late=True,
     task_reject_on_worker_lost=True,
+    beat_schedule={
+        "recover-undispatched-structured-extraction-tasks": {
+            "task": "structured_extraction.recover_queued",
+            "schedule": settings.EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS,
+        }
+    },
 )

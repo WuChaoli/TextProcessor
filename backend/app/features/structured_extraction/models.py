@@ -72,6 +72,11 @@ class ExtractionTask(SQLModel, table=True):
         default=None,
         sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
     )
+    last_dispatched_at: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+        index=True,
+    )
     started_at: datetime | None = Field(
         default=None,
         sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]

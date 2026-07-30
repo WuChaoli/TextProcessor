@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     EXTRACTION_HTTP_ALLOWED_HOSTS: list[str] = []
     EXTRACTION_HTTP_ALLOWED_CIDRS: list[str] = []
     EXTRACTION_MAX_INPUT_BYTES: int = 100 * 1024 * 1024
+    EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
+    EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
 
     @computed_field  # type: ignore[prop-decorator]

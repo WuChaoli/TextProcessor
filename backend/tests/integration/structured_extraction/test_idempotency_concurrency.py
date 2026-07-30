@@ -61,6 +61,7 @@ class PausingRepository(ExtractionTaskRepository):
 
 
 def test_same_idempotency_key_waits_for_first_queue_result(tmp_path: Path) -> None:
+    assert engine.dialect.name == "postgresql"
     input_root = tmp_path / "input"
     output_root = tmp_path / "output"
     input_root.mkdir()

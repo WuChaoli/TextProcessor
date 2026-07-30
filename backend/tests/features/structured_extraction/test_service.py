@@ -33,6 +33,16 @@ class FakeDispatcher:
             raise self.failure
 
 
+class FailingDispatchMarkerRepository(ExtractionTaskRepository):
+    def mark_dispatched(
+        self,
+        task_id: uuid.UUID,
+        *,
+        dispatched_at=None,  # type: ignore[no-untyped-def]
+    ) -> bool:
+        raise RuntimeError("database marker failed")
+
+
 class FakeCelery:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -96,6 +106,7 @@ def test_create_queues_new_task_once(
 
     assert first.id == second.id
     assert first.status is ExtractionTaskStatus.QUEUED
+    assert first.last_dispatched_at is not None
     assert dispatcher.task_ids == [first.id]
 
 
@@ -155,6 +166,25 @@ def test_retry_after_queue_failure_returns_same_service_error(
 
     assert raised.value.code is ExtractionErrorCode.QUEUE_SUBMISSION_FAILED
     assert raised.value.http_status == 503
+
+
+def test_successful_broker_send_is_not_reported_failed_when_marker_write_fails(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    caller_id = uuid.uuid4()
+    request, policy = make_request_and_policy(tmp_path)
+    dispatcher = FakeDispatcher()
+    service = ExtractionTaskService(
+        FailingDispatchMarkerRepository(session),
+        policy,
+        dispatcher,
+    )
+
+    task = service.create_task(caller_id, request)
+
+    assert task.status is ExtractionTaskStatus.QUEUED
+    assert dispatcher.task_ids == [task.id]
 
 
 def test_get_task_is_scoped_to_caller(

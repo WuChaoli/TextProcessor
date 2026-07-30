@@ -87,6 +87,20 @@ class ExtractionTaskService:
                     finished_at=get_datetime_utc(),
                 )
                 raise self._queue_submission_error() from None
+            try:
+                marked_dispatched = self._repository.mark_dispatched(task.id)
+            except Exception:
+                self._repository.rollback()
+                marked_dispatched = False
+            if not marked_dispatched:
+                logger.warning(
+                    "structured extraction dispatch marker write failed",
+                    extra={
+                        "task_id": str(task.id),
+                        "caller_id": str(caller_id),
+                        "error_code": ExtractionErrorCode.INTERNAL_ERROR,
+                    },
+                )
             return task
 
     def get_task(

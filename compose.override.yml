@@ -106,6 +106,12 @@ services:
         - path: ./backend/pyproject.toml
           action: rebuild
 
+  extraction-beat:
+    restart: "no"
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+
   mailcatcher:
     image: schickling/mailcatcher
     ports:

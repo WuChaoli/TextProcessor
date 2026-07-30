@@ -1,12 +1,17 @@
 import uuid
+from datetime import timedelta
 
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.features.structured_extraction.celery_tasks import handle_submit_task
+from app.features.structured_extraction.celery_tasks import (
+    handle_submit_task,
+    recover_queued_tasks,
+)
 from app.features.structured_extraction.models import (
     ExtractionTask,
     ExtractionTaskStatus,
+    get_datetime_utc,
 )
 from app.features.structured_extraction.repository import ExtractionTaskRepository
 from app.models import User  # noqa: F401
@@ -86,3 +91,69 @@ def test_minimal_worker_ignores_duplicate_delivery_after_terminal_state() -> Non
 
         session.refresh(task)
         assert task.status is ExtractionTaskStatus.FAILED
+
+
+class RecordingDispatcher:
+    def __init__(self) -> None:
+        self.task_ids: list[uuid.UUID] = []
+
+    def enqueue_submit(self, task_id: uuid.UUID) -> None:
+        self.task_ids.append(task_id)
+
+
+def test_recovery_redispatches_old_queued_task_without_dispatch_timestamp() -> None:
+    dispatcher = RecordingDispatcher()
+    with make_session() as session:
+        task = ExtractionTask(
+            caller_id=uuid.uuid4(),
+            session_id="session-recovery",
+            file_id="file-1",
+            request_fingerprint="c" * 64,
+            file_storage_path="/allowed/input/sample.txt",
+            selected_input_type="local",
+            target_path="/allowed/output/sample.md",
+            status=ExtractionTaskStatus.QUEUED,
+            queued_at=get_datetime_utc() - timedelta(minutes=5),
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        recovered = recover_queued_tasks(
+            session,
+            dispatcher,
+            queued_before=get_datetime_utc() - timedelta(minutes=1),
+        )
+
+        session.refresh(task)
+        assert recovered == 1
+        assert dispatcher.task_ids == [task.id]
+        assert task.last_dispatched_at is not None
+
+
+def test_recovery_ignores_task_already_marked_dispatched() -> None:
+    dispatcher = RecordingDispatcher()
+    with make_session() as session:
+        task = ExtractionTask(
+            caller_id=uuid.uuid4(),
+            session_id="session-recovery",
+            file_id="file-1",
+            request_fingerprint="d" * 64,
+            file_storage_path="/allowed/input/sample.txt",
+            selected_input_type="local",
+            target_path="/allowed/output/sample.md",
+            status=ExtractionTaskStatus.QUEUED,
+            queued_at=get_datetime_utc() - timedelta(minutes=5),
+            last_dispatched_at=get_datetime_utc() - timedelta(minutes=4),
+        )
+        session.add(task)
+        session.commit()
+
+        recovered = recover_queued_tasks(
+            session,
+            dispatcher,
+            queued_before=get_datetime_utc() - timedelta(minutes=1),
+        )
+
+        assert recovered == 0
+        assert dispatcher.task_ids == []

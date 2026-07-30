@@ -4,6 +4,7 @@ import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import Engine, func, update
@@ -70,6 +71,9 @@ def request_fingerprint(
 class ExtractionTaskRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    def rollback(self) -> None:
+        self._session.rollback()
 
     @contextmanager
     def idempotency_lock(
@@ -165,6 +169,49 @@ class ExtractionTaskRepository:
             ExtractionTask.caller_id == caller_id,
         )
         return self._session.exec(statement).first()
+
+    def list_undispatched_queued(
+        self,
+        *,
+        queued_before: datetime,
+        limit: int = 100,
+    ) -> list[ExtractionTask]:
+        statement = (
+            select(ExtractionTask)
+            .where(
+                ExtractionTask.status == ExtractionTaskStatus.QUEUED,
+                col(ExtractionTask.last_dispatched_at).is_(None),
+                col(ExtractionTask.queued_at).is_not(None),
+                col(ExtractionTask.queued_at) <= queued_before,
+            )
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def mark_dispatched(
+        self,
+        task_id: uuid.UUID,
+        *,
+        dispatched_at: datetime | None = None,
+    ) -> bool:
+        statement = (
+            update(ExtractionTask)
+            .where(
+                col(ExtractionTask.id) == task_id,
+                col(ExtractionTask.status) == ExtractionTaskStatus.QUEUED,
+                col(ExtractionTask.last_dispatched_at).is_(None),
+            )
+            .values(
+                last_dispatched_at=dispatched_at or get_datetime_utc(),
+                updated_at=get_datetime_utc(),
+            )
+        )
+        result = self._session.exec(statement)
+        if not isinstance(result, CursorResult) or result.rowcount != 1:
+            self._session.rollback()
+            return False
+        self._session.commit()
+        return True
 
     def transition(
         self,
