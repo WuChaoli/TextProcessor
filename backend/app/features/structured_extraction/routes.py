@@ -24,6 +24,8 @@ from app.features.structured_extraction.schemas import (
     ExtractionTaskAccepted,
     ExtractionTaskCreate,
     ExtractionTaskPublic,
+    ProcessorPublic,
+    RoutingPublic,
 )
 from app.features.structured_extraction.service import ExtractionTaskService
 
@@ -83,6 +85,26 @@ def task_to_public(task: ExtractionTask) -> ExtractionTaskPublic:
             file_storage_path=task.file_storage_path,
             file_oss_url=task.file_oss_url,
             target_path=task.target_path,
+            processor=(
+                ProcessorPublic(
+                    name=task.processor_name,
+                    version=task.processor_version,
+                    profile=task.profile_name,
+                    profile_sha256=task.profile_sha256,
+                )
+                if task.processor_name and task.profile_name and task.profile_sha256
+                else None
+            ),
+            routing=(
+                RoutingPublic(
+                    detected_format=task.detected_format,
+                    reasons=task.routing_reasons or [],
+                )
+                if task.detected_format
+                else None
+            ),
+            input_sha256=task.input_sha256,
+            output_sha256=task.output_sha256,
         )
     error = None
     if task.error_code and task.error_message:

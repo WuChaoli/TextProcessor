@@ -35,6 +35,14 @@ def test_response_matrix_never_contains_markdown_body(
         selected_input_type="local",
         target_path="/allowed/output/sample.md",
         status=task_status,
+        detected_format="text",
+        routing_reasons=["plain_text_format"],
+        processor_name="plain_text",
+        processor_version="builtin",
+        profile_name="text-pass-through",
+        profile_sha256="b" * 64,
+        input_sha256="c" * 64,
+        output_sha256="d" * 64,
         result_metadata=(
             {
                 "content": "# secret markdown",
@@ -68,4 +76,18 @@ def test_response_matrix_never_contains_markdown_body(
             "fileStoragePath",
             "fileOssUrl",
             "targetPath",
+            "processor",
+            "routing",
+            "inputSha256",
+            "outputSha256",
+        }
+        assert response["result"]["processor"] == {
+            "name": "plain_text",
+            "version": "builtin",
+            "profile": "text-pass-through",
+            "profileSha256": "b" * 64,
+        }
+        assert response["result"]["routing"] == {
+            "detectedFormat": "text",
+            "reasons": ["plain_text_format"],
         }

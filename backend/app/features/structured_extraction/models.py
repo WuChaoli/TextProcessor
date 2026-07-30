@@ -62,6 +62,29 @@ class ExtractionTask(SQLModel, table=True):
         sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
     )
     result_metadata: dict[str, object] | None = Field(default=None, sa_type=JSON)
+    detected_format: str | None = Field(default=None, max_length=32)
+    routing_reasons: list[str] | None = Field(default=None, sa_type=JSON)
+    processor_name: str | None = Field(default=None, max_length=32)
+    processor_version: str | None = Field(default=None, max_length=128)
+    profile_name: str | None = Field(default=None, max_length=128)
+    profile_sha256: str | None = Field(default=None, max_length=64)
+    external_task_id: str | None = Field(default=None, max_length=256)
+    next_poll_at: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+        index=True,
+    )
+    processing_deadline: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    )
+    poll_lease_expires_at: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    )
+    input_sha256: str | None = Field(default=None, max_length=64)
+    input_size_bytes: int | None = Field(default=None, ge=0)
+    output_sha256: str | None = Field(default=None, max_length=64)
     error_code: str | None = Field(default=None, max_length=64)
     error_message: str | None = Field(default=None, max_length=512)
     created_at: datetime = Field(
