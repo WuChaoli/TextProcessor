@@ -634,6 +634,13 @@ def test_slot_capacity_timeout_quarantine_reap_and_terminal_release(
     worker.poll(second.id, now=second_scheduled.next_poll_at + timedelta(seconds=1))
     worker._session.close()  # noqa: SLF001
     assert task_status(second.id).status is ExtractionTaskStatus.SUCCEEDED
+    with Session(engine) as session:
+        assert (
+            session.exec(
+                select(ProcessorSlot).where(ProcessorSlot.task_id == second.id)
+            ).one_or_none()
+            is None
+        )
 
 
 def _layout(tmp_path: Path, task_id: uuid.UUID):

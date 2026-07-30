@@ -13,7 +13,8 @@
 - 覆盖本地符号链接逃逸、HTTP redirect 到 loopback/link-local/metadata、越权 S3 bucket
   与 URL 调用方凭据；请求或输入解析均在访问前拒绝。
 - 覆盖 processor slot 容量等待、deadline 超时后的 quarantine、grace 到期 reap，以及
-  外部成功终态释放 slot。
+  外部成功终态释放 slot；成功 poll 后以真实 PostgreSQL 查询断言该任务的
+  `ProcessorSlot` 已不存在。
 - 测试 session 结束时先清理 `processor_slot` 和 `extraction_task`，再清理 user，避免
   结构化任务外键残留污染默认全量套件。
 
@@ -29,6 +30,9 @@
   `order_by` 字段缺少 `col(...)`，导致 Mypy/Ty 失败；已作等价类型修正。slot 的
   PostgreSQL advisory-lock 调用保留 SQLAlchemy `execute`，并添加 Ty 的精确弃用豁免，
   因 `Session.exec` 对该 scalar select 没有匹配 overload。
+- Review fix round 1：临时移除 `poll()` 的 slot release 后，terminal-release 用例以
+  `ProcessorSlot(state='active') is None` 失败（RED）；恢复 release 后该真实 PG
+  断言通过（GREEN）。这证明用例不会仅凭任务成功而掩盖 slot release 回归。
 
 ## 验证证据
 
