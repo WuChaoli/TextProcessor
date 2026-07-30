@@ -112,3 +112,26 @@ class ExtractionTask(SQLModel, table=True):
         default_factory=get_datetime_utc,
         sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
     )
+
+
+class ProcessorSlot(SQLModel, table=True):
+    __tablename__ = "processor_slot"
+
+    id: uuid.UUID = Field(default_factory=uuid.uuid7, primary_key=True)
+    processor_name: str = Field(index=True, max_length=32)
+    task_id: uuid.UUID = Field(
+        foreign_key="extraction_task.id",
+        ondelete="CASCADE",
+        unique=True,
+    )
+    state: str = Field(max_length=16)
+    acquired_at: datetime = Field(
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    )
+    lease_expires_at: datetime = Field(
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    )
+    quarantined_at: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    )
