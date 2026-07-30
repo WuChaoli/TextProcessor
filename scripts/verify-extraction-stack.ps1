@@ -150,42 +150,91 @@ Invoke-VerificationStage "Docling API, RQ worker, and Redis" {
 }
 
 Invoke-VerificationStage "Celery broker message identity envelope" {
-    Invoke-Compose exec -T redis redis-cli DEL celery | Out-Null
-    Invoke-Compose stop extraction-worker | Out-Null
+    $smokeQueue = "textprocessor-smoke-$([guid]::NewGuid().ToString('N'))"
+    $smokeWorkerName = "textprocessor-smoke-worker-$([guid]::NewGuid().ToString('N'))"
+    $smokeTaskId = $null
     $dispatchCode = @'
 import uuid
-from app.features.structured_extraction.dispatcher import CeleryExtractionTaskDispatcher
+import sys
+from app.features.structured_extraction.celery_tasks import submit_extraction_task
 
-CeleryExtractionTaskDispatcher().enqueue_submit(uuid.uuid4())
+task_id = uuid.uuid4()
+queue_name = sys.argv[1]
+submit_extraction_task.apply_async(
+    kwargs={
+        "task_id": str(task_id),
+        "task_type": "structured_extraction",
+        "schema_version": 1,
+    },
+    queue=queue_name,
+)
+print(task_id)
 '@
-    Invoke-ContainerPython -Service "extraction-beat" -Code $dispatchCode | Out-Null
-    $envelopeText = @(Invoke-Compose exec -T redis redis-cli --raw LINDEX celery 0)[0]
-    if ([string]::IsNullOrWhiteSpace($envelopeText)) {
-        throw "No Celery message was observed in the broker."
+    try {
+        $smokeTaskId = @(Invoke-ContainerPython -Service "extraction-beat" -Code $dispatchCode -PythonArguments @($smokeQueue) | Where-Object { $_ -match "^[0-9a-f-]{36}$" })[-1]
+        if ([string]::IsNullOrWhiteSpace($smokeTaskId)) {
+            throw "Unique smoke task was not dispatched."
+        }
+        $envelopeText = @(Invoke-Compose exec -T redis redis-cli --raw LINDEX $smokeQueue 0)[0]
+        if ([string]::IsNullOrWhiteSpace($envelopeText)) {
+            throw "No Celery message was observed in the unique smoke queue."
+        }
+        $envelope = $envelopeText | ConvertFrom-Json
+        $headers = $envelope.headers
+        if ($headers.task -ne "structured_extraction.submit") {
+            throw "Celery broker envelope has an unexpected task header."
+        }
+        $bodyBytes = [Convert]::FromBase64String([string]$envelope.body)
+        $body = [Text.Encoding]::UTF8.GetString($bodyBytes) | ConvertFrom-Json
+        $kwargs = @($body)[1]
+        $actualKeys = @($kwargs.PSObject.Properties.Name | Sort-Object)
+        $expectedKeys = @("schema_version", "task_id", "task_type")
+        if (Compare-Object $actualKeys $expectedKeys) {
+            throw "Celery broker envelope contains unexpected task kwargs."
+        }
+        if ($kwargs.task_id -ne $smokeTaskId) {
+            throw "Celery broker envelope task_id does not match the dispatched task."
+        }
+        if ($kwargs.task_type -ne "structured_extraction") {
+            throw "Celery broker envelope task_type is invalid."
+        }
+        if ($kwargs.schema_version -ne 1) {
+            throw "Celery broker envelope schema_version is invalid."
+        }
+        Invoke-Compose -Arguments @(
+            "run", "-d", "--name", $smokeWorkerName, "--no-deps",
+            "extraction-worker", "celery", "-A", "app.core.celery_app:celery_app",
+            "worker", "--loglevel=INFO", "--queues", $smokeQueue, "--concurrency=1"
+        ) | Out-Null
+        $consumed = $false
+        for ($attempt = 0; $attempt -lt 20; $attempt++) {
+            $queueDepth = @(Invoke-Compose exec -T redis redis-cli LLEN $smokeQueue)[-1]
+            $workerLog = @(& docker logs $smokeWorkerName 2>&1) -join "`n"
+            if ($queueDepth -eq "0" -and $workerLog -match "Task structured_extraction.submit") {
+                $consumed = $true
+                break
+            }
+            Start-Sleep -Seconds 1
+        }
+        if (-not $consumed) {
+            throw "The unique smoke worker did not consume the verified broker message."
+        }
     }
-    $envelope = $envelopeText | ConvertFrom-Json
-    $bodyBytes = [Convert]::FromBase64String([string]$envelope.body)
-    $body = [Text.Encoding]::UTF8.GetString($bodyBytes) | ConvertFrom-Json
-    $kwargs = @($body)[1]
-    $actualKeys = @($kwargs.PSObject.Properties.Name | Sort-Object)
-    $expectedKeys = @("schema_version", "task_id", "task_type")
-    if (Compare-Object $actualKeys $expectedKeys) {
-        throw "Celery broker envelope contains unexpected task kwargs."
-    }
-    Invoke-Compose -Arguments @("up", "-d", "extraction-worker") | Out-Null
-    $workerReady = $false
-    for ($attempt = 0; $attempt -lt 12; $attempt++) {
+    finally {
         try {
-            Assert-ServiceState -Service "extraction-worker" -RequireHealthcheck $true
-            $workerReady = $true
-            break
+            if (-not [string]::IsNullOrWhiteSpace($smokeWorkerName)) {
+                & docker rm -f $smokeWorkerName 2>$null | Out-Null
+            }
         }
         catch {
-            Start-Sleep -Seconds 5
+            Write-Warning "Unable to remove temporary smoke worker: $($_.Exception.Message)"
         }
-    }
-    if (-not $workerReady) {
-        throw "Worker did not consume the verified broker message."
+        try {
+            Invoke-Compose exec -T redis redis-cli DEL $smokeQueue | Out-Null
+        }
+        catch {
+            Write-Warning "Unable to remove temporary smoke queue: $($_.Exception.Message)"
+        }
     }
 }
 

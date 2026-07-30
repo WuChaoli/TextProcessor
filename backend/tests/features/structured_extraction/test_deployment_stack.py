@@ -57,10 +57,21 @@ def test_stack_verifier_observes_real_broker_message_and_running_task_recovery()
         encoding="utf-8"
     )
 
-    assert "CeleryExtractionTaskDispatcher" in verifier
-    assert "LINDEX celery 0" in verifier
+    assert "DEL celery" not in verifier
+    assert "LINDEX celery 0" not in verifier
+    assert "textprocessor-smoke-" in verifier
+    assert "apply_async(" in verifier
+    assert "queue=queue_name" in verifier
+    assert "LINDEX $smokeQueue 0" in verifier
     assert "FromBase64String" in verifier
-    assert "stop extraction-worker" in verifier
+    assert "$headers.task" in verifier
+    assert "$kwargs.task_id -ne $smokeTaskId" in verifier
+    assert '$kwargs.task_type -ne "structured_extraction"' in verifier
+    assert "$kwargs.schema_version -ne 1" in verifier
+    assert "--queues" in verifier
+    assert "LLEN $smokeQueue" in verifier
+    assert "docker rm -f $smokeWorkerName" in verifier
+    assert "redis-cli DEL $smokeQueue" in verifier
     assert "task10-mineru" in verifier
     assert "--signal=KILL" in verifier
     assert "running:polling:task10-mineru" in verifier
