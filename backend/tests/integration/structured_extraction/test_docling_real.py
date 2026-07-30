@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import time
 import uuid
@@ -8,7 +10,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.core.config import DoclingProfile
+from app.core.config import ExtractionWorkerSettings, settings
 from app.features.structured_extraction.adapters.docling import DoclingHttpAdapter
 from app.features.structured_extraction.worker_models import (
     DetectedFormat,
@@ -24,14 +26,32 @@ def db() -> None:
 
 
 @pytest.fixture
-def docling_client() -> Generator[DoclingHttpAdapter]:
+def worker_settings() -> ExtractionWorkerSettings:
     if os.environ.get("DOCLING_REAL_INTEGRATION") != "1":
         pytest.skip("set DOCLING_REAL_INTEGRATION=1 to run against Docling")
-    api_key = os.environ.get("DOCLING_SERVE_API_KEY")
-    if not api_key:
-        pytest.skip("DOCLING_SERVE_API_KEY is required for real Docling testing")
-    base_url = os.environ.get("DOCLING_BASE_URL", "http://localhost:5001")
-    client = httpx.Client(timeout=30.0)
+    configured = settings.EXTRACTION_WORKER
+    if configured.docling_base_url is None or not configured.docling_api_key:
+        pytest.skip(
+            "EXTRACTION_WORKER docling_base_url and docling_api_key are required"
+        )
+    return configured
+
+
+@pytest.fixture
+def docling_client(
+    worker_settings: ExtractionWorkerSettings,
+) -> Generator[DoclingHttpAdapter]:
+    base_url = str(worker_settings.docling_base_url).rstrip("/")
+    api_key = worker_settings.docling_api_key
+    assert api_key is not None
+    client = httpx.Client(
+        timeout=httpx.Timeout(
+            connect=worker_settings.connect_timeout_seconds,
+            read=worker_settings.read_timeout_seconds,
+            write=worker_settings.read_timeout_seconds,
+            pool=worker_settings.connect_timeout_seconds,
+        )
+    )
     try:
         try:
             health = client.get(
@@ -43,11 +63,11 @@ def docling_client() -> Generator[DoclingHttpAdapter]:
             pytest.skip(f"Docling health check returned HTTP {health.status_code}")
         yield DoclingHttpAdapter(
             base_url=base_url,
-            profile=DoclingProfile(),
-            profile_name="office-default",
+            profile=worker_settings.docling_profile,
+            profile_name=worker_settings.docling_profile_name,
             api_key=api_key,
             client=client,
-            max_result_bytes=1024 * 1024,
+            max_result_bytes=worker_settings.max_output_bytes,
         )
     finally:
         client.close()
@@ -83,14 +103,39 @@ def sample_docx(tmp_path: Path) -> Path:
     return source
 
 
+@pytest.fixture
+def processing_context(
+    worker_settings: ExtractionWorkerSettings,
+) -> ProcessingContext:
+    profile_json = json.dumps(
+        worker_settings.docling_profile.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return ProcessingContext(
+        task_id=uuid.UUID("018f0000-0000-7000-8000-000000000001"),
+        detected_format=DetectedFormat.DOCX,
+        profile_name=worker_settings.docling_profile_name,
+        profile_sha256=hashlib.sha256(profile_json.encode()).hexdigest(),
+    )
+
+
 @pytest.mark.real_integration
 def test_docling_async_round_trip(
     docling_client: DoclingHttpAdapter,
     sample_docx: Path,
     tmp_path: Path,
+    processing_context: ProcessingContext,
+    worker_settings: ExtractionWorkerSettings,
 ) -> None:
-    submission = docling_client.submit(sample_docx, context())
-    status = wait_with_test_deadline(docling_client, submission.external_task_id)
+    submission = docling_client.submit(sample_docx, processing_context)
+    status = wait_with_test_deadline(
+        docling_client,
+        submission.external_task_id,
+        deadline_seconds=min(worker_settings.processing_deadline_seconds, 120),
+        poll_interval_seconds=worker_settings.poll_interval_seconds,
+    )
 
     assert status.state is ExternalTaskState.SUCCEEDED
     artifact = docling_client.fetch_result(
@@ -98,27 +143,21 @@ def test_docling_async_round_trip(
         tmp_path / "result.md",
     )
     assert artifact.markdown_path.read_text(encoding="utf-8").strip()
-
-
-def context() -> ProcessingContext:
-    return ProcessingContext(
-        task_id=uuid.UUID("018f0000-0000-7000-8000-000000000001"),
-        detected_format=DetectedFormat.DOCX,
-        profile_name="office-default",
-        profile_sha256="a" * 64,
-    )
+    assert artifact.profile_name == worker_settings.docling_profile_name
+    assert artifact.profile_sha256 == processing_context.profile_sha256
 
 
 def wait_with_test_deadline(
     docling_client: DoclingHttpAdapter,
     external_task_id: str,
     *,
-    deadline_seconds: float = 120.0,
+    deadline_seconds: float,
+    poll_interval_seconds: float,
 ) -> ExternalTaskStatus:
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
         status = docling_client.get_status(external_task_id)
         if status.state is not ExternalTaskState.PROCESSING:
             return status
-        time.sleep(1.0)
+        time.sleep(poll_interval_seconds)
     raise AssertionError("Docling async task did not finish before the test deadline")
