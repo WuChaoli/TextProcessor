@@ -184,7 +184,7 @@ class ExtractionTaskRepository:
                 col(ExtractionTask.queued_at).is_not(None),
                 col(ExtractionTask.queued_at) <= queued_before,
             )
-            .order_by(ExtractionTask.queued_at, ExtractionTask.id)
+            .order_by(col(ExtractionTask.queued_at), col(ExtractionTask.id))
             .limit(limit)
         )
         return list(self._session.exec(statement).all())
@@ -206,7 +206,7 @@ class ExtractionTaskRepository:
             )
             .order_by(
                 func.coalesce(ExtractionTask.next_poll_at, ExtractionTask.queued_at),
-                ExtractionTask.id,
+                col(ExtractionTask.id),
             )
             .limit(limit)
         )
@@ -234,7 +234,7 @@ class ExtractionTaskRepository:
                     col(ExtractionTask.processing_deadline) > now,
                 ),
             )
-            .order_by(ExtractionTask.next_poll_at, ExtractionTask.id)
+            .order_by(col(ExtractionTask.next_poll_at), col(ExtractionTask.id))
             .limit(limit)
         )
         return list(self._session.exec(statement).all())
@@ -252,7 +252,10 @@ class ExtractionTaskRepository:
                 col(ExtractionTask.processing_deadline).is_not(None),
                 col(ExtractionTask.processing_deadline) <= now,
             )
-            .order_by(ExtractionTask.processing_deadline, ExtractionTask.id)
+            .order_by(
+                col(ExtractionTask.processing_deadline),
+                col(ExtractionTask.id),
+            )
             .limit(limit)
         )
         return list(self._session.exec(statement).all())

@@ -187,7 +187,7 @@ class ProcessorSlotRepository:
     def _processor_capacity_lock(self, processor_name: str) -> Iterator[None]:
         bind = self._session.get_bind()
         if bind.dialect.name == "postgresql":
-            self._session.execute(
+            self._session.execute(  # ty: ignore[deprecated]
                 sa_select(
                     func.pg_advisory_xact_lock(
                         _processor_capacity_lock_key(processor_name)
