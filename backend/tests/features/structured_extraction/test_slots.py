@@ -2,6 +2,8 @@ import threading
 import uuid
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -19,6 +21,42 @@ from app.features.structured_extraction.slots import (
     ProcessorSlotRepository,
 )
 from app.models import User
+
+
+class PausingCapacityLockRepository(ProcessorSlotRepository):
+    def __init__(
+        self,
+        session: Session,
+        lock_acquired: threading.Event,
+        release_lock: threading.Event,
+    ) -> None:
+        super().__init__(session)
+        self._lock_acquired = lock_acquired
+        self._release_lock = release_lock
+
+    @contextmanager
+    def _processor_capacity_lock(self, processor_name: str) -> Generator[None]:
+        with super()._processor_capacity_lock(processor_name):
+            self._lock_acquired.set()
+            if not self._release_lock.wait(timeout=5):
+                raise TimeoutError("test did not release processor capacity lock")
+            yield
+
+
+class ObservingCapacityLockRepository(ProcessorSlotRepository):
+    def __init__(
+        self,
+        session: Session,
+        passed_capacity_lock: threading.Event,
+    ) -> None:
+        super().__init__(session)
+        self._passed_capacity_lock = passed_capacity_lock
+
+    @contextmanager
+    def _processor_capacity_lock(self, processor_name: str) -> Generator[None]:
+        with super()._processor_capacity_lock(processor_name):
+            self._passed_capacity_lock.set()
+            yield
 
 
 @pytest.fixture
@@ -156,13 +194,16 @@ def test_release_makes_a_terminal_task_slot_available(session: Session) -> None:
 
 
 @pytest.mark.real_integration
-def test_postgresql_capacity_lock_allows_only_one_concurrent_acquisition() -> None:
+def test_postgresql_capacity_lock_blocks_second_acquisition_until_release() -> None:
     assert engine.dialect.name == "postgresql"
     processor_name = f"slot-{uuid.uuid4().hex[:16]}"
     task_ids = (uuid.uuid4(), uuid.uuid4())
     caller_id = uuid.uuid4()
     now = datetime(2026, 7, 30, tzinfo=UTC)
-    start = threading.Barrier(2)
+    first_lock_acquired = threading.Event()
+    release_first_lock = threading.Event()
+    second_started = threading.Event()
+    second_passed_capacity_lock = threading.Event()
 
     with Session(engine) as setup_session:
         setup_session.add(
@@ -189,10 +230,27 @@ def test_postgresql_capacity_lock_allows_only_one_concurrent_acquisition() -> No
             )
         setup_session.commit()
 
-    def acquire(task_id: uuid.UUID) -> ProcessorSlot | None:
+    def acquire_first(task_id: uuid.UUID) -> ProcessorSlot | None:
         with Session(engine) as slot_session:
-            start.wait(timeout=5)
-            return ProcessorSlotRepository(slot_session).acquire(
+            return PausingCapacityLockRepository(
+                slot_session,
+                first_lock_acquired,
+                release_first_lock,
+            ).acquire(
+                task_id=task_id,
+                processor_name=processor_name,
+                max_in_flight=1,
+                lease_duration=timedelta(seconds=30),
+                now=now,
+            )
+
+    def acquire_second(task_id: uuid.UUID) -> ProcessorSlot | None:
+        with Session(engine) as slot_session:
+            second_started.set()
+            return ObservingCapacityLockRepository(
+                slot_session,
+                second_passed_capacity_lock,
+            ).acquire(
                 task_id=task_id,
                 processor_name=processor_name,
                 max_in_flight=1,
@@ -202,7 +260,17 @@ def test_postgresql_capacity_lock_allows_only_one_concurrent_acquisition() -> No
 
     try:
         with ThreadPoolExecutor(max_workers=2) as executor:
-            acquired = list(executor.map(acquire, task_ids))
+            first = executor.submit(acquire_first, task_ids[0])
+            try:
+                assert first_lock_acquired.wait(timeout=5)
+                second = executor.submit(acquire_second, task_ids[1])
+                assert second_started.wait(timeout=5)
+                assert not second_passed_capacity_lock.wait(timeout=0.5)
+                with pytest.raises(FutureTimeoutError):
+                    second.result(timeout=0.5)
+            finally:
+                release_first_lock.set()
+            acquired = [first.result(timeout=5), second.result(timeout=5)]
     finally:
         with Session(engine) as cleanup_session:
             for task_id in task_ids:
