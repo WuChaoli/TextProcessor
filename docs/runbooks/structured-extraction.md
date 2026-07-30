@@ -52,6 +52,64 @@ docker compose -f compose.yml -f compose.docling.yml -f compose.override.yml up 
 仅在外部 task id 已持久化且任务进入 polling 后向 worker 发送 `SIGKILL`，重启后断言
 同一任务成功且仅发布一个 Markdown 文件。不要在生产运行该选项。
 
+## 真实格式验收
+
+真实外部服务验收与默认测试集分离。只有获得上传授权的脱敏样本可以提交给
+MinerU 或 Docling；业务样本不得提交到仓库、测试输出或日志。每次验收使用临时
+目录，并只保存格式、服务版本（如响应提供）、耗时、状态、结果大小和摘要，不
+保存 API key、样本绝对路径、原始文档或 Markdown 正文。
+
+MinerU 需要当前可达的服务 URL，以及 PDF、图片、DOC、PPT、PPTX 各一个授权
+样本。API key 是否需要取决于部署配置：
+
+```powershell
+.\scripts\smoke-mineru.ps1 `
+  -BaseUrl $env:EXTRACTION_WORKER__MINERU_BASE_URL `
+  -ApiKey $env:EXTRACTION_WORKER__MINERU_API_KEY `
+  -SamplePath @(
+  $env:MINERU_SMOKE_PDF,
+  $env:MINERU_SMOKE_IMAGE,
+  $env:MINERU_SMOKE_DOC,
+  $env:MINERU_SMOKE_PPT,
+  $env:MINERU_SMOKE_PPTX
+)
+```
+
+Docling 需要当前可达的服务 URL、API key，以及普通 DOCX、XLSX、HTML、EPUB
+各一个授权样本：
+
+```powershell
+.\scripts\smoke-docling.ps1 `
+  -BaseUrl $env:EXTRACTION_WORKER__DOCLING_BASE_URL `
+  -ApiKey $env:EXTRACTION_WORKER__DOCLING_API_KEY `
+  -SamplePath @(
+  $env:DOCLING_SMOKE_DOCX,
+  $env:DOCLING_SMOKE_XLSX,
+  $env:DOCLING_SMOKE_HTML,
+  $env:DOCLING_SMOKE_EPUB
+)
+```
+
+两个脚本均会临时设置 `*_REAL_INTEGRATION=1` 和样本映射，随后运行带
+`real_integration` marker 的测试；它们不打印 secret、样本路径或文档正文。也可由
+受控环境直接调用，但必须先设置对应的 `MINERU_REAL_INTEGRATION=1`、
+`DOCLING_REAL_INTEGRATION=1`、连接配置和完整样本映射；缺少 opt-in 时测试会按
+设计 skip，因此不能把命令退出码单独作为通过证据：
+
+```powershell
+Set-Location backend
+uv run pytest -m real_integration tests/integration/structured_extraction -q
+```
+
+一次完整的 Docling 重启恢复验收必须在 pending 与 started 状态分别重启
+`docling-api`、`docling-worker` 和 `docling-redis`，并记录任务恢复或明确失败的
+结果；不要将单纯 healthcheck 当作恢复证据。容量基线同样需要在独立环境测量每个
+processor 的单任务与并发资源使用。
+
+当前源码和 smoke 脚本本身不构成任何外部格式“已通过”的证据。仅在对应的真实
+命令成功执行并保留脱敏摘要后，才可将格式加入 production allowlist；`.wps`、`.et`、
+`.dps` 和 `.ofd` 保持禁用。
+
 停止服务：
 
 ```powershell
