@@ -120,6 +120,8 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling-api:5001}
+      - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
       - SENTRY_DSN=${SENTRY_DSN}
 
     healthcheck:
@@ -178,6 +180,8 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - CELERY_BROKER_URL=redis://redis:6379/0
+      - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling-api:5001}
+      - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
 
   extraction-beat:
     image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'

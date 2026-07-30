@@ -112,6 +112,17 @@ services:
       context: .
       dockerfile: backend/Dockerfile
 
+  docling-api:
+    restart: "no"
+    ports:
+      - "5001:5001"
+
+  docling-worker:
+    restart: "no"
+
+  docling-redis:
+    restart: "no"
+
   mailcatcher:
     image: schickling/mailcatcher
     ports:
