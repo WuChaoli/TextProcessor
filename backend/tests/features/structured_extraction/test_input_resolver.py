@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from io import BytesIO
 from pathlib import Path
 
 import httpx
@@ -168,6 +169,58 @@ def test_s3_bucket_must_be_in_worker_allowlist(tmp_path: Path) -> None:
         )
 
     assert captured.value.code is ExtractionErrorCode.INPUT_ACCESS_FAILED
+
+
+def test_s3_storage_options_are_passed_to_fsspec(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeS3FileSystem:
+        def open(self, path: str, mode: str) -> BytesIO:
+            assert path == "approved/sample.txt"
+            assert mode == "rb"
+            return BytesIO(b"s3 content")
+
+    def filesystem(protocol: str, **storage_options: object) -> FakeS3FileSystem:
+        assert protocol == "s3"
+        captured.update(storage_options)
+        return FakeS3FileSystem()
+
+    monkeypatch.setattr(
+        "app.features.structured_extraction.input_resolver.fsspec.filesystem",
+        filesystem,
+    )
+    resolver = InputResolver(
+        input_roots=(),
+        max_input_bytes=1024,
+        allowed_s3_buckets=("approved",),
+        s3_storage_options={
+            "client_kwargs": {
+                "endpoint_url": "https://object-storage.example",
+                "region_name": "test-region-1",
+            },
+            "key": "access-key",
+            "secret": "secret-key",
+        },
+    )
+    task = make_task(local_path=None, remote_url="s3://approved/sample.txt")
+
+    resolved = resolver.resolve(
+        task,
+        StagingLayout.for_task(tmp_path / "staging", task.id),
+    )
+
+    assert resolved.path.read_bytes() == b"s3 content"
+    assert captured == {
+        "client_kwargs": {
+            "endpoint_url": "https://object-storage.example",
+            "region_name": "test-region-1",
+        },
+        "key": "access-key",
+        "secret": "secret-key",
+    }
 
 
 def test_remote_uri_must_not_contain_credentials(tmp_path: Path) -> None:

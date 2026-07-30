@@ -1,10 +1,13 @@
 import uuid
 from collections.abc import Callable, Generator
 from datetime import timedelta
+from io import BytesIO
 from pathlib import Path
 
+import httpx
 import pytest
 from celery.exceptions import Retry
+from pydantic import HttpUrl
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
@@ -24,6 +27,7 @@ from app.features.structured_extraction.models import (
     get_datetime_utc,
 )
 from app.features.structured_extraction.orchestration import ExtractionOrchestrator
+from app.features.structured_extraction.request_policy import RequestPolicy
 from app.features.structured_extraction.slots import ProcessorSlotRepository
 from app.features.structured_extraction.worker_models import (
     ExternalTaskState,
@@ -226,6 +230,127 @@ def test_submit_processes_plain_text_without_external_adapter_or_slot(
     assert target.read_text(encoding="utf-8") == "标题\n\n正文\n"
     assert scheduler.submit_calls == []
     assert scheduler.poll_calls == []
+
+
+def test_worker_stages_remote_http_input_through_request_policy(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    output_root.mkdir()
+    task = ExtractionTask(
+        caller_id=uuid.uuid4(),
+        session_id="remote-http",
+        file_id="remote-note",
+        request_fingerprint="a" * 64,
+        file_oss_url="https://files.internal/note.txt",
+        selected_input_type="remote",
+        target_path=str(output_root / "note.md"),
+        status=ExtractionTaskStatus.QUEUED,
+    )
+    session.add(task)
+    session.commit()
+    policy = RequestPolicy(
+        input_roots=(),
+        output_roots=(output_root,),
+        allowed_http_hosts=("files.internal",),
+        allowed_http_cidrs=("10.20.0.0/16",),
+        max_input_bytes=1024,
+        resolver=lambda host, _port: ("10.20.0.8",) if host == "files.internal" else (),
+    )
+
+    def response(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://files.internal/note.txt"
+        return httpx.Response(200, content=b"remote content\n", request=request)
+
+    worker = ExtractionOrchestrator(
+        session,
+        worker_settings=ExtractionWorkerSettings(
+            staging_root=staging_root,
+            output_roots=(output_root,),
+            production_formats=("text",),
+        ),
+        input_roots=(),
+        max_input_bytes=1024,
+        remote_url_validator=policy.validate_remote_url,
+        http_client=httpx.Client(transport=httpx.MockTransport(response)),
+    )
+
+    worker.submit(task.id)
+
+    session.refresh(task)
+    assert task.status is ExtractionTaskStatus.SUCCEEDED
+    assert (output_root / "note.md").read_text(encoding="utf-8") == "remote content\n"
+
+
+def test_worker_passes_s3_configuration_to_input_resolver(
+    session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+    captured: dict[str, object] = {}
+
+    class FakeS3FileSystem:
+        def open(self, path: str, mode: str) -> BytesIO:
+            assert path == "approved/note.txt"
+            assert mode == "rb"
+            return BytesIO(b"remote s3 content\n")
+
+    def filesystem(protocol: str, **storage_options: object) -> FakeS3FileSystem:
+        assert protocol == "s3"
+        captured.update(storage_options)
+        return FakeS3FileSystem()
+
+    monkeypatch.setattr(
+        "app.features.structured_extraction.input_resolver.fsspec.filesystem",
+        filesystem,
+    )
+    task = ExtractionTask(
+        caller_id=uuid.uuid4(),
+        session_id="remote-s3",
+        file_id="remote-note",
+        request_fingerprint="a" * 64,
+        file_oss_url="s3://approved/note.txt",
+        selected_input_type="remote",
+        target_path=str(output_root / "note.md"),
+        status=ExtractionTaskStatus.QUEUED,
+    )
+    session.add(task)
+    session.commit()
+    worker = ExtractionOrchestrator(
+        session,
+        worker_settings=ExtractionWorkerSettings(
+            staging_root=tmp_path / "staging",
+            output_roots=(output_root,),
+            production_formats=("text",),
+            s3_allowed_buckets=("approved",),
+            s3_endpoint_url=HttpUrl("https://object-storage.example"),
+            s3_region="test-region-1",
+            s3_access_key_id="access-key",
+            s3_secret_access_key="secret-key",
+        ),
+        input_roots=(),
+        max_input_bytes=1024,
+    )
+
+    worker.submit(task.id)
+
+    session.refresh(task)
+    assert task.status is ExtractionTaskStatus.SUCCEEDED
+    assert (output_root / "note.md").read_text(
+        encoding="utf-8"
+    ) == "remote s3 content\n"
+    assert captured == {
+        "client_kwargs": {
+            "endpoint_url": "https://object-storage.example",
+            "region_name": "test-region-1",
+        },
+        "key": "access-key",
+        "secret": "secret-key",
+    }
 
 
 def test_submit_waits_and_reschedules_when_external_capacity_is_exhausted(

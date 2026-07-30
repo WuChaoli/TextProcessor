@@ -10,7 +10,7 @@ from typing import Protocol
 import httpx
 from sqlmodel import Session, col, select
 
-from app.core.config import ExtractionWorkerSettings
+from app.core.config import ExtractionWorkerSettings, settings
 from app.features.structured_extraction.adapters.docling import DoclingHttpAdapter
 from app.features.structured_extraction.adapters.mineru import MinerUHttpAdapter
 from app.features.structured_extraction.adapters.protocol import (
@@ -40,6 +40,7 @@ from app.features.structured_extraction.repository import (
     ConditionalTransitionFailed,
     ExtractionTaskRepository,
 )
+from app.features.structured_extraction.request_policy import RequestPolicy
 from app.features.structured_extraction.router import ProcessorRouter
 from app.features.structured_extraction.slots import ProcessorSlotRepository
 from app.features.structured_extraction.staging import StagingLayout
@@ -70,6 +71,24 @@ class ExtractionTaskScheduler(Protocol):
     def enqueue_poll(self, task_id: uuid.UUID, *, countdown: int) -> None: ...
 
 
+def _s3_storage_options(
+    worker_settings: ExtractionWorkerSettings,
+) -> dict[str, object]:
+    options: dict[str, object] = {}
+    client_kwargs: dict[str, str] = {}
+    if worker_settings.s3_endpoint_url is not None:
+        client_kwargs["endpoint_url"] = str(worker_settings.s3_endpoint_url).rstrip("/")
+    if worker_settings.s3_region is not None:
+        client_kwargs["region_name"] = worker_settings.s3_region
+    if client_kwargs:
+        options["client_kwargs"] = client_kwargs
+    if worker_settings.s3_access_key_id is not None:
+        options["key"] = worker_settings.s3_access_key_id
+    if worker_settings.s3_secret_access_key is not None:
+        options["secret"] = worker_settings.s3_secret_access_key
+    return options
+
+
 class _NoopScheduler:
     def enqueue_submit(self, task_id: uuid.UUID, *, countdown: int) -> None:
         del task_id, countdown
@@ -90,6 +109,8 @@ class ExtractionOrchestrator:
         adapter_factory: Callable[[ProcessorName], ExternalProcessorAdapter]
         | None = None,
         slots: ProcessorSlotRepository | None = None,
+        remote_url_validator: Callable[[str], str] | None = None,
+        http_client: httpx.Client | None = None,
     ) -> None:
         self._session = session
         self._settings = worker_settings
@@ -97,11 +118,24 @@ class ExtractionOrchestrator:
         self._scheduler = scheduler or _NoopScheduler()
         self._adapter_factory = adapter_factory
         self._slots = slots or ProcessorSlotRepository(session)
+        validator = (
+            remote_url_validator
+            or RequestPolicy(
+                input_roots=input_roots,
+                output_roots=worker_settings.output_roots,
+                allowed_http_hosts=settings.EXTRACTION_HTTP_ALLOWED_HOSTS,
+                allowed_http_cidrs=settings.EXTRACTION_HTTP_ALLOWED_CIDRS,
+                max_input_bytes=max_input_bytes,
+            ).validate_remote_url
+        )
         self._resolver = InputResolver(
             input_roots=input_roots,
             max_input_bytes=max_input_bytes,
             copy_chunk_bytes=worker_settings.copy_chunk_bytes,
+            remote_url_validator=validator,
             allowed_s3_buckets=worker_settings.s3_allowed_buckets,
+            s3_storage_options=_s3_storage_options(worker_settings),
+            http_client=http_client,
             max_http_redirects=worker_settings.max_http_redirects,
         )
         self._detector = FormatDetector()

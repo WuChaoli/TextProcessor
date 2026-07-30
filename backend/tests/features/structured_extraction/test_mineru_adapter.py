@@ -18,6 +18,25 @@ from app.features.structured_extraction.worker_models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """适配器单测不需要 PostgreSQL。"""
+
+
+class CountingStream(httpx.SyncByteStream):
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.yield_count = 0
+
+    def __iter__(self):
+        for chunk in self._chunks:
+            self.yield_count += 1
+            yield chunk
+
+    def close(self) -> None:
+        return None
+
+
 def context() -> ProcessingContext:
     return ProcessingContext(
         task_id=uuid.UUID("018f0000-0000-7000-8000-000000000001"),
@@ -179,6 +198,26 @@ def test_rejects_oversized_result(tmp_path: Path) -> None:
         adapter.fetch_result("task-1", tmp_path / "result.md")
 
     assert captured.value.code is ExtractionErrorCode.INVALID_PROCESSOR_OUTPUT
+
+
+def test_rejects_oversized_streamed_result_without_reading_full_body(
+    tmp_path: Path,
+) -> None:
+    stream = CountingStream([b'{"a":"', b"123456", b'"}'])
+    adapter = make_adapter(
+        lambda request: httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            stream=stream,
+        ),
+        max_result_bytes=10,
+    )
+
+    with pytest.raises(ExtractionProcessingError) as captured:
+        adapter.fetch_result("task-1", tmp_path / "result.md")
+
+    assert captured.value.code is ExtractionErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert stream.yield_count == 2
 
 
 def test_submit_timeout_is_uncertain_and_not_marked_transient(

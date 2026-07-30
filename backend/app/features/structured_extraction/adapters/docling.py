@@ -138,9 +138,30 @@ class DoclingHttpAdapter:
         destination: Path,
     ) -> ProcessorArtifact:
         try:
-            response = self._client.get(
+            request = self._client.build_request(
+                "GET",
                 self._url("v1", "result", external_task_id),
                 headers=self._headers,
+            )
+            response = self._client.send(request, stream=True)
+        except httpx.RequestError:
+            raise ExtractionProcessingError(
+                ExtractionErrorCode.PROCESSING_FAILED,
+                "Docling 结果获取暂时失败",
+                transient=True,
+                external_task_id=external_task_id,
+            ) from None
+        try:
+            if response.status_code != 200:
+                raise self._http_error(
+                    response,
+                    "Docling 结果获取失败",
+                    external_task_id=external_task_id,
+                )
+            payload = self._stream_json_object(
+                response,
+                limit=self._max_result_bytes,
+                external_task_id=external_task_id,
             )
         except httpx.RequestError:
             raise ExtractionProcessingError(
@@ -149,17 +170,8 @@ class DoclingHttpAdapter:
                 transient=True,
                 external_task_id=external_task_id,
             ) from None
-        if response.status_code != 200:
-            raise self._http_error(
-                response,
-                "Docling 结果获取失败",
-                external_task_id=external_task_id,
-            )
-        payload = self._json_object(
-            response,
-            limit=self._max_result_bytes,
-            external_task_id=external_task_id,
-        )
+        finally:
+            response.close()
         document = payload.get("document")
         if not isinstance(document, dict):
             raise invalid_response(external_task_id)
@@ -211,6 +223,31 @@ class DoclingHttpAdapter:
             raise invalid_response(external_task_id)
         try:
             payload = response.json()
+        except ValueError, TypeError:
+            raise invalid_response(external_task_id) from None
+        if not isinstance(payload, dict) or not all(
+            isinstance(key, str) for key in payload
+        ):
+            raise invalid_response(external_task_id)
+        return cast(dict[str, object], payload)
+
+    def _stream_json_object(
+        self,
+        response: httpx.Response,
+        *,
+        limit: int,
+        external_task_id: str | None = None,
+    ) -> dict[str, object]:
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type.lower():
+            raise invalid_response(external_task_id)
+        payload_bytes = bytearray()
+        for chunk in response.iter_bytes():
+            if len(payload_bytes) + len(chunk) > limit:
+                raise invalid_response(external_task_id)
+            payload_bytes.extend(chunk)
+        try:
+            payload = json.loads(payload_bytes)
         except ValueError, TypeError:
             raise invalid_response(external_task_id) from None
         if not isinstance(payload, dict) or not all(

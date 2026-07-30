@@ -134,10 +134,12 @@ class MinerUHttpAdapter:
         destination: Path,
     ) -> ProcessorArtifact:
         try:
-            response = self._client.get(
+            request = self._client.build_request(
+                "GET",
                 self._url("tasks", external_task_id, "result"),
                 headers=self._headers,
             )
+            response = self._client.send(request, stream=True)
         except httpx.RequestError:
             raise ExtractionProcessingError(
                 ExtractionErrorCode.PROCESSING_FAILED,
@@ -145,13 +147,26 @@ class MinerUHttpAdapter:
                 transient=True,
                 external_task_id=external_task_id,
             ) from None
-        if response.status_code != 200:
-            raise self._http_error(
+        try:
+            if response.status_code != 200:
+                raise self._http_error(
+                    response,
+                    "MinerU 结果获取失败",
+                    external_task_id=external_task_id,
+                )
+            payload = self._stream_json_object(
                 response,
-                "MinerU 结果获取失败",
+                limit=self._max_result_bytes,
+            )
+        except httpx.RequestError:
+            raise ExtractionProcessingError(
+                ExtractionErrorCode.PROCESSING_FAILED,
+                "MinerU 结果获取暂时失败",
+                transient=True,
                 external_task_id=external_task_id,
             )
-        payload = self._json_object(response, limit=self._max_result_bytes)
+        finally:
+            response.close()
         backend = payload.get("backend")
         version = payload.get("version")
         results = payload.get("results")
@@ -215,6 +230,30 @@ class MinerUHttpAdapter:
             raise invalid_response()
         try:
             payload = response.json()
+        except ValueError, TypeError:
+            raise invalid_response() from None
+        if not isinstance(payload, dict) or not all(
+            isinstance(key, str) for key in payload
+        ):
+            raise invalid_response()
+        return cast(dict[str, object], payload)
+
+    def _stream_json_object(
+        self,
+        response: httpx.Response,
+        *,
+        limit: int,
+    ) -> dict[str, object]:
+        content_type = response.headers.get("content-type", "")
+        if "application/json" not in content_type.lower():
+            raise invalid_response()
+        payload_bytes = bytearray()
+        for chunk in response.iter_bytes():
+            if len(payload_bytes) + len(chunk) > limit:
+                raise invalid_response()
+            payload_bytes.extend(chunk)
+        try:
+            payload = json.loads(payload_bytes)
         except ValueError, TypeError:
             raise invalid_response() from None
         if not isinstance(payload, dict) or not all(
