@@ -136,6 +136,27 @@ def test_enqueue_failure_marks_task_failed_and_hides_broker_error(
     )
 
 
+def test_retry_after_queue_failure_returns_same_service_error(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    caller_id = uuid.uuid4()
+    request, policy = make_request_and_policy(tmp_path)
+    service = ExtractionTaskService(
+        ExtractionTaskRepository(session),
+        policy,
+        FakeDispatcher(failure=RuntimeError("broker unavailable")),
+    )
+    with pytest.raises(ExtractionDomainError):
+        service.create_task(caller_id, request)
+
+    with pytest.raises(ExtractionDomainError) as raised:
+        service.create_task(caller_id, request)
+
+    assert raised.value.code is ExtractionErrorCode.QUEUE_SUBMISSION_FAILED
+    assert raised.value.http_status == 503
+
+
 def test_get_task_is_scoped_to_caller(
     session: Session,
     tmp_path: Path,

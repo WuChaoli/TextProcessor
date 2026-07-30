@@ -187,4 +187,10 @@ def test_get_returns_snapshot_and_other_caller_gets_same_404(
     missing = client.get(f"/api/v1/structured-extraction/tasks/{uuid.uuid4()}")
     assert hidden.status_code == missing.status_code == 404
     assert hidden.json() == missing.json()
+    assert hidden.json() == {
+        "detail": {
+            "code": "TASK_NOT_FOUND",
+            "message": "任务不存在",
+        }
+    }
     assert user.id != app.dependency_overrides[get_current_user]().id

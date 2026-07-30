@@ -1,9 +1,13 @@
 import hashlib
 import json
+import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import Engine, func, update
+from sqlalchemy import select as sa_select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
@@ -22,6 +26,19 @@ from app.features.structured_extraction.state_machine import assert_transition
 
 class ConditionalTransitionFailed(RuntimeError):
     pass
+
+
+_local_lock_guard = threading.Lock()
+_local_locks: dict[int, threading.Lock] = {}
+
+
+def _idempotency_lock_key(
+    caller_id: uuid.UUID,
+    session_id: str,
+    file_id: str,
+) -> int:
+    digest = hashlib.sha256(f"{caller_id}\0{session_id}\0{file_id}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
 def request_fingerprint(
@@ -53,6 +70,29 @@ def request_fingerprint(
 class ExtractionTaskRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
+
+    @contextmanager
+    def idempotency_lock(
+        self,
+        caller_id: uuid.UUID,
+        session_id: str,
+        file_id: str,
+    ) -> Iterator[None]:
+        key = _idempotency_lock_key(caller_id, session_id, file_id)
+        bind = self._session.get_bind()
+        if isinstance(bind, Engine) and bind.dialect.name == "postgresql":
+            with bind.connect() as connection:
+                connection.execute(sa_select(func.pg_advisory_lock(key)))
+                try:
+                    yield
+                finally:
+                    connection.execute(sa_select(func.pg_advisory_unlock(key)))
+            return
+
+        with _local_lock_guard:
+            lock = _local_locks.setdefault(key, threading.Lock())
+        with lock:
+            yield
 
     def create_or_get(
         self,
@@ -148,7 +188,7 @@ class ExtractionTaskRepository:
             )
             .values(**values)
         )
-        result = self._session.execute(statement)
+        result = self._session.exec(statement)
         if not isinstance(result, CursorResult) or result.rowcount != 1:
             self._session.rollback()
             raise ConditionalTransitionFailed(f"任务 {task_id} 当前状态不是 {expected}")

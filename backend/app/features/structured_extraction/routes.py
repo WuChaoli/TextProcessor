@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -8,7 +8,10 @@ from app.core.config import settings
 from app.features.structured_extraction.dispatcher import (
     CeleryExtractionTaskDispatcher,
 )
-from app.features.structured_extraction.errors import ExtractionDomainError
+from app.features.structured_extraction.errors import (
+    ExtractionDomainError,
+    ExtractionErrorCode,
+)
 from app.features.structured_extraction.models import (
     ExtractionTask,
     ExtractionTaskStatus,
@@ -63,7 +66,7 @@ def _service(
     )
 
 
-def _raise_http_error(error: ExtractionDomainError) -> None:
+def _raise_http_error(error: ExtractionDomainError) -> NoReturn:
     raise HTTPException(
         status_code=error.http_status,
         detail={
@@ -130,5 +133,11 @@ def get_extraction_task(
 ) -> ExtractionTaskPublic:
     task = service.get_task(current_user.id, task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+        _raise_http_error(
+            ExtractionDomainError(
+                ExtractionErrorCode.TASK_NOT_FOUND,
+                "任务不存在",
+                http_status=404,
+            )
+        )
     return task_to_public(task)

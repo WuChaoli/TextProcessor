@@ -5,6 +5,7 @@ from app.core.config import settings
 celery_app = Celery(
     "text_processor",
     broker=settings.CELERY_BROKER_URL,
+    include=["app.features.structured_extraction.celery_tasks"],
 )
 celery_app.conf.update(
     task_serializer="json",
