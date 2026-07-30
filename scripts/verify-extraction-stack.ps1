@@ -156,18 +156,19 @@ Invoke-VerificationStage "Celery broker message identity envelope" {
     $dispatchCode = @'
 import uuid
 import sys
-from app.features.structured_extraction.celery_tasks import submit_extraction_task
+from celery import Celery
+from app.core.config import settings
+from app.features.structured_extraction.dispatcher import CeleryExtractionTaskDispatcher
 
 task_id = uuid.uuid4()
 queue_name = sys.argv[1]
-submit_extraction_task.apply_async(
-    kwargs={
-        "task_id": str(task_id),
-        "task_type": "structured_extraction",
-        "schema_version": 1,
-    },
-    queue=queue_name,
+smoke_app = Celery("textprocessor-smoke", broker=settings.CELERY_BROKER_URL)
+smoke_app.conf.update(
+    task_default_queue=queue_name,
+    task_default_exchange=queue_name,
+    task_default_routing_key=queue_name,
 )
+CeleryExtractionTaskDispatcher(smoke_app).enqueue_submit(task_id)
 print(task_id)
 '@
     try {

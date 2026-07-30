@@ -60,8 +60,12 @@ def test_stack_verifier_observes_real_broker_message_and_running_task_recovery()
     assert "DEL celery" not in verifier
     assert "LINDEX celery 0" not in verifier
     assert "textprocessor-smoke-" in verifier
-    assert "apply_async(" in verifier
-    assert "queue=queue_name" in verifier
+    assert "from celery import Celery" in verifier
+    assert (
+        "CeleryExtractionTaskDispatcher(smoke_app).enqueue_submit(task_id)" in verifier
+    )
+    assert "task_default_queue=queue_name" in verifier
+    assert "submit_extraction_task.apply_async(" not in verifier
     assert "LINDEX $smokeQueue 0" in verifier
     assert "FromBase64String" in verifier
     assert "$headers.task" in verifier
