@@ -43,6 +43,11 @@ build-backend = "hatchling.build"
 strict = true
 exclude = ["venv", ".venv", "alembic"]
 
+[tool.pytest.ini_options]
+markers = [
+    "real_integration: requires a reachable explicitly configured external service",
+]
+
 [tool.ruff]
 target-version = "py314"
 exclude = ["alembic"]
