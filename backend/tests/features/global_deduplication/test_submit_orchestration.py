@@ -53,7 +53,11 @@ class FakeAdapter:
 
 @dataclass
 class FakeScheduler:
+    submits: list[tuple[uuid.UUID, int]] = field(default_factory=list)
     polls: list[tuple[uuid.UUID, int]] = field(default_factory=list)
+
+    def enqueue_submit(self, task_id: uuid.UUID, *, countdown: int) -> None:
+        self.submits.append((task_id, countdown))
 
     def enqueue_poll(self, task_id: uuid.UUID, *, countdown: int) -> None:
         self.polls.append((task_id, countdown))
@@ -96,6 +100,7 @@ def build_orchestrator(
     staging_root: Path,
     adapter: FakeAdapter,
     scheduler: FakeScheduler,
+    now: datetime = NOW,
 ) -> GlobalDeduplicationOrchestrator:
     settings = GlobalDeduplicationWorkerSettings(
         staging_root=staging_root,
@@ -113,7 +118,7 @@ def build_orchestrator(
         adapter=adapter,
         scheduler=scheduler,
         settings=settings,
-        now=lambda: NOW,
+        now=lambda: now,
     )
 
 

@@ -178,3 +178,43 @@ def map_business_result(
         )
         for decision in sorted(decisions, key=lambda item: item.uid)
     )
+
+
+def load_mapping(path: Path, *, expected_task_id: uuid.UUID) -> tuple[MappingDocument, ...]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schemaVersion", "taskId", "documents"}
+            or value["schemaVersion"] != 1
+            or value["taskId"] != str(expected_task_id)
+            or not isinstance(value["documents"], list)
+        ):
+            raise _invalid_output()
+        documents: list[MappingDocument] = []
+        for record in value["documents"]:
+            if (
+                not isinstance(record, dict)
+                or set(record) != {"uid", "fileId", "fileStoragePath"}
+                or isinstance(record["uid"], bool)
+                or not isinstance(record["uid"], int)
+                or record["uid"] < 0
+                or not isinstance(record["fileId"], str)
+                or not isinstance(record["fileStoragePath"], str)
+            ):
+                raise _invalid_output()
+            documents.append(
+                MappingDocument(
+                    uid=record["uid"],
+                    file_id=record["fileId"],
+                    file_storage_path=record["fileStoragePath"],
+                )
+            )
+        if len({document.uid for document in documents}) != len(documents):
+            raise _invalid_output()
+        documents.sort(key=lambda item: item.uid)
+        return tuple(documents)
+    except GlobalDeduplicationProcessingError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError):
+        raise _invalid_output() from None

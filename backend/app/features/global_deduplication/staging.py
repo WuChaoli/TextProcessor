@@ -133,6 +133,47 @@ class GlobalDeduplicationStaging:
             ) from None
         return prepared
 
+    def update_result_manifest(
+        self,
+        layout: GlobalDeduplicationStagingLayout,
+        *,
+        datajuicer_result_sha256: str,
+        final_result_sha256: str,
+    ) -> None:
+        layout.assert_safe()
+        try:
+            manifest = json.loads(layout.manifest.read_text(encoding="utf-8"))
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("taskId") != str(layout.task_id)
+            ):
+                raise ValueError
+            manifest["datajuicerResultSha256"] = datajuicer_result_sha256
+            manifest["finalResultSha256"] = final_result_sha256
+            manifest["updatedAt"] = datetime.now(UTC).isoformat()
+            content = (
+                json.dumps(
+                    manifest,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode()
+            replacement = layout.manifest.with_name(".manifest.json.part")
+            with replacement.open("xb") as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            replacement.replace(layout.manifest)
+        except (OSError, ValueError, json.JSONDecodeError):
+            raise GlobalDeduplicationProcessingError(
+                GlobalDeduplicationErrorCode.STAGING_WRITE_FAILED,
+                "无法更新任务 manifest",
+            ) from None
+        finally:
+            replacement = layout.manifest.with_name(".manifest.json.part")
+            replacement.unlink(missing_ok=True)
+
     @staticmethod
     def _input_content(documents: tuple[NormalizedDocument, ...]) -> bytes:
         return "".join(

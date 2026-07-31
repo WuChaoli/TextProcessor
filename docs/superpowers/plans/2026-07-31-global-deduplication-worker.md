@@ -434,7 +434,7 @@ git commit -m "功能：编排全局去重任务提交"
 - Produces: `recover() -> RecoverySummary`.
 - Consumes scheduler methods `enqueue_submit` and `enqueue_poll`.
 
-- [ ] **Step 1: Write failing poll/finalize/recovery tests**
+- [x] **Step 1: Write failing poll/finalize/recovery tests**
 
 ```python
 def test_successful_poll_finalizes_in_same_task(orchestrator, target_path) -> None:
@@ -451,21 +451,21 @@ def test_recovery_only_redispatches_due_work(orchestrator, scheduler) -> None:
 
 Cover pending/queued lost dispatch, expired submit lease, due poll, external running/failed/cancelled/not-found/timeout, transient poll error, invalid output, competing polls, publish conflict, published-before-DB digest recovery.
 
-- [ ] **Step 2: Run tests and verify behavior failures**
+- [x] **Step 2: Run tests and verify behavior failures**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_poll_orchestration.py backend/tests/features/global_deduplication/test_recovery.py -q
 ```
 
-- [ ] **Step 3: Implement poll lease, configurable backoff and inline finalize**
+- [x] **Step 3: Implement poll lease, configurable backoff and inline finalize**
 
 Keep public phase `deduplicating` for all nonterminal external states. On success update `publishing_result`, validate external response/path/digest, map output, persist prepared digest, publish, persist result metadata and transition to `completed`.
 
-- [ ] **Step 4: Implement recovery as dispatch-only scanning**
+- [x] **Step 4: Implement recovery as dispatch-only scanning**
 
 Recovery must never read documents, call Data-Juicer or publish files inside Beat. Re-submit uncertain jobs with `requestId=taskId`; only fail `PROCESSOR_JOB_NOT_FOUND` after the specified single idempotent recovery attempt.
 
-- [ ] **Step 5: Run focused and feature gates**
+- [x] **Step 5: Run focused and feature gates**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication -q
@@ -474,7 +474,7 @@ uv run --project backend mypy backend/app/features/global_deduplication
 uv run --project backend ty check backend/app/features/global_deduplication
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add backend/app/features/global_deduplication backend/tests/features/global_deduplication

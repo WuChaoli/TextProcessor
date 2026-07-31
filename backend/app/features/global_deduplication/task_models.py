@@ -14,7 +14,7 @@ def get_datetime_utc() -> datetime:
 
 
 class GlobalDeduplicationTask(SQLModel, table=True):
-    __tablename__ = "global_deduplication_task"
+    __tablename__ = "global_deduplication_task"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
         UniqueConstraint(
             "caller_id",
