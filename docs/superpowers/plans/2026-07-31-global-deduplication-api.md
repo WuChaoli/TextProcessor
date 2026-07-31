@@ -29,7 +29,7 @@
 
 ### Task 4: 三模块真实合并测试
 
-- [ ] 源码启动 PostgreSQL、Redis、Data-Juicer API/worker、TextProcessor API/worker。
-- [ ] 通过 HTTP 创建任务并轮询成功，验证结果文件四字段不变量。
-- [ ] 验证幂等重复提交、冲突和禁止覆盖。
-- [ ] 停止临时进程并记录可复现证据。
+- [x] 源码启动 PostgreSQL、Redis、Data-Juicer API/worker、TextProcessor API/worker。
+- [x] 通过 HTTP 创建任务并轮询成功，验证结果文件四字段不变量。
+- [x] 验证幂等重复提交、冲突和禁止覆盖。
+- [x] 停止临时进程并记录可复现证据。

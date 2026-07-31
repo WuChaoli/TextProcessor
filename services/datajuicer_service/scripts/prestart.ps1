@@ -29,13 +29,7 @@ if (-not $SkipMigration) {
     if ([string]::IsNullOrWhiteSpace($env:DATAJUICER_DATABASE_URL)) {
         throw "DATAJUICER_DATABASE_URL is required for migration"
     }
-    Push-Location $repositoryRoot
-    try {
-        & uv run --project $serviceRoot alembic -c (Join-Path $serviceRoot "alembic.ini") upgrade head
-    }
-    finally {
-        Pop-Location
-    }
+    & uv run --project $serviceRoot python (Join-Path $PSScriptRoot "migrate.py")
 }
 
 Write-Host "Data-Juicer source prestart checks passed."

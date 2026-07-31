@@ -20,6 +20,10 @@ Beat 使用同一份源码与 PostgreSQL 任务表。Redis 仅作为 Celery brok
 
 三个服务进程必须使用完全相同的以上配置。
 
+Data-Juicer 与 TextProcessor 可以复用同一个 PostgreSQL 实例，但必须使用
+独立 database。两个服务拥有各自的 Alembic 版本表，不能把两个 migration
+历史写入同一个 database。
+
 ## 启动
 
 在仓库根目录分别开启三个 PowerShell 终端：
@@ -90,3 +94,28 @@ uv run --project services/datajuicer_service python `
 
 验收后已停止 API、worker、Beat，并删除本次临时 Redis 容器；没有生成服务
 Dockerfile 或镜像。
+
+## 2026-07-31 TextProcessor 三模块合并证据
+
+使用同一 PostgreSQL 18 实例中的两个独立 database、同一 Redis 7 实例中的
+隔离队列，以源码进程启动 TextProcessor API/worker 和 Data-Juicer
+API/worker：
+
+- TextProcessor `POST /api/v1/global-deduplication/tasks` 创建任务
+  `019fb78d-0b62-746f-80ca-89353cba9847`；
+- TextProcessor worker 通过真实 HTTP 创建 Data-Juicer job
+  `20d3bf43-2243-4c54-ad3e-ae5987f0750f`；
+- Data-Juicer worker 完成精确去重，处理器输出 SHA-256 为
+  `edeadec2a2cf1ab61a4bf0202fb443699f9a00a1bb3b4060679576a8072b4a01`；
+- TextProcessor GET 最终返回 `succeeded`、`completed`、3/3、100%；
+- 最终业务 JSON SHA-256 为
+  `d8a99a12226d7b88d90f637493bb906edfa29350751f7547b6496261306af056`；
+- 三条记录严格只含 `fileId,fileStoragePath,groupId,keep`，保留决策为
+  `true,false,true`，重复组 groupId 相同，独立文档 groupId 为 null；
+- 相同 session 和相同参数返回原 taskId；相同 session 改变参数返回
+  `409 IDEMPOTENCY_CONFLICT`；新 session 指向已有目标最终返回
+  `OUTPUT_CONFLICT`。
+
+并发启动验证另外使用全新 database，同时运行两个 `prestart.ps1`，两个进程
+均以 0 退出，最终 Alembic 版本为 `20260731_01` 且任务表存在。迁移入口使用
+PostgreSQL advisory lock，避免 API 与 worker 首次启动时争抢创建版本表。
