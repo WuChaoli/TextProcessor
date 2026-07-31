@@ -1,5 +1,6 @@
 import hashlib
 import os
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,7 @@ class AtomicPublisher:
         self._max_output_bytes = max_output_bytes
         self._copy_chunk_bytes = copy_chunk_bytes
         self._output_roots = tuple(root.resolve(strict=False) for root in output_roots)
+        self._publish_lock = threading.Lock()
 
     def prepare(self, source: Path) -> PreparedOutput:
         try:
@@ -71,6 +73,20 @@ class AtomicPublisher:
         *,
         allow_recovery: bool = False,
     ) -> PublishedOutput:
+        with self._publish_lock:
+            return self._publish_locked(
+                prepared,
+                target,
+                allow_recovery=allow_recovery,
+            )
+
+    def _publish_locked(
+        self,
+        prepared: PreparedOutput,
+        target: Path,
+        *,
+        allow_recovery: bool,
+    ) -> PublishedOutput:
         normalized_target = target.resolve(strict=False)
         self._validate_target(normalized_target)
         if normalized_target.exists():
@@ -94,6 +110,12 @@ class AtomicPublisher:
         except ExtractionProcessingError:
             raise
         except OSError:
+            if normalized_target.exists():
+                return self._resolve_existing(
+                    prepared,
+                    normalized_target,
+                    allow_recovery=allow_recovery,
+                )
             raise ExtractionProcessingError(
                 ExtractionErrorCode.OUTPUT_WRITE_FAILED,
                 "结构化提取结果发布失败",

@@ -111,6 +111,62 @@ class ExtractionWorkerSettings(BaseModel):
         return self
 
 
+class GlobalDeduplicationWorkerSettings(BaseModel):
+    staging_root: Path = Path("/data/textprocessor/global-deduplication")
+    output_roots: tuple[Path, ...] = (Path("/data/textprocessor/output"),)
+    max_documents: int = Field(default=100_000, gt=0)
+    max_manifest_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    max_document_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    max_total_bytes: int = Field(default=10 * 1024 * 1024 * 1024, gt=0)
+    copy_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
+    max_http_redirects: int = Field(default=3, ge=0)
+    s3_allowed_buckets: tuple[str, ...] = ()
+    s3_endpoint_url: HttpUrl | None = None
+    s3_region: str | None = None
+    s3_access_key_id: str | None = Field(default=None, repr=False)
+    s3_secret_access_key: str | None = Field(default=None, repr=False)
+    datajuicer_base_url: HttpUrl | None = None
+    datajuicer_profile: Literal["text_exact_minhash_v1"] = "text_exact_minhash_v1"
+    datajuicer_connect_timeout_seconds: float = Field(default=10, gt=0)
+    datajuicer_submit_timeout_seconds: float = Field(default=30, gt=0)
+    datajuicer_poll_timeout_seconds: float = Field(default=10, gt=0)
+    datajuicer_poll_initial_delay_seconds: int = Field(default=5, gt=0)
+    datajuicer_poll_max_delay_seconds: int = Field(default=60, gt=0)
+    datajuicer_processing_timeout_seconds: int = Field(default=3600, gt=0)
+    submit_lease_seconds: int = Field(default=300, gt=0)
+    poll_lease_seconds: int = Field(default=30, gt=0)
+    recovery_interval_seconds: int = Field(default=30, gt=0)
+    recovery_batch_size: int = Field(default=100, gt=0)
+    staging_retention_seconds: int = Field(default=86400, ge=0)
+
+    @model_validator(mode="after")
+    def _normalize_and_validate_limits(self) -> Self:
+        if self.max_total_bytes < self.max_document_bytes:
+            raise ValueError("批次累计限制不能小于单文档限制")
+        if (
+            self.datajuicer_poll_max_delay_seconds
+            < self.datajuicer_poll_initial_delay_seconds
+        ):
+            raise ValueError("最大轮询间隔不能小于初始轮询间隔")
+        self.staging_root = self.staging_root.resolve(strict=False)
+        self.output_roots = tuple(
+            sorted(
+                {path.resolve(strict=False) for path in self.output_roots},
+                key=str,
+            )
+        )
+        if not self.output_roots:
+            raise ValueError("至少配置一个全局去重输出根目录")
+        if any(
+            self.staging_root == root
+            or self.staging_root in root.parents
+            or root in self.staging_root.parents
+            for root in self.output_roots
+        ):
+            raise ValueError("全局去重 staging 与输出根目录不能重叠")
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Use top level .env file (one level above ./backend/)
@@ -151,9 +207,15 @@ class Settings(BaseSettings):
     EXTRACTION_MAX_INPUT_BYTES: int = 100 * 1024 * 1024
     EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
     EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
+    GLOBAL_DEDUP_INPUT_ROOTS: list[Path] = []
+    GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS: list[str] = []
+    GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS: list[str] = []
     CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=3660, gt=0)
     EXTRACTION_WORKER: ExtractionWorkerSettings = Field(
         default_factory=ExtractionWorkerSettings
+    )
+    GLOBAL_DEDUP_WORKER: GlobalDeduplicationWorkerSettings = Field(
+        default_factory=GlobalDeduplicationWorkerSettings
     )
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
 
@@ -228,6 +290,12 @@ class Settings(BaseSettings):
             raise ValueError("结构化提取输入根目录和输出根目录不能重叠")
         self.EXTRACTION_INPUT_ROOTS = sorted(input_roots, key=str)
         self.EXTRACTION_OUTPUT_ROOTS = sorted(output_roots, key=str)
+        global_input_roots = {
+            path.resolve(strict=False) for path in self.GLOBAL_DEDUP_INPUT_ROOTS
+        }
+        if global_input_roots & set(self.GLOBAL_DEDUP_WORKER.output_roots):
+            raise ValueError("全局去重输入根目录和输出根目录不能重叠")
+        self.GLOBAL_DEDUP_INPUT_ROOTS = sorted(global_input_roots, key=str)
         return self
 
 
