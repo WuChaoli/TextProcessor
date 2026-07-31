@@ -191,6 +191,12 @@ class GlobalDeduplicationOrchestrator:
                 )
                 return
             if error.transient:
+                self._repository.mark_submission_uncertain(
+                    task.id,
+                    now=self._now(),
+                    error_code=error.code,
+                    error_message=error.safe_message,
+                )
                 raise
             self._fail(task, error)
         except OSError:
@@ -301,6 +307,16 @@ class GlobalDeduplicationOrchestrator:
             submit_dispatched=submit_count,
             poll_dispatched=poll_count,
         )
+
+    def fail_exhausted_submission_retry(
+        self,
+        task_id: uuid.UUID,
+        error: GlobalDeduplicationProcessingError,
+    ) -> None:
+        task = self._repository.get(task_id)
+        if task is None or task.status is not GlobalDeduplicationTaskStatus.RUNNING:
+            return
+        self._fail(task, error)
 
     def _schedule_next_poll(
         self,

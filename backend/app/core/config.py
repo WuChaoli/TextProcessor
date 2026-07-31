@@ -201,6 +201,7 @@ class Settings(BaseSettings):
     EXTRACTION_MAX_INPUT_BYTES: int = 100 * 1024 * 1024
     EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
     EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
+    GLOBAL_DEDUP_INPUT_ROOTS: list[Path] = []
     CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=3660, gt=0)
     EXTRACTION_WORKER: ExtractionWorkerSettings = Field(
         default_factory=ExtractionWorkerSettings
@@ -281,6 +282,12 @@ class Settings(BaseSettings):
             raise ValueError("结构化提取输入根目录和输出根目录不能重叠")
         self.EXTRACTION_INPUT_ROOTS = sorted(input_roots, key=str)
         self.EXTRACTION_OUTPUT_ROOTS = sorted(output_roots, key=str)
+        global_input_roots = {
+            path.resolve(strict=False) for path in self.GLOBAL_DEDUP_INPUT_ROOTS
+        }
+        if global_input_roots & set(self.GLOBAL_DEDUP_WORKER.output_roots):
+            raise ValueError("全局去重输入根目录和输出根目录不能重叠")
+        self.GLOBAL_DEDUP_INPUT_ROOTS = sorted(global_input_roots, key=str)
         return self
 
 

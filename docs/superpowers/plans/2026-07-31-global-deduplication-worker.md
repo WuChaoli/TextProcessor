@@ -489,13 +489,13 @@ git commit -m "功能：完成全局去重轮询与恢复"
 - Create: `backend/app/features/global_deduplication/celery_tasks.py`
 - Modify: `backend/app/core/celery_app.py`
 - Test: `backend/tests/features/global_deduplication/test_celery_tasks.py`
-- Test: `backend/tests/integration/global_deduplication/test_worker_pipeline.py`
+- Test: `backend/tests/integration/global_deduplication/test_global_deduplication_worker_pipeline.py`
 
 **Interfaces:**
 - Produces Celery tasks `global_deduplication.submit`, `global_deduplication.poll`, `global_deduplication.recover`.
 - Registers feature module in the existing TextProcessor Celery app and adds configurable Beat recovery schedule.
 
-- [ ] **Step 1: Write failing Celery registration and integration tests**
+- [x] **Step 1: Write failing Celery registration and integration tests**
 
 ```python
 def test_celery_tasks_only_accept_minimal_message() -> None:
@@ -514,13 +514,13 @@ def test_worker_pipeline_stages_submits_polls_and_publishes(
 
 Test malformed messages, finite transient Celery retry, repeated submit/poll convergence and recovery dispatch. Use PostgreSQL plus local files and fake HTTP Data-Juicer, not in-memory state substitutes.
 
-- [ ] **Step 2: Run tests and verify missing task registration**
+- [x] **Step 2: Run tests and verify missing task registration**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_celery_tasks.py backend/tests/integration/global_deduplication/test_worker_pipeline.py -q
 ```
 
-- [ ] **Step 3: Implement thin Celery entrypoints**
+- [x] **Step 3: Implement thin Celery entrypoints**
 
 ```python
 @celery_app.task(
@@ -538,7 +538,7 @@ def submit_global_deduplication_task(self: Task, **payload: object) -> None:
 
 `poll` schedules future polls explicitly; `recover` returns a bounded summary and never carries full task parameters.
 
-- [ ] **Step 4: Run all worker gates**
+- [x] **Step 4: Run all worker gates**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication backend/tests/integration/global_deduplication -q
@@ -548,11 +548,11 @@ uv run --project backend ty check backend/app
 uv run --project backend pytest backend/tests -q
 ```
 
-- [ ] **Step 5: Reconcile spec coverage**
+- [x] **Step 5: Reconcile spec coverage**
 
 Verify tests explicitly cover every item in design sections 17.1–17.3. Record real Data-Juicer end-to-end items from 17.4 as pending for the later three-module integration plan; do not claim them from fake-service tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add backend/app backend/tests docs/superpowers/plans/2026-07-31-global-deduplication-worker.md

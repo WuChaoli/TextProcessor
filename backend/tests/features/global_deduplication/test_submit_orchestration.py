@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
@@ -284,3 +285,39 @@ def test_uncertain_submission_remains_recoverable(tmp_path: Path) -> None:
     assert saved.lease_expires_at is not None
     assert saved.lease_expires_at.replace(tzinfo=UTC) == NOW
     assert saved.error_code == GlobalDeduplicationErrorCode.PROCESSOR_SUBMISSION_UNCERTAIN
+
+
+def test_transient_submission_releases_lease_for_finite_retry(
+    tmp_path: Path,
+) -> None:
+    session = build_session()
+    source, manifest = prepare_manifest(tmp_path)
+    adapter = FakeAdapter(
+        error=GlobalDeduplicationProcessingError(
+            GlobalDeduplicationErrorCode.PROCESSOR_UNAVAILABLE,
+            "unavailable",
+            transient=True,
+        )
+    )
+    task = build_task(
+        session,
+        manifest_path=manifest,
+        target_path=tmp_path / "published" / "output.json",
+    )
+    orchestrator = build_orchestrator(
+        session,
+        input_root=source,
+        staging_root=tmp_path / "staging",
+        adapter=adapter,
+        scheduler=FakeScheduler(),
+    )
+
+    with pytest.raises(GlobalDeduplicationProcessingError):
+        orchestrator.submit(task.id)
+
+    saved = GlobalDeduplicationTaskRepository(session).get(task.id)
+    assert saved is not None
+    assert saved.status is GlobalDeduplicationTaskStatus.RUNNING
+    assert saved.lease_expires_at is not None
+    assert saved.lease_expires_at.replace(tzinfo=UTC) == NOW
+    assert saved.error_code == GlobalDeduplicationErrorCode.PROCESSOR_UNAVAILABLE
