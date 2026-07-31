@@ -650,6 +650,7 @@ git commit -m "功能：编排Data-Juicer后台任务"
 - Create: `services/datajuicer_service/scripts/run_worker.ps1`
 - Create: `services/datajuicer_service/scripts/run_beat.ps1`
 - Create: `services/datajuicer_service/scripts/prestart.ps1`
+- Create: `services/datajuicer_service/datajuicer_service/worker_app.py`
 - Modify: `services/datajuicer_service/README.md`
 - Create: `services/datajuicer_service/tests/integration/test_job_flow.py`
 
