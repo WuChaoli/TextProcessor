@@ -1,3 +1,4 @@
+import json
 import uuid
 from pathlib import Path
 
@@ -143,6 +144,152 @@ def test_fetches_unique_result_without_assuming_original_stem(
     assert artifact.processor_name is ProcessorName.MINERU
     assert artifact.processor_version == "1.2.3"
     assert artifact.profile_name == "default"
+
+
+def test_falls_back_to_content_list_when_markdown_is_empty(
+    tmp_path: Path,
+) -> None:
+    adapter = make_adapter(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "backend": "hybrid-engine",
+                "version": "1.2.3",
+                "results": {
+                    "service-generated-name": {
+                        "md_content": "",
+                        "content_list": [
+                            {"type": "title", "text": "检测报告"},
+                            {"type": "text", "text": "第一段正文。"},
+                            {"type": "image", "img_path": "images/page-1.jpg"},
+                            {"type": "text", "text": "\n  "},
+                            {
+                                "type": "table",
+                                "text": "| 项目 | 结果 |\n| --- | --- |\n| A | 通过 |",
+                            },
+                        ],
+                    }
+                },
+            },
+        )
+    )
+    destination = tmp_path / "processor" / "raw-result.md"
+
+    adapter.fetch_result("task-1", destination)
+
+    assert destination.read_text(encoding="utf-8") == (
+        "# 检测报告\n\n第一段正文。\n\n| 项目 | 结果 |\n| --- | --- |\n| A | 通过 |\n"
+    )
+
+
+def test_falls_back_to_json_encoded_content_list_when_markdown_is_blank(
+    tmp_path: Path,
+) -> None:
+    content_list = json.dumps(
+        [
+            {"type": "title", "text": "第二部分"},
+            {"type": "text", "text": "后续内容。"},
+        ],
+        ensure_ascii=False,
+    )
+    adapter = make_adapter(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "backend": "hybrid",
+                "version": "1",
+                "results": {
+                    "one": {
+                        "md_content": "  \n",
+                        "content_list": content_list,
+                    }
+                },
+            },
+        )
+    )
+    destination = tmp_path / "result.md"
+
+    adapter.fetch_result("task-1", destination)
+
+    assert destination.read_text(encoding="utf-8") == "# 第二部分\n\n后续内容。\n"
+
+
+def test_prefers_nonempty_markdown_over_content_list(tmp_path: Path) -> None:
+    adapter = make_adapter(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "backend": "hybrid",
+                "version": "1",
+                "results": {
+                    "one": {
+                        "md_content": "# 原始 Markdown\n",
+                        "content_list": [{"type": "text", "text": "不应使用"}],
+                    }
+                },
+            },
+        )
+    )
+    destination = tmp_path / "result.md"
+
+    adapter.fetch_result("task-1", destination)
+
+    assert destination.read_text(encoding="utf-8") == "# 原始 Markdown\n"
+
+
+def test_rejects_content_list_fallback_when_markdown_is_not_a_string(
+    tmp_path: Path,
+) -> None:
+    adapter = make_adapter(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "backend": "hybrid",
+                "version": "1",
+                "results": {
+                    "one": {
+                        "md_content": None,
+                        "content_list": [{"type": "text", "text": "不应使用"}],
+                    }
+                },
+            },
+        )
+    )
+
+    with pytest.raises(ExtractionProcessingError) as captured:
+        adapter.fetch_result("task-1", tmp_path / "result.md")
+
+    assert captured.value.code is ExtractionErrorCode.INVALID_PROCESSOR_OUTPUT
+
+
+@pytest.mark.parametrize(
+    "content_list",
+    [
+        [],
+        "[]",
+        [{"type": "image", "img_path": "images/page-1.jpg"}],
+        "not-json",
+    ],
+)
+def test_rejects_empty_or_invalid_content_list_fallback(
+    content_list: object,
+    tmp_path: Path,
+) -> None:
+    adapter = make_adapter(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "backend": "hybrid",
+                "version": "1",
+                "results": {"one": {"md_content": "", "content_list": content_list}},
+            },
+        )
+    )
+
+    with pytest.raises(ExtractionProcessingError) as captured:
+        adapter.fetch_result("task-1", tmp_path / "result.md")
+
+    assert captured.value.code is ExtractionErrorCode.INVALID_PROCESSOR_OUTPUT
 
 
 @pytest.mark.parametrize(

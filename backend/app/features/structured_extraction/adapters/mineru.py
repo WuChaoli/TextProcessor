@@ -183,7 +183,13 @@ class MinerUHttpAdapter:
         if not isinstance(raw_result, dict):
             raise invalid_response(external_task_id)
         markdown = cast(dict[object, object], raw_result).get("md_content")
-        if not isinstance(markdown, str) or not markdown.strip():
+        if not isinstance(markdown, str):
+            raise invalid_response(external_task_id)
+        if not markdown.strip():
+            markdown = self._markdown_from_content_list(
+                cast(dict[object, object], raw_result).get("content_list")
+            )
+        if not markdown:
             raise invalid_response(external_task_id)
         encoded = markdown.encode("utf-8")
         if len(encoded) > self._max_result_bytes:
@@ -261,6 +267,36 @@ class MinerUHttpAdapter:
         ):
             raise invalid_response()
         return cast(dict[str, object], payload)
+
+    @staticmethod
+    def _markdown_from_content_list(content_list: object) -> str | None:
+        if isinstance(content_list, str):
+            try:
+                content_list = json.loads(content_list)
+            except TypeError, ValueError:
+                return None
+        if not isinstance(content_list, list):
+            return None
+
+        parts: list[str] = []
+        for item in content_list:
+            if not isinstance(item, dict):
+                continue
+            item_data = cast(dict[object, object], item)
+            item_type = item_data.get("type")
+            if item_type == "image":
+                continue
+            text = item_data.get("text")
+            if not isinstance(text, str) or not (normalized := text.strip()):
+                continue
+            if item_type == "title":
+                parts.append(f"# {normalized}")
+            else:
+                parts.append(normalized)
+
+        if not parts:
+            return None
+        return "\n\n".join(parts) + "\n"
 
     def _http_error(
         self,
