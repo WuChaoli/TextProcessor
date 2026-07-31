@@ -5,8 +5,10 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import (
     AnyUrl,
+    BaseModel,
     BeforeValidator,
     EmailStr,
+    Field,
     HttpUrl,
     PostgresDsn,
     computed_field,
@@ -23,10 +25,97 @@ def parse_cors(v: Any) -> list[str] | str:
     raise ValueError(v)
 
 
+class MinerUProfile(BaseModel):
+    backend: str = "hybrid-engine"
+    parse_method: str = "auto"
+    lang_list: str = "ch"
+    formula_enable: bool = False
+    table_enable: bool = True
+    return_md: Literal[True] = True
+    return_middle_json: bool = False
+    return_content_list: bool = True
+    return_images: Literal[False] = False
+    response_format_zip: Literal[False] = False
+    start_page_id: int = Field(default=0, ge=0)
+    end_page_id: int = Field(default=99999, ge=0)
+    effort: str = "high"
+
+
+class DoclingProfile(BaseModel):
+    to_formats: tuple[Literal["md"], ...] = ("md",)
+    image_export_mode: Literal["placeholder"] = "placeholder"
+    do_ocr: Literal[False] = False
+    table_mode: Literal["fast", "accurate"] = "accurate"
+
+
+class ExtractionWorkerSettings(BaseModel):
+    staging_root: Path = Path("/data/textprocessor/staging")
+    output_roots: tuple[Path, ...] = (Path("/data/textprocessor/output"),)
+    copy_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
+    max_output_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    connect_timeout_seconds: float = Field(default=10, gt=0)
+    read_timeout_seconds: float = Field(default=60, gt=0)
+    max_http_redirects: int = Field(default=3, ge=0)
+    poll_interval_seconds: int = Field(default=5, gt=0)
+    processing_deadline_seconds: int = Field(default=3600, gt=0)
+    poll_lease_seconds: int = Field(default=30, gt=0)
+    recovery_batch_size: int = Field(default=100, gt=0)
+    slot_quarantine_grace_seconds: int = Field(default=300, ge=0)
+    failed_staging_retention_seconds: int = Field(default=86400, ge=0)
+    mineru_max_in_flight_tasks: int = Field(default=2, gt=0)
+    docling_max_in_flight_tasks: int = Field(default=2, gt=0)
+    docx_visual_complexity_threshold: int = Field(default=5, ge=0)
+    production_formats: tuple[str, ...] = (
+        "text",
+        "markdown",
+        "json",
+        "xml",
+        "yaml",
+        "csv",
+        "tsv",
+    )
+    s3_allowed_buckets: tuple[str, ...] = ()
+    s3_endpoint_url: HttpUrl | None = None
+    s3_region: str | None = None
+    s3_access_key_id: str | None = Field(default=None, repr=False)
+    s3_secret_access_key: str | None = Field(default=None, repr=False)
+    mineru_base_url: HttpUrl | None = None
+    mineru_api_key: str | None = Field(default=None, repr=False)
+    mineru_profile_name: str = "default"
+    mineru_profile: MinerUProfile = Field(default_factory=MinerUProfile)
+    docling_base_url: HttpUrl | None = None
+    docling_api_key: str | None = Field(default=None, repr=False)
+    docling_profile_name: str = "default"
+    docling_profile: DoclingProfile = Field(default_factory=DoclingProfile)
+
+    @model_validator(mode="after")
+    def _normalize_and_validate_roots(self) -> Self:
+        staging_root = self.staging_root.resolve(strict=False)
+        output_roots = tuple(
+            sorted(
+                {path.resolve(strict=False) for path in self.output_roots},
+                key=str,
+            )
+        )
+        if not output_roots:
+            raise ValueError("至少配置一个结构化提取输出根目录")
+        for output_root in output_roots:
+            if (
+                staging_root == output_root
+                or staging_root in output_root.parents
+                or output_root in staging_root.parents
+            ):
+                raise ValueError("结构化提取 staging 与输出根目录不能重叠")
+        self.staging_root = staging_root
+        self.output_roots = output_roots
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Use top level .env file (one level above ./backend/)
         env_file="../.env",
+        env_nested_delimiter="__",
         env_ignore_empty=True,
         extra="ignore",
     )
@@ -62,6 +151,10 @@ class Settings(BaseSettings):
     EXTRACTION_MAX_INPUT_BYTES: int = 100 * 1024 * 1024
     EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
     EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
+    CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=3660, gt=0)
+    EXTRACTION_WORKER: ExtractionWorkerSettings = Field(
+        default_factory=ExtractionWorkerSettings
+    )
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
 
     @computed_field  # type: ignore[prop-decorator]

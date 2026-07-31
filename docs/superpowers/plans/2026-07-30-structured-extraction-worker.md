@@ -92,7 +92,7 @@ Feature 文件按职责拆分；Celery task 不直接写 HTTP、文件解析或 
 - Modify: `backend/app/features/structured_extraction/errors.py`
 - Modify: `backend/app/features/structured_extraction/schemas.py`
 - Create: `backend/app/features/structured_extraction/worker_models.py`
-- Create: `backend/app/alembic/versions/20260730_02_add_extraction_worker_state.py`
+- Create: `backend/app/alembic/versions/20260730_03_add_extraction_worker_state.py`
 - Create: `backend/tests/features/structured_extraction/test_worker_config.py`
 
 **Interfaces:**
@@ -264,13 +264,13 @@ Run:
 
 ```bash
 cd backend
-uv run alembic revision --autogenerate --rev-id 20260730_02 -m "add extraction worker state"
+uv run alembic revision --autogenerate --rev-id 20260730_03 -m "add extraction worker state"
 uv run alembic upgrade head
 uv run alembic downgrade -1
 uv run alembic upgrade head
 ```
 
-检查 `down_revision == "20260730_01"`，且迁移没有修改模板 User/Item 表。
+检查 `down_revision == "20260730_02"`，且迁移没有修改模板 User/Item 表。
 
 - [ ] **Step 9: 运行配置、类型和迁移测试**
 
@@ -753,7 +753,7 @@ git commit -m "功能：接入 Docling 异步解析服务"
 **Files:**
 - Create: `backend/app/features/structured_extraction/slots.py`
 - Modify: `backend/app/features/structured_extraction/models.py`
-- Create: `backend/app/alembic/versions/20260730_03_add_processor_slots.py`
+- Create: `backend/app/alembic/versions/20260730_04_add_processor_slots.py`
 - Create: `backend/tests/features/structured_extraction/test_slots.py`
 
 **Interfaces:**
@@ -796,7 +796,7 @@ Run:
 
 ```bash
 cd backend
-uv run alembic revision --autogenerate --rev-id 20260730_03 -m "add processor slots"
+uv run alembic revision --autogenerate --rev-id 20260730_04 -m "add processor slots"
 uv run alembic upgrade head
 uv run pytest tests/features/structured_extraction/test_slots.py -q
 ```

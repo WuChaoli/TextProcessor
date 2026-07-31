@@ -1,0 +1,71 @@
+services:
+  docling-redis:
+    image: redis:7-alpine
+    restart: always
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --requirepass
+      - ${DOCLING_REDIS_PASSWORD?Variable not set}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - redis-cli -a "$${DOCLING_REDIS_PASSWORD}" ping | grep PONG
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      DOCLING_REDIS_PASSWORD: ${DOCLING_REDIS_PASSWORD?Variable not set}
+    volumes:
+      - docling-redis-data:/data
+
+  docling-api:
+    image: ${DOCLING_IMAGE?Variable not set}
+    restart: always
+    command: ["docling-serve", "run", "--host", "0.0.0.0", "--port", "5001"]
+    depends_on:
+      docling-redis:
+        condition: service_healthy
+        restart: true
+    environment: &docling-environment
+      DOCLING_SERVE_API_KEY: ${DOCLING_SERVE_API_KEY?Variable not set}
+      DOCLING_SERVE_ENABLE_UI: "false"
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
+      DOCLING_SERVE_ALLOW_EXTERNAL_PLUGINS: "false"
+      DOCLING_SERVE_ENG_KIND: rq
+      DOCLING_SERVE_ENG_RQ_REDIS_URL: redis://:${DOCLING_REDIS_PASSWORD?Variable not set}@docling-redis:6379/0
+      DOCLING_SERVE_LOAD_MODELS_AT_BOOT: "true"
+      DOCLING_SERVE_MAX_FILE_SIZE: ${DOCLING_MAX_FILE_SIZE_BYTES:-104857600}
+      DOCLING_SERVE_MAX_NUM_PAGES: ${DOCLING_MAX_NUM_PAGES:-500}
+      DOCLING_SERVE_MAX_DOCUMENT_TIMEOUT: ${DOCLING_MAX_DOCUMENT_TIMEOUT_SECONDS:-3600}
+      DOCLING_SERVE_MAX_SOURCES_PER_REQUEST: "1"
+      DOCLING_SERVE_SINGLE_USE_RESULTS: "false"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; r=urllib.request.Request('http://localhost:5001/health', headers={'X-API-Key':'${DOCLING_SERVE_API_KEY}'}); raise SystemExit(0 if urllib.request.urlopen(r, timeout=5).status == 200 else 1)"
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    volumes:
+      - docling-model-cache:/root/.cache
+
+  docling-worker:
+    image: ${DOCLING_IMAGE?Variable not set}
+    restart: always
+    command: ["docling-serve", "rq-worker"]
+    depends_on:
+      docling-redis:
+        condition: service_healthy
+        restart: true
+    environment: *docling-environment
+    volumes:
+      - docling-model-cache:/root/.cache
+
+volumes:
+  docling-model-cache:
+  docling-redis-data:

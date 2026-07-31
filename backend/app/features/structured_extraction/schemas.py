@@ -41,10 +41,26 @@ class ExtractionTaskAccepted(CamelModel):
     status: ExtractionTaskStatus
 
 
+class ProcessorPublic(CamelModel):
+    name: str
+    version: str | None = None
+    profile: str
+    profile_sha256: str = Field(min_length=64, max_length=64)
+
+
+class RoutingPublic(CamelModel):
+    detected_format: str
+    reasons: list[str]
+
+
 class ExtractionResultPublic(CamelModel):
     file_storage_path: str | None
     file_oss_url: str | None
     target_path: str
+    processor: ProcessorPublic | None = None
+    routing: RoutingPublic | None = None
+    input_sha256: str | None = Field(default=None, min_length=64, max_length=64)
+    output_sha256: str | None = Field(default=None, min_length=64, max_length=64)
 
 
 class ExtractionErrorPublic(CamelModel):

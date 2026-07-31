@@ -111,6 +111,27 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    develop:
+      watch:
+        - path: ./backend
+          action: sync+restart
+          target: /app/backend
+          ignore:
+            - ./backend/.venv
+            - .venv
+        - path: ./backend/pyproject.toml
+          action: rebuild
+
+  docling-api:
+    restart: "no"
+    ports:
+      - "5001:5001"
+
+  docling-worker:
+    restart: "no"
+
+  docling-redis:
+    restart: "no"
 
   mailcatcher:
     image: schickling/mailcatcher

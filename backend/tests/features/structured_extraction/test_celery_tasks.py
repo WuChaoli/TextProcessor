@@ -5,6 +5,7 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
+from app.core.config import ExtractionWorkerSettings
 from app.features.structured_extraction.celery_tasks import (
     handle_submit_task,
     recover_queued_tasks,
@@ -31,17 +32,25 @@ def make_session() -> Session:
     return Session(engine)
 
 
-def test_minimal_worker_consumes_queued_task_into_safe_terminal_failure() -> None:
+def test_minimal_worker_processes_plain_text_to_markdown(tmp_path) -> None:
     caller_id = uuid.uuid4()
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    input_root.mkdir()
+    output_root.mkdir()
+    source = input_root / "sample.txt"
+    source.write_text("标题\n\n正文保持不变。\n", encoding="utf-8")
+    target = output_root / "sample.md"
     with make_session() as session:
         task = ExtractionTask(
             caller_id=caller_id,
             session_id="session-1",
             file_id="file-1",
             request_fingerprint="a" * 64,
-            file_storage_path="/allowed/input/sample.txt",
+            file_storage_path=str(source),
             selected_input_type="local",
-            target_path="/allowed/output/sample.md",
+            target_path=str(target),
             status=ExtractionTaskStatus.QUEUED,
         )
         session.add(task)
@@ -54,6 +63,13 @@ def test_minimal_worker_consumes_queued_task_into_safe_terminal_failure() -> Non
             task_id=str(task_id),
             task_type="structured_extraction",
             schema_version=1,
+            worker_settings=ExtractionWorkerSettings(
+                staging_root=staging_root,
+                output_roots=(output_root,),
+                production_formats=("text",),
+            ),
+            input_roots=(input_root,),
+            max_input_bytes=1024,
         )
 
         updated = ExtractionTaskRepository(session).get_for_caller(
@@ -61,11 +77,59 @@ def test_minimal_worker_consumes_queued_task_into_safe_terminal_failure() -> Non
             caller_id,
         )
         assert updated is not None
-        assert updated.status is ExtractionTaskStatus.FAILED
+        assert updated.status is ExtractionTaskStatus.SUCCEEDED
         assert updated.started_at is not None
         assert updated.finished_at is not None
-        assert updated.error_code == "PROCESSING_FAILED"
-        assert updated.error_message == "结构化提取处理器尚未启用"
+        assert updated.processor_name == "plain_text"
+        assert updated.detected_format == "text"
+        assert updated.input_sha256 is not None
+        assert updated.output_sha256 is not None
+        assert target.read_text(encoding="utf-8") == "标题\n\n正文保持不变。\n"
+
+
+def test_worker_rejects_existing_target_before_staging(tmp_path) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    input_root.mkdir()
+    output_root.mkdir()
+    source = input_root / "sample.txt"
+    source.write_text("content", encoding="utf-8")
+    target = output_root / "sample.md"
+    target.write_text("existing", encoding="utf-8")
+    with make_session() as session:
+        task = ExtractionTask(
+            caller_id=uuid.uuid4(),
+            session_id="session-conflict",
+            file_id="file-1",
+            request_fingerprint="f" * 64,
+            file_storage_path=str(source),
+            selected_input_type="local",
+            target_path=str(target),
+            status=ExtractionTaskStatus.QUEUED,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        handle_submit_task(
+            session,
+            task_id=str(task.id),
+            task_type="structured_extraction",
+            schema_version=1,
+            worker_settings=ExtractionWorkerSettings(
+                staging_root=staging_root,
+                output_roots=(output_root,),
+                production_formats=("text",),
+            ),
+            input_roots=(input_root,),
+            max_input_bytes=1024,
+        )
+
+        session.refresh(task)
+        assert task.status is ExtractionTaskStatus.FAILED
+        assert task.error_code == "OUTPUT_CONFLICT"
+        assert not staging_root.exists()
 
 
 def test_minimal_worker_ignores_duplicate_delivery_after_terminal_state() -> None:
