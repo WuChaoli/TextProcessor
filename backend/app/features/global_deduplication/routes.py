@@ -100,7 +100,15 @@ def task_to_public(
             code=task.error_code,
             message=task.error_message,
         )
-        if task.error_code is not None and task.error_message is not None
+        if (
+            task.status
+            in {
+                GlobalDeduplicationTaskStatus.FAILED,
+                GlobalDeduplicationTaskStatus.CANCELLED,
+            }
+            and task.error_code is not None
+            and task.error_message is not None
+        )
         else None
     )
     return GlobalDeduplicationTaskPublic(

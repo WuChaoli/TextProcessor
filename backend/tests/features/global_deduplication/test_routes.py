@@ -16,6 +16,10 @@ from app.features.global_deduplication.request_policy import (
 from app.features.global_deduplication.routes import (
     get_global_deduplication_dispatcher,
     get_global_deduplication_policy,
+    task_to_public,
+)
+from app.features.global_deduplication.state_machine import (
+    GlobalDeduplicationTaskStatus,
 )
 from app.features.global_deduplication.task_models import GlobalDeduplicationTask
 from app.main import app
@@ -179,3 +183,22 @@ def test_get_hides_tasks_from_other_callers(
     assert hidden.status_code == 404
     assert missing.status_code == 404
     assert hidden.json() == missing.json()
+
+
+def test_running_task_does_not_expose_transient_worker_error() -> None:
+    task = GlobalDeduplicationTask(
+        caller_id=uuid.uuid7(),
+        session_id="session-transient",
+        request_fingerprint="a" * 64,
+        input_json_path="/input.json",
+        target_path="/result.json",
+        status=GlobalDeduplicationTaskStatus.RUNNING,
+        processing_phase="submitting",
+        error_code="PROCESSOR_UNAVAILABLE",
+        error_message="处理器当前不可用",
+    )
+
+    public = task_to_public(task)
+
+    assert public.status is GlobalDeduplicationTaskStatus.RUNNING
+    assert public.error is None
