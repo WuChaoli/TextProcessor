@@ -15,7 +15,6 @@ _MINERU_FORMATS = {
     DetectedFormat.PDF,
     DetectedFormat.IMAGE,
     DetectedFormat.PPTX,
-    DetectedFormat.DOC,
 }
 _DOCLING_FORMATS = {
     DetectedFormat.XLS,
@@ -34,7 +33,10 @@ _PLAIN_TEXT_FORMATS = {
     DetectedFormat.UNKNOWN_TEXT,
 }
 _EXPLICITLY_UNSUPPORTED = {".wps", ".et", ".dps", ".ofd"}
-_EXPLICITLY_UNSUPPORTED_FORMATS = {DetectedFormat.PPT}
+_EXPLICITLY_UNSUPPORTED_FORMATS = {
+    DetectedFormat.DOC,
+    DetectedFormat.PPT,
+}
 
 
 @dataclass(frozen=True)

@@ -21,7 +21,6 @@ from app.features.structured_extraction.worker_models import (
         (DetectedFormat.PDF, ProcessorName.MINERU),
         (DetectedFormat.IMAGE, ProcessorName.MINERU),
         (DetectedFormat.PPTX, ProcessorName.MINERU),
-        (DetectedFormat.DOC, ProcessorName.MINERU),
         (DetectedFormat.XLS, ProcessorName.DOCLING),
         (DetectedFormat.XLSX, ProcessorName.DOCLING),
         (DetectedFormat.HTML, ProcessorName.DOCLING),
@@ -113,15 +112,18 @@ def test_route_rejects_format_not_in_production_allowlist() -> None:
     assert captured.value.code is ExtractionErrorCode.UNSUPPORTED_INPUT_FORMAT
 
 
-def test_route_rejects_legacy_ppt_even_if_configured_in_allowlist() -> None:
+@pytest.mark.parametrize("detected_format", [DetectedFormat.DOC, DetectedFormat.PPT])
+def test_route_rejects_legacy_office_even_if_configured_in_allowlist(
+    detected_format: DetectedFormat,
+) -> None:
     router = ProcessorRouter(
-        production_formats=("ppt",),
+        production_formats=(detected_format.value,),
         docx_visual_complexity_threshold=5,
     )
     document = DetectedDocument(
-        path=Path("sample.ppt"),
-        detected_format=DetectedFormat.PPT,
-        extension=".ppt",
+        path=Path(f"sample.{detected_format.value}"),
+        detected_format=detected_format,
+        extension=f".{detected_format.value}",
     )
 
     with pytest.raises(ExtractionProcessingError) as captured:

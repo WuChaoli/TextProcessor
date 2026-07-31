@@ -21,13 +21,11 @@ from app.features.structured_extraction.worker_models import (
 _REQUIRED_SAMPLES = {
     "pdf": DetectedFormat.PDF,
     "image": DetectedFormat.IMAGE,
-    "doc": DetectedFormat.DOC,
     "pptx": DetectedFormat.PPTX,
 }
 _SAMPLE_SUFFIXES = {
     "pdf": {".pdf"},
     "image": {".jpg", ".jpeg", ".png"},
-    "doc": {".doc"},
     "pptx": {".pptx"},
 }
 
