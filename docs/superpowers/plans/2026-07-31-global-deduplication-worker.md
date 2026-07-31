@@ -191,7 +191,7 @@ git commit -m "功能：准备全局去重输入staging"
 - Produces: `DataJuicerAdapter.submit(request: DataJuicerSubmitRequest) -> DataJuicerSubmission`.
 - Produces: `DataJuicerAdapter.get_job(job_id: UUID) -> DataJuicerJob`.
 
-- [ ] **Step 1: Write failing MockTransport contract tests**
+- [x] **Step 1: Write failing MockTransport contract tests**
 
 ```python
 def test_submit_uses_task_id_as_request_id() -> None:
@@ -209,13 +209,13 @@ def test_submit_uses_task_id_as_request_id() -> None:
 
 Test idempotent response, 409, unsupported profile, clear 4xx, connect failure, pre-response timeout as uncertain, malformed JSON, mismatched request/job/profile/output path, invalid progress and invalid SHA-256.
 
-- [ ] **Step 2: Run tests and verify missing adapter failures**
+- [x] **Step 2: Run tests and verify missing adapter failures**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_datajuicer_adapter.py -q
 ```
 
-- [ ] **Step 3: Implement strict Pydantic response parsing and error mapping**
+- [x] **Step 3: Implement strict Pydantic response parsing and error mapping**
 
 ```python
 class DataJuicerAdapter:
@@ -230,7 +230,7 @@ class DataJuicerAdapter:
 
 Never expose response bodies in `safe_message`; configure connect and read timeout separately.
 
-- [ ] **Step 4: Run focused tests and static checks**
+- [x] **Step 4: Run focused tests and static checks**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_datajuicer_adapter.py -q
@@ -238,7 +238,7 @@ uv run --project backend ruff check backend/app/features/global_deduplication/ad
 uv run --project backend mypy backend/app/features/global_deduplication/adapters
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add backend/app/features/global_deduplication/adapters backend/tests/features/global_deduplication/test_datajuicer_adapter.py
