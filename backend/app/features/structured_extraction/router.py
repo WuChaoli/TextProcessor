@@ -14,7 +14,6 @@ from app.features.structured_extraction.worker_models import (
 _MINERU_FORMATS = {
     DetectedFormat.PDF,
     DetectedFormat.IMAGE,
-    DetectedFormat.PPT,
     DetectedFormat.PPTX,
     DetectedFormat.DOC,
 }
@@ -35,6 +34,7 @@ _PLAIN_TEXT_FORMATS = {
     DetectedFormat.UNKNOWN_TEXT,
 }
 _EXPLICITLY_UNSUPPORTED = {".wps", ".et", ".dps", ".ofd"}
+_EXPLICITLY_UNSUPPORTED_FORMATS = {DetectedFormat.PPT}
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,7 @@ class ProcessorRouter:
     ) -> RoutingDecision:
         if (
             document.extension in _EXPLICITLY_UNSUPPORTED
+            or document.detected_format in _EXPLICITLY_UNSUPPORTED_FORMATS
             or document.detected_format.value not in self._production_formats
         ):
             raise unsupported_route()

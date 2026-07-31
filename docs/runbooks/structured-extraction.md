@@ -59,8 +59,9 @@ MinerU 或 Docling；业务样本不得提交到仓库、测试输出或日志�
 目录，并只保存格式、服务版本（如响应提供）、耗时、状态、结果大小和摘要，不
 保存 API key、样本绝对路径、原始文档或 Markdown 正文。
 
-MinerU 需要当前可达的服务 URL，以及 PDF、图片、DOC、PPT、PPTX 各一个授权
-样本。API key 是否需要取决于部署配置：
+MinerU 需要当前可达的服务 URL，以及 PDF、图片、DOC、PPTX 各一个授权样本。
+legacy `.ppt` 在首版明确禁用，不得路由到 MinerU 或提交到 smoke。API key 是否需要
+取决于部署配置：
 
 ```powershell
 .\scripts\smoke-mineru.ps1 `
@@ -70,7 +71,6 @@ MinerU 需要当前可达的服务 URL，以及 PDF、图片、DOC、PPT、PPTX 
   $env:MINERU_SMOKE_PDF,
   $env:MINERU_SMOKE_IMAGE,
   $env:MINERU_SMOKE_DOC,
-  $env:MINERU_SMOKE_PPT,
   $env:MINERU_SMOKE_PPTX
 )
 ```

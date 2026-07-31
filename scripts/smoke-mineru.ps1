@@ -22,7 +22,7 @@ function Get-SampleFormat {
         ".jpg" { return "image" }
         ".jpeg" { return "image" }
         ".doc" { return "doc" }
-        ".ppt" { return "ppt" }
+        ".ppt" { throw "Legacy .ppt is unsupported in the first release; use .pptx." }
         ".pptx" { return "pptx" }
         default { throw "MinerU smoke accepts only the required routed formats." }
     }
@@ -43,9 +43,9 @@ foreach ($path in $SamplePath) {
     }
     $sampleMap[$format] = [IO.Path]::GetFullPath($path)
 }
-$requiredFormats = @("pdf", "image", "doc", "ppt", "pptx")
+$requiredFormats = @("pdf", "image", "doc", "pptx")
 if (Compare-Object ($sampleMap.Keys | Sort-Object) $requiredFormats) {
-    throw "MinerU smoke requires pdf, image, doc, ppt, and pptx samples."
+    throw "MinerU smoke requires pdf, image, doc, and pptx samples."
 }
 
 $environmentNames = @(

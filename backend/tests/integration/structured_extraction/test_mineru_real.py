@@ -22,14 +22,12 @@ _REQUIRED_SAMPLES = {
     "pdf": DetectedFormat.PDF,
     "image": DetectedFormat.IMAGE,
     "doc": DetectedFormat.DOC,
-    "ppt": DetectedFormat.PPT,
     "pptx": DetectedFormat.PPTX,
 }
 _SAMPLE_SUFFIXES = {
     "pdf": {".pdf"},
     "image": {".jpg", ".jpeg", ".png"},
     "doc": {".doc"},
-    "ppt": {".ppt"},
     "pptx": {".pptx"},
 }
 
