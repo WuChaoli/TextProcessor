@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -27,3 +29,11 @@ def test_settings_reject_non_positive_limits() -> None:
             celery_broker_url="redis://localhost:6379/0",
             max_attempts=0,
         )
+
+
+def test_beat_script_writes_schedule_outside_repository_by_default() -> None:
+    service_root = Path(__file__).resolve().parents[1]
+    script = (service_root / "scripts" / "run_beat.ps1").read_text(encoding="utf-8")
+
+    assert "[System.IO.Path]::GetTempPath()" in script
+    assert "--schedule" in script

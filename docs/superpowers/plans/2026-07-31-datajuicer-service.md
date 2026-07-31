@@ -715,11 +715,11 @@ git commit -m "测试：完善Data-Juicer源码运行门禁"
 **Interfaces:**
 - Produces: reproducible real-data validation command and evidence report.
 
-- [ ] **Step 1: Select and pin a small public text dataset slice**
+- [x] **Step 1: Select and pin a small public text dataset slice**
 
 Use an explicit dataset name, revision and bounded split/slice. The script must cache the selected text locally and write the exact dataset revision and sample count into its report. Do not depend on an unpinned moving dataset revision.
 
-- [ ] **Step 2: Construct deterministic duplicate fixtures**
+- [x] **Step 2: Construct deterministic duplicate fixtures**
 
 From real text samples, generate:
 
@@ -730,7 +730,7 @@ From real text samples, generate:
 
 Store only generated test staging under a temporary directory, not in Git.
 
-- [ ] **Step 3: Run the profile against real data**
+- [x] **Step 3: Run the profile against real data**
 
 ```powershell
 uv run --project services/datajuicer_service pytest -m real_integration services/datajuicer_service/tests/real_integration/test_huggingface_text.py -q
@@ -738,7 +738,7 @@ uv run --project services/datajuicer_service pytest -m real_integration services
 
 Assert exact expected cluster membership, method and representative; do not only assert process success.
 
-- [ ] **Step 4: Run the real source service**
+- [x] **Step 4: Run the real source service**
 
 Start PostgreSQL/Redis if already available, then use the source scripts to start API, worker and Beat. Submit the generated input through `POST /v1/jobs`, poll GET to `succeeded`, and verify the file digest and content.
 
@@ -754,7 +754,7 @@ output SHA-256
 API/worker/Beat status
 ```
 
-- [ ] **Step 5: Document and rerun final gates**
+- [x] **Step 5: Document and rerun final gates**
 
 Document exact commands and expected results in `docs/runbooks/datajuicer-service.md`, then run:
 
@@ -766,7 +766,7 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 uv run --project services/datajuicer_service pytest -m real_integration services/datajuicer_service/tests/real_integration -q
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add services/datajuicer_service docs/runbooks/datajuicer-service.md

@@ -29,6 +29,18 @@ def test_load_input_streams_valid_jsonl_in_file_order(tmp_path: Path) -> None:
     ]
 
 
+def test_load_input_accepts_utf8_bom_on_first_line(tmp_path: Path) -> None:
+    path = write_bytes(
+        tmp_path / "input.jsonl",
+        b'\xef\xbb\xbf{"uid":0,"text":"first"}\n{"uid":1,"text":"second"}\n',
+    )
+
+    assert load_input_jsonl(path, LIMITS) == [
+        InputSample(uid=0, text="first"),
+        InputSample(uid=1, text="second"),
+    ]
+
+
 def test_load_input_rejects_duplicate_uid(tmp_path: Path) -> None:
     path = write_bytes(
         tmp_path / "input.jsonl",

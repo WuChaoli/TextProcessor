@@ -32,7 +32,8 @@ class InputLimits:
 
 def _parse_record(raw_line: bytes, line_number: int) -> dict[str, Any]:
     try:
-        line = raw_line.decode("utf-8").rstrip("\r\n")
+        encoding = "utf-8-sig" if line_number == 1 else "utf-8"
+        line = raw_line.decode(encoding).rstrip("\r\n")
     except UnicodeDecodeError as error:
         raise ProfileInputError("INVALID_UTF8", line_number=line_number) from error
     if not line:
