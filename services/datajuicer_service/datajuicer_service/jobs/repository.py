@@ -72,6 +72,14 @@ class JobResult:
 
 
 @dataclass(frozen=True, slots=True)
+class JobPrepared:
+    output_sha256: str
+    staging_output_path: str
+    input_sha256: str
+    input_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class JobError:
     code: str
     message: str
@@ -198,6 +206,7 @@ class JobRepository:
                 started_at=func.coalesce(DataJuicerJob.started_at, now),
                 updated_at=now,
             )
+            .execution_options(synchronize_session="fetch")
         )
         result = cast(CursorResult[Any], self._session.execute(statement))
         if result.rowcount != 1:
@@ -226,6 +235,34 @@ class JobRepository:
                 progress_total=progress.total,
                 progress_processed=progress.processed,
                 progress_percent=progress.percent,
+                lease_expires_at=now + timedelta(seconds=self._lease_seconds),
+                updated_at=now,
+            )
+        )
+        self._execute_with_lease(statement)
+
+    def mark_prepared(
+        self,
+        job_id: UUID,
+        lease_token: UUID,
+        prepared: JobPrepared,
+        *,
+        now: datetime,
+    ) -> None:
+        statement = (
+            update(DataJuicerJob)
+            .where(
+                DataJuicerJob.job_id == job_id,
+                DataJuicerJob.status == JobStatus.RUNNING,
+                DataJuicerJob.lease_token == lease_token,
+            )
+            .values(
+                processing_phase="publishing",
+                input_sha256=prepared.input_sha256,
+                input_count=prepared.input_count,
+                prepared_output_sha256=prepared.output_sha256,
+                staging_output_path=prepared.staging_output_path,
+                lease_expires_at=now + timedelta(seconds=self._lease_seconds),
                 updated_at=now,
             )
         )
@@ -264,6 +301,39 @@ class JobRepository:
         )
         self._execute_with_lease(statement)
 
+    def expire_lease_for_retry(
+        self,
+        job_id: UUID,
+        lease_token: UUID,
+        *,
+        now: datetime,
+    ) -> None:
+        statement = (
+            update(DataJuicerJob)
+            .where(
+                DataJuicerJob.job_id == job_id,
+                DataJuicerJob.status == JobStatus.RUNNING,
+                DataJuicerJob.lease_token == lease_token,
+            )
+            .values(lease_expires_at=now, updated_at=now)
+        )
+        self._execute_with_lease(statement)
+
+    def touch_recovery_dispatch(self, job_id: UUID, *, now: datetime) -> None:
+        statement = (
+            update(DataJuicerJob)
+            .where(
+                DataJuicerJob.job_id == job_id,
+                DataJuicerJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            )
+            .values(updated_at=now)
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        if result.rowcount != 1:
+            self._session.rollback()
+            raise InvalidTransition("RECOVERY_DISPATCH_CONFLICT")
+        self._session.commit()
+
     def mark_failed(
         self,
         job_id: UUID,
@@ -297,6 +367,30 @@ class JobRepository:
         )
         self._execute_with_lease(statement)
 
+    def mark_timed_out(self, job_id: UUID, *, now: datetime) -> None:
+        ownership = or_(
+            DataJuicerJob.status.in_([JobStatus.PENDING, JobStatus.QUEUED]),
+            and_(
+                DataJuicerJob.status == JobStatus.RUNNING,
+                DataJuicerJob.lease_expires_at < now,
+            ),
+        )
+        statement = (
+            update(DataJuicerJob)
+            .where(DataJuicerJob.job_id == job_id, ownership)
+            .values(
+                status=JobStatus.FAILED,
+                processing_phase="failed",
+                error_code="JOB_TIMEOUT",
+                error_message="任务执行超时",
+                lease_token=None,
+                lease_expires_at=None,
+                finished_at=now,
+                updated_at=now,
+            )
+        )
+        self._execute_with_lease(statement)
+
     def find_recoverable(
         self,
         *,
@@ -317,6 +411,7 @@ class JobRepository:
                     and_(
                         DataJuicerJob.status == JobStatus.RUNNING,
                         DataJuicerJob.lease_expires_at < now,
+                        DataJuicerJob.updated_at <= stale_before,
                     ),
                 )
             )

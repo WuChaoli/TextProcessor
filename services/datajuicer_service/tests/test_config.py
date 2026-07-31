@@ -16,6 +16,8 @@ def test_settings_use_isolated_queue_defaults() -> None:
     assert settings.input_max_records == 100_000
     assert settings.input_max_bytes == 1024 * 1024 * 1024
     assert settings.input_max_text_chars == 1_000_000_000
+    assert settings.lease_seconds == 300
+    assert settings.recovery_batch_size == 100
 
 
 def test_settings_reject_non_positive_limits() -> None:

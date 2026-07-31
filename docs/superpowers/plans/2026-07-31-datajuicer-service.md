@@ -589,6 +589,7 @@ git commit -m "功能：提供Data-Juicer异步任务接口"
 - Create: `services/datajuicer_service/datajuicer_service/core/celery_app.py`
 - Create: `services/datajuicer_service/datajuicer_service/jobs/tasks.py`
 - Create: `services/datajuicer_service/datajuicer_service/jobs/orchestration.py`
+- Create: `services/datajuicer_service/datajuicer_service/worker.py`
 - Create: `services/datajuicer_service/tests/jobs/test_orchestration.py`
 - Create: `services/datajuicer_service/tests/jobs/test_recovery.py`
 
@@ -636,7 +637,7 @@ Recover pending/queued dispatch gaps, expired running leases and published-outpu
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/jobs -q
 uv run --project services/datajuicer_service ruff check services/datajuicer_service/datajuicer_service/jobs services/datajuicer_service/datajuicer_service/core/celery_app.py
-git add services/datajuicer_service/datajuicer_service/core/celery_app.py services/datajuicer_service/datajuicer_service/jobs services/datajuicer_service/tests/jobs
+git add services/datajuicer_service/datajuicer_service/core/celery_app.py services/datajuicer_service/datajuicer_service/jobs services/datajuicer_service/datajuicer_service/worker.py services/datajuicer_service/tests/jobs
 git commit -m "功能：编排Data-Juicer后台任务"
 ```
 

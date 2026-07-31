@@ -128,7 +128,9 @@ def test_profile_writes_validated_jsonl_without_text(tmp_path: Path) -> None:
         "validating_input",
         "exact_grouping",
         "minhash_computing",
-        "publishing",
+        "minhash_clustering",
+        "expanding_clusters",
+        "writing_result",
         "completed",
     ]
     assert not list(tmp_path.glob("*.part"))
@@ -148,6 +150,45 @@ def test_profile_never_overwrites_existing_output(tmp_path: Path) -> None:
         )
 
     assert output_path.read_text(encoding="utf-8") == "sentinel"
+
+
+def test_profile_records_prepared_digest_before_atomic_publish(tmp_path: Path) -> None:
+    input_path = tmp_path / "input.jsonl"
+    output_path = tmp_path / "output.jsonl"
+    input_path.write_text('{"uid":0,"text":"only"}\n', encoding="utf-8")
+    observed: list[tuple[Path, str, bool, bool]] = []
+
+    def record_prepared(
+        staging_path: Path,
+        output_sha256: str,
+        _input_sha256: str,
+        _input_count: int,
+    ) -> None:
+        observed.append(
+            (
+                staging_path,
+                output_sha256,
+                staging_path.exists(),
+                output_path.exists(),
+            )
+        )
+
+    result = TextExactMinhashV1(LIMITS).execute(
+        input_path,
+        output_path,
+        request_id=REQUEST_ID,
+        prepared=record_prepared,
+    )
+
+    assert observed == [
+        (
+            observed[0][0],
+            result.output_sha256,
+            True,
+            False,
+        )
+    ]
+    assert result.input_sha256 == hashlib.sha256(input_path.read_bytes()).hexdigest()
 
 
 def test_registry_only_exposes_v1_profile() -> None:

@@ -11,11 +11,14 @@ from datajuicer_service.jobs.repository import (
     IdempotencyConflict,
     JobCreate,
     JobError,
+    JobPrepared,
     JobProgress,
     JobRepository,
     JobResult,
 )
 from datajuicer_service.jobs.state_machine import JobStatus
+
+pytestmark = pytest.mark.usefixtures("clean_job_table")
 
 NOW = datetime(2026, 7, 31, 10, 0, tzinfo=UTC)
 
@@ -113,6 +116,21 @@ def test_progress_and_success_require_current_lease(
             JobProgress(phase="minhash_computing", total=10, processed=4, percent=40),
             now=NOW,
         )
+        repository.mark_prepared(
+            created.job.job_id,
+            lease.token,
+            JobPrepared(
+                output_sha256="c" * 64,
+                staging_output_path="C:/staging/.output.part",
+                input_sha256="b" * 64,
+                input_count=10,
+            ),
+            now=NOW,
+        )
+        prepared_job = repository.get(created.job.job_id)
+        assert prepared_job is not None
+        assert prepared_job.prepared_output_sha256 == "c" * 64
+        assert prepared_job.staging_output_path == "C:/staging/.output.part"
         repository.mark_succeeded(
             created.job.job_id,
             lease.token,

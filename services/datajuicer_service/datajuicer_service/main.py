@@ -2,7 +2,6 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
-from celery import Celery  # type: ignore[import-untyped]
 from fastapi import FastAPI, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -10,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from datajuicer_service.api.routes import create_router, error_detail
+from datajuicer_service.core.celery_app import create_celery_app
 from datajuicer_service.core.config import get_settings
 from datajuicer_service.core.database import (
     create_database_engine,
@@ -55,7 +55,11 @@ def create_application() -> FastAPI:
         with session_factory() as session:
             yield JobRepository(session)
 
-    celery_client = Celery(broker=settings.celery_broker_url)
+    celery_client = create_celery_app(
+        broker_url=settings.celery_broker_url,
+        queue=settings.celery_queue,
+        recovery_interval_seconds=settings.recovery_interval_seconds,
+    )
     dispatcher = CeleryJobDispatcher(celery_client, queue=settings.celery_queue)
     service = JobService(
         repository_factory=repository_factory,
