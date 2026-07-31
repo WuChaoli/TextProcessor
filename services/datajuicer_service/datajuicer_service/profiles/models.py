@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,3 +18,14 @@ class ExactGroup:
 class ExactGroupingResult:
     groups: tuple[ExactGroup, ...]
     independent_uids: tuple[int, ...]
+
+
+ClusterMethod = Literal["exact", "minhash", "exact_minhash"]
+
+
+@dataclass(frozen=True, slots=True)
+class ClusterDecision:
+    uid: int
+    cluster_id: str | None
+    representative: bool
+    method: ClusterMethod | None

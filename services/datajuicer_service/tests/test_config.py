@@ -13,6 +13,9 @@ def test_settings_use_isolated_queue_defaults() -> None:
     assert settings.celery_queue == "datajuicer.jobs"
     assert settings.max_attempts == 3
     assert settings.worker_concurrency == 1
+    assert settings.input_max_records == 100_000
+    assert settings.input_max_bytes == 1024 * 1024 * 1024
+    assert settings.input_max_text_chars == 1_000_000_000
 
 
 def test_settings_reject_non_positive_limits() -> None:

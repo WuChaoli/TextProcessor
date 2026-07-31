@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from datajuicer_service.profiles.models import InputSample
+from datajuicer_service.profiles.models import ClusterDecision, InputSample
 
 
 class ProfileInputError(ValueError):
@@ -12,6 +12,10 @@ class ProfileInputError(ValueError):
         self.line_number = line_number
         location = "" if line_number is None else f" at line {line_number}"
         super().__init__(f"{code}{location}")
+
+
+class OutputValidationError(ValueError):
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,3 +92,72 @@ def load_input_jsonl(path: Path, limits: InputLimits) -> list[InputSample]:
     if not samples:
         raise ProfileInputError("EMPTY_INPUT")
     return samples
+
+
+def load_and_validate_output_jsonl(
+    path: Path,
+    expected_uids: set[int],
+) -> list[ClusterDecision]:
+    decisions: list[ClusterDecision] = []
+    seen_uids: set[int] = set()
+    cluster_members: dict[str, list[ClusterDecision]] = {}
+
+    try:
+        with path.open(encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, start=1):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as error:
+                    raise OutputValidationError(
+                        f"INVALID_OUTPUT_JSON at line {line_number}"
+                    ) from error
+                if not isinstance(record, dict) or set(record) != {
+                    "uid",
+                    "clusterId",
+                    "representative",
+                    "method",
+                }:
+                    raise OutputValidationError("INVALID_OUTPUT_RECORD")
+
+                uid = record["uid"]
+                cluster_id = record["clusterId"]
+                representative = record["representative"]
+                method = record["method"]
+                if isinstance(uid, bool) or not isinstance(uid, int) or uid < 0:
+                    raise OutputValidationError("INVALID_OUTPUT_UID")
+                if uid in seen_uids:
+                    raise OutputValidationError("DUPLICATE_OUTPUT_UID")
+                if cluster_id is not None and not isinstance(cluster_id, str):
+                    raise OutputValidationError("INVALID_CLUSTER_ID")
+                if not isinstance(representative, bool):
+                    raise OutputValidationError("INVALID_REPRESENTATIVE")
+                if method not in {None, "exact", "minhash", "exact_minhash"}:
+                    raise OutputValidationError("INVALID_METHOD")
+                if cluster_id is None and (not representative or method is not None):
+                    raise OutputValidationError("INVALID_SINGLETON")
+                if cluster_id is not None and method is None:
+                    raise OutputValidationError("MISSING_CLUSTER_METHOD")
+
+                decision = ClusterDecision(
+                    uid=uid,
+                    cluster_id=cluster_id,
+                    representative=representative,
+                    method=method,
+                )
+                seen_uids.add(uid)
+                decisions.append(decision)
+                if cluster_id is not None:
+                    cluster_members.setdefault(cluster_id, []).append(decision)
+    except OSError as error:
+        raise OutputValidationError("OUTPUT_READ_FAILED") from error
+
+    if seen_uids != expected_uids:
+        raise OutputValidationError("OUTPUT_UID_SET_MISMATCH")
+    for members in cluster_members.values():
+        if len(members) < 2:
+            raise OutputValidationError("SINGLE_MEMBER_CLUSTER")
+        if sum(member.representative for member in members) != 1:
+            raise OutputValidationError("INVALID_CLUSTER_REPRESENTATIVE_COUNT")
+        if len({member.method for member in members}) != 1:
+            raise OutputValidationError("INCONSISTENT_CLUSTER_METHOD")
+    return decisions

@@ -369,7 +369,7 @@ git commit -m "功能：接入Data-Juicer MinHash聚类"
 **Interfaces:**
 - Produces: `ClusterDecision(uid, cluster_id, representative, method)`.
 - Produces: `TextExactMinhashV1.execute(input_path, output_path, progress) -> ProfileResult`.
-- Produces: `get_profile(name: str) -> ProfileExecutor`.
+- Produces: `get_profile(name: str, limits: InputLimits) -> ProfileExecutor`.
 
 - [ ] **Step 1: Write failing exact-plus-minhash expansion tests**
 
