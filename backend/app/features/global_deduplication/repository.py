@@ -162,6 +162,26 @@ class GlobalDeduplicationTaskRepository:
             processing_phase="publishing_result",
         )
 
+    def update_running(self, task_id: uuid.UUID, **values: Any) -> bool:
+        return self._update_running(task_id, **values)
+
+    def mark_submission_uncertain(
+        self,
+        task_id: uuid.UUID,
+        *,
+        now: datetime,
+        error_code: str,
+        error_message: str,
+    ) -> bool:
+        return self._update_running(
+            task_id,
+            lease_expires_at=now,
+            processing_phase="submitting",
+            error_code=error_code,
+            error_message=error_message,
+            updated_at=now,
+        )
+
     def transition(
         self,
         task_id: uuid.UUID,

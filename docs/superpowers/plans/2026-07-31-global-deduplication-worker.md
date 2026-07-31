@@ -372,7 +372,7 @@ git commit -m "功能：持久化全局去重任务状态"
 - Produces: `GlobalDeduplicationOrchestrator.submit(task_id: UUID) -> None`.
 - Consumes scheduler method `enqueue_poll(task_id, countdown)`.
 
-- [ ] **Step 1: Write failing submit orchestration tests**
+- [x] **Step 1: Write failing submit orchestration tests**
 
 ```python
 def test_submit_prepares_all_documents_before_external_job(orchestrator, fake_adapter):
@@ -385,13 +385,13 @@ def test_submit_prepares_all_documents_before_external_job(orchestrator, fake_ad
 
 Cover duplicate submit, deterministic input failure/no external call, output preflight conflict, complete staging reuse, submission uncertain, idempotent retry and lost lease.
 
-- [ ] **Step 2: Run tests and verify missing orchestration failures**
+- [x] **Step 2: Run tests and verify missing orchestration failures**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_submit_orchestration.py -q
 ```
 
-- [ ] **Step 3: Implement acquire → prepare → submit → persist → schedule**
+- [x] **Step 3: Implement acquire → prepare → submit → persist → schedule**
 
 ```python
 def submit(self, task_id: uuid.UUID) -> None:
@@ -406,14 +406,14 @@ def submit(self, task_id: uuid.UUID) -> None:
 
 Persist progress phases `validating_input`, `loading_documents`, then `deduplicating`; deterministic errors fail without retry, uncertain submissions remain recoverable with the same task ID.
 
-- [ ] **Step 4: Run focused and static gates**
+- [x] **Step 4: Run focused and static gates**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_submit_orchestration.py -q
 uv run --project backend mypy backend/app/features/global_deduplication/orchestration.py
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add backend/app/features/global_deduplication/orchestration.py backend/tests/features/global_deduplication/test_submit_orchestration.py

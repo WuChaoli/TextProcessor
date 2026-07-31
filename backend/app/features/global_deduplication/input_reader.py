@@ -1,7 +1,7 @@
 import json
 import re
 from collections.abc import Callable, Iterable, Mapping
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import BinaryIO, Literal, Protocol
 from urllib.parse import SplitResult, unquote, urljoin, urlsplit
 
@@ -246,7 +246,7 @@ class BoundedUriReader:
     ) -> bytes:
         parsed = urlsplit(uri)
         try:
-            if parsed.scheme in {"", "file"}:
+            if parsed.scheme in {"", "file"} or PureWindowsPath(uri).is_absolute():
                 path = (
                     self._file_uri_path(parsed.path)
                     if parsed.scheme == "file"

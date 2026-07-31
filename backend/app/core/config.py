@@ -113,6 +113,7 @@ class ExtractionWorkerSettings(BaseModel):
 
 class GlobalDeduplicationWorkerSettings(BaseModel):
     staging_root: Path = Path("/data/textprocessor/global-deduplication")
+    output_roots: tuple[Path, ...] = (Path("/data/textprocessor/output"),)
     max_documents: int = Field(default=100_000, gt=0)
     max_manifest_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     max_document_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
@@ -142,6 +143,21 @@ class GlobalDeduplicationWorkerSettings(BaseModel):
         ):
             raise ValueError("最大轮询间隔不能小于初始轮询间隔")
         self.staging_root = self.staging_root.resolve(strict=False)
+        self.output_roots = tuple(
+            sorted(
+                {path.resolve(strict=False) for path in self.output_roots},
+                key=str,
+            )
+        )
+        if not self.output_roots:
+            raise ValueError("至少配置一个全局去重输出根目录")
+        if any(
+            self.staging_root == root
+            or self.staging_root in root.parents
+            or root in self.staging_root.parents
+            for root in self.output_roots
+        ):
+            raise ValueError("全局去重 staging 与输出根目录不能重叠")
         return self
 
 
