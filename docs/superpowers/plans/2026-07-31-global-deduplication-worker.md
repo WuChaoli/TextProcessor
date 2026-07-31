@@ -322,7 +322,7 @@ git commit -m "功能：映射并发布全局去重结果"
 - Produces: `GlobalDeduplicationTask` with unique `(caller_id, session_id)` and all worker/recovery fields from the spec.
 - Produces: conditional methods `acquire_submit`, `acquire_poll`, `save_prepared_input`, `save_external_job`, `save_prepared_output`, `mark_succeeded`, `mark_failed`, and recovery queries.
 
-- [ ] **Step 1: Write failing state and real PostgreSQL repository tests**
+- [x] **Step 1: Write failing state and real PostgreSQL repository tests**
 
 ```python
 def test_only_one_poll_worker_acquires_lease(repository, running_task) -> None:
@@ -334,17 +334,17 @@ def test_only_one_poll_worker_acquires_lease(repository, running_task) -> None:
 
 Test legal transitions, idempotent terminal messages, submit lease expiry, prepared/external/final metadata persistence, due-poll and published-before-DB recovery selection.
 
-- [ ] **Step 2: Run tests and verify missing model/migration failures**
+- [x] **Step 2: Run tests and verify missing model/migration failures**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_state_machine.py backend/tests/features/global_deduplication/test_repository.py -q
 ```
 
-- [ ] **Step 3: Implement model, conditional updates and migration**
+- [x] **Step 3: Implement model, conditional updates and migration**
 
 Use native timezone-aware timestamps, JSON only for bounded external progress/result metadata, indexed status/lease/next-poll columns, and compare-and-update SQL so stale lease holders cannot overwrite new state.
 
-- [ ] **Step 4: Run migration and repository gates**
+- [x] **Step 4: Run migration and repository gates**
 
 ```powershell
 uv run --project backend alembic upgrade head
@@ -352,7 +352,7 @@ uv run --project backend alembic check
 uv run --project backend pytest backend/tests/features/global_deduplication/test_state_machine.py backend/tests/features/global_deduplication/test_repository.py -q
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add backend/app/features/global_deduplication backend/app/alembic/versions/20260731_01_add_global_deduplication_tasks.py backend/tests/features/global_deduplication

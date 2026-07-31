@@ -6,6 +6,7 @@ from sqlmodel import Session, delete
 
 from app.core.config import settings
 from app.core.db import engine, init_db
+from app.features.global_deduplication.task_models import GlobalDeduplicationTask
 from app.features.structured_extraction.models import ExtractionTask, ProcessorSlot
 from app.main import app
 from app.models import Item, User
@@ -22,6 +23,7 @@ def db() -> Generator[Session]:
         session.execute(statement)
         session.execute(delete(ProcessorSlot))
         session.execute(delete(ExtractionTask))
+        session.execute(delete(GlobalDeduplicationTask))
         statement = delete(User)
         session.execute(statement)
         session.commit()

@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from sqlalchemy import JSON, DateTime, Enum, UniqueConstraint
+from sqlalchemy import JSON, BigInteger, DateTime, Enum, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -31,7 +31,11 @@ class ExtractionTask(SQLModel, table=True):
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid7, primary_key=True)
-    caller_id: uuid.UUID = Field(foreign_key="user.id", index=True)
+    caller_id: uuid.UUID = Field(
+        foreign_key="user.id",
+        ondelete="CASCADE",
+        index=True,
+    )
     session_id: str = Field(max_length=128)
     file_id: str = Field(max_length=128)
     request_fingerprint: str = Field(max_length=64)
@@ -83,7 +87,11 @@ class ExtractionTask(SQLModel, table=True):
         sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
     )
     input_sha256: str | None = Field(default=None, max_length=64)
-    input_size_bytes: int | None = Field(default=None, ge=0)
+    input_size_bytes: int | None = Field(
+        default=None,
+        ge=0,
+        sa_type=BigInteger,  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    )
     output_sha256: str | None = Field(default=None, max_length=64)
     error_code: str | None = Field(default=None, max_length=64)
     error_message: str | None = Field(default=None, max_length=512)

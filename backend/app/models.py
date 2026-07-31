@@ -133,7 +133,9 @@ class NewPassword(SQLModel):
     new_password: str = Field(min_length=8, max_length=128)
 
 
-# Import feature tables so Alembic sees their SQLModel metadata.
+from app.features.global_deduplication.task_models import (  # noqa: E402
+    GlobalDeduplicationTask as GlobalDeduplicationTask,
+)
 from app.features.structured_extraction.models import (  # noqa: E402
     ExtractionTask as ExtractionTask,
 )
