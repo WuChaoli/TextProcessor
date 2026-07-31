@@ -40,6 +40,9 @@ markers = [
     "integration: requires PostgreSQL and Redis",
     "real_integration: requires external network access or live source services",
 ]
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated:starlette.exceptions.StarletteDeprecationWarning",
+]
 
 [tool.ruff]
 target-version = "py311"
