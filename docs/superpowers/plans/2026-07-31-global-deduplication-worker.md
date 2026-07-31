@@ -110,7 +110,7 @@ git commit -m "功能：定义全局去重worker契约"
 - Produces: `load_document(...) -> NormalizedDocument`.
 - Produces: `GlobalDeduplicationStaging.prepare(...) -> PreparedInput`.
 
-- [ ] **Step 1: Write failing manifest/document tests**
+- [x] **Step 1: Write failing manifest/document tests**
 
 ```python
 def test_manifest_ignores_unknown_fields_and_rejects_duplicate_file_id() -> None:
@@ -131,13 +131,13 @@ def test_document_normalization_preserves_json_and_normalizes_newlines() -> None
 
 Cover empty/top-level non-array/invalid UTF-8, missing/blank fields, unknown field discard, document count, `.md/.txt/.json`, unsupported suffix, per-file and cumulative limits.
 
-- [ ] **Step 2: Run tests and verify missing implementation failures**
+- [x] **Step 2: Run tests and verify missing implementation failures**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_input_reader.py backend/tests/features/global_deduplication/test_staging.py -q
 ```
 
-- [ ] **Step 3: Implement bounded URI reads and deterministic staging**
+- [x] **Step 3: Implement bounded URI reads and deterministic staging**
 
 ```python
 @dataclass(frozen=True)
@@ -164,14 +164,14 @@ class GlobalDeduplicationStagingLayout:
 
 Use fsspec-backed controlled local/file/http(s)/s3 adapters, bounded chunk reads, atomic `.part` writes, `uid` assignment by manifest order, compact JSONL, and SHA-256 metadata. Reuse existing complete staging only when manifest/input/mapping digests all match.
 
-- [ ] **Step 4: Verify information separation and limits**
+- [x] **Step 4: Verify information separation and limits**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_input_reader.py backend/tests/features/global_deduplication/test_staging.py -q
 uv run --project backend mypy backend/app/features/global_deduplication/input_reader.py backend/app/features/global_deduplication/staging.py
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add backend/app/features/global_deduplication backend/tests/features/global_deduplication
