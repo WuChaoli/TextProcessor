@@ -434,8 +434,9 @@ bands 和 rows 使用 Data-Juicer v1.5.4 的最优参数计算逻辑。
 - 保留完整 cluster membership；
 - 不调用会删除非代表样本的最终 dataset filter；
 - 不修改上游源码；
-- 通过独立 adapter 封装对上游内部 API 的使用；
-- 通过版本兼容性测试锁定类、方法、参数和结果行为。
+- 通过独立 adapter 镜像固定版本的上游 MinHash 核心算法；
+- 不导入会触发 LazyLoader 自动安装 Ray 的上游 operator 注册入口；
+- 通过版本兼容性测试锁定源码提交、构造参数、LSH 参数和完整签名摘要。
 
 精准分组使用 wrapper 自身的稳定摘要和完整成员映射。该部分逻辑简单且需要返回全部成员，不强行调用会过滤数据的原生精准 deduplicator。
 

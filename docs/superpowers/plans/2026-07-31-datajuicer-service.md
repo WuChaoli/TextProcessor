@@ -300,11 +300,12 @@ Expected: FAIL because the adapter does not exist.
 
 - [ ] **Step 3: Implement runtime pin verification**
 
-Verify:
+Verify without importing the upstream operator registry (which triggers the
+Data-Juicer LazyLoader and installs Ray):
 
 - `data_juicer.__version__ == "1.5.4"`;
 - submodule HEAD equals the pinned commit;
-- the imported MinHash operator exposes the constructor fields used by v1;
+- the pinned operator source exposes the constructor fields used by v1;
 - character tokenization and 256-permutation signature shape match expectations.
 
 The API process and worker must fail startup if compatibility validation fails.
@@ -324,7 +325,12 @@ class MinHashConfig:
     jaccard_threshold: float = 0.7
 ```
 
-Reuse Data-Juicer v1.5.4 tokenization, shingling, permutation and optimal bands/rows logic. Do not invoke its final `dataset.filter`.
+Mirror the pinned Data-Juicer v1.5.4 tokenization, shingling, SHA1-32,
+seed-42 permutation and optimal bands/rows logic inside the adapter. Verify the
+complete signature digest against a literal captured from the pinned operator.
+Do not import the upstream operator registry or invoke its final
+`dataset.filter`, because that import path activates the LazyLoader and adds
+Ray outside the lock file.
 
 - [ ] **Step 5: Implement full-membership LSH and union-find clustering**
 
