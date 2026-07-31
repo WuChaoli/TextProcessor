@@ -261,7 +261,7 @@ git commit -m "功能：接入Data-Juicer任务接口"
 - Produces: `FinalResultPublisher.prepare(...) -> PreparedFinalResult`.
 - Produces: `FinalResultPublisher.publish(prepared, target, allow_recovery) -> PublishedFinalResult`.
 
-- [ ] **Step 1: Write failing invariant and mapping tests**
+- [x] **Step 1: Write failing invariant and mapping tests**
 
 ```python
 def test_group_id_is_task_scoped_and_stable_under_result_reordering() -> None:
@@ -276,13 +276,13 @@ def test_group_id_is_task_scoped_and_stable_under_result_reordering() -> None:
 
 Reject digest mismatch, unknown fields, uid mismatch/duplicate/negative, singleton invariant, one-member cluster, multiple/no representative and mixed/unknown method. Assert serialized objects have exactly four public fields.
 
-- [ ] **Step 2: Run tests and verify failures**
+- [x] **Step 2: Run tests and verify failures**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_result_mapper.py backend/tests/features/global_deduplication/test_publisher.py -q
 ```
 
-- [ ] **Step 3: Implement UUIDv5 mapping and crash-safe publication**
+- [x] **Step 3: Implement UUIDv5 mapping and crash-safe publication**
 
 ```python
 def business_group_id(task_id: uuid.UUID, member_uids: Collection[int]) -> uuid.UUID:
@@ -292,14 +292,14 @@ def business_group_id(task_id: uuid.UUID, member_uids: Collection[int]) -> uuid.
 
 Prepare compact UTF-8 JSON at `final-result.json.part`, fsync, parse back, compute SHA-256, then publish with hard-link/create-exclusive semantics. Recovery may accept an existing target only when its SHA-256 equals the persisted prepared digest.
 
-- [ ] **Step 4: Run focused tests and static checks**
+- [x] **Step 4: Run focused tests and static checks**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_result_mapper.py backend/tests/features/global_deduplication/test_publisher.py -q
 uv run --project backend mypy backend/app/features/global_deduplication/result_mapper.py backend/app/features/global_deduplication/publisher.py
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add backend/app/features/global_deduplication backend/tests/features/global_deduplication
