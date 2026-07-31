@@ -202,6 +202,8 @@ class Settings(BaseSettings):
     EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
     EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
     GLOBAL_DEDUP_INPUT_ROOTS: list[Path] = []
+    GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS: list[str] = []
+    GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS: list[str] = []
     CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=3660, gt=0)
     EXTRACTION_WORKER: ExtractionWorkerSettings = Field(
         default_factory=ExtractionWorkerSettings

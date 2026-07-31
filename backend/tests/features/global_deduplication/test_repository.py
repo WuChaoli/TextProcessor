@@ -1,4 +1,5 @@
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -6,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, SQLModel, create_engine, select
 from sqlmodel.pool import StaticPool
 
+from app.core.db import engine
 from app.features.global_deduplication.repository import (
     GlobalDeduplicationTaskRepository,
 )
@@ -183,3 +185,36 @@ def test_postgresql_poll_lease_is_atomic(db: Session) -> None:
 
     assert first is not None
     assert second is None
+
+
+def test_postgresql_concurrent_create_converges_to_one_task(
+    db: Session,
+) -> None:
+    if db.get_bind().dialect.name != "postgresql":
+        pytest.skip("PostgreSQL is required")
+    caller = db.exec(select(User)).first()
+    assert caller is not None
+    session_id = f"concurrent-{uuid.uuid7()}"
+
+    def create() -> tuple[uuid.UUID, bool]:
+        with Session(engine) as session:
+            task, created = GlobalDeduplicationTaskRepository(
+                session
+            ).create_or_get(
+                caller_id=caller.id,
+                session_id=session_id,
+                input_json_path="/data/input.json",
+                target_path="/data/output.json",
+            )
+            return task.id, created
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: create(), range(2)))
+
+    assert len({task_id for task_id, _created in results}) == 1
+    assert sum(created for _task_id, created in results) == 1
+    task_id = results[0][0]
+    saved = db.get(GlobalDeduplicationTask, task_id)
+    assert saved is not None
+    db.delete(saved)
+    db.commit()

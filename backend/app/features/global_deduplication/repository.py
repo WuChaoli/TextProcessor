@@ -1,11 +1,22 @@
+import hashlib
+import json
+import threading
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, update
+from sqlalchemy import Engine, func, or_, update
+from sqlalchemy import select as sa_select
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
+from app.features.global_deduplication.api_errors import (
+    GlobalDeduplicationApiErrorCode,
+    GlobalDeduplicationDomainError,
+)
 from app.features.global_deduplication.state_machine import (
     GlobalDeduplicationTaskStatus,
     assert_transition,
@@ -17,12 +28,130 @@ class ConditionalGlobalDeduplicationUpdateFailed(RuntimeError):
     pass
 
 
+_local_lock_guard = threading.Lock()
+_local_locks: dict[int, threading.Lock] = {}
+
+
+def request_fingerprint(*, input_json_path: str, target_path: str) -> str:
+    payload = {
+        "input_json_path": input_json_path,
+        "target_path": target_path,
+    }
+    normalized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _idempotency_lock_key(caller_id: uuid.UUID, session_id: str) -> int:
+    digest = hashlib.sha256(f"{caller_id}\0{session_id}".encode()).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
 class GlobalDeduplicationTaskRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
     def get(self, task_id: uuid.UUID) -> GlobalDeduplicationTask | None:
         return self._session.get(GlobalDeduplicationTask, task_id)
+
+    def rollback(self) -> None:
+        self._session.rollback()
+
+    @contextmanager
+    def idempotency_lock(
+        self,
+        caller_id: uuid.UUID,
+        session_id: str,
+    ) -> Iterator[None]:
+        key = _idempotency_lock_key(caller_id, session_id)
+        bind = self._session.get_bind()
+        if isinstance(bind, Engine) and bind.dialect.name == "postgresql":
+            with bind.connect() as connection:
+                connection.execute(sa_select(func.pg_advisory_lock(key)))
+                try:
+                    yield
+                finally:
+                    connection.execute(sa_select(func.pg_advisory_unlock(key)))
+            return
+        with _local_lock_guard:
+            lock = _local_locks.setdefault(key, threading.Lock())
+        with lock:
+            yield
+
+    def create_or_get(
+        self,
+        *,
+        caller_id: uuid.UUID,
+        session_id: str,
+        input_json_path: str,
+        target_path: str,
+    ) -> tuple[GlobalDeduplicationTask, bool]:
+        fingerprint = request_fingerprint(
+            input_json_path=input_json_path,
+            target_path=target_path,
+        )
+        existing = self.get_by_key(caller_id, session_id)
+        if existing is not None:
+            self._ensure_same_request(existing, fingerprint)
+            return existing, False
+        task = GlobalDeduplicationTask(
+            caller_id=caller_id,
+            session_id=session_id,
+            request_fingerprint=fingerprint,
+            input_json_path=input_json_path,
+            target_path=target_path,
+            status=GlobalDeduplicationTaskStatus.PENDING,
+        )
+        self._session.add(task)
+        try:
+            self._session.commit()
+        except IntegrityError:
+            self._session.rollback()
+            existing = self.get_by_key(caller_id, session_id)
+            if existing is None:
+                raise
+            self._ensure_same_request(existing, fingerprint)
+            return existing, False
+        self._session.refresh(task)
+        return task, True
+
+    def get_by_key(
+        self,
+        caller_id: uuid.UUID,
+        session_id: str,
+    ) -> GlobalDeduplicationTask | None:
+        statement = select(GlobalDeduplicationTask).where(
+            GlobalDeduplicationTask.caller_id == caller_id,
+            GlobalDeduplicationTask.session_id == session_id,
+        )
+        return self._session.exec(statement).first()
+
+    def get_for_caller(
+        self,
+        task_id: uuid.UUID,
+        caller_id: uuid.UUID,
+    ) -> GlobalDeduplicationTask | None:
+        statement = select(GlobalDeduplicationTask).where(
+            GlobalDeduplicationTask.id == task_id,
+            GlobalDeduplicationTask.caller_id == caller_id,
+        )
+        return self._session.exec(statement).first()
+
+    def mark_dispatched(self, task_id: uuid.UUID, *, now: datetime) -> bool:
+        statement = (
+            update(GlobalDeduplicationTask)
+            .where(
+                col(GlobalDeduplicationTask.id) == task_id,
+                col(GlobalDeduplicationTask.status)
+                == GlobalDeduplicationTaskStatus.QUEUED,
+            )
+            .values(last_dispatched_at=now, updated_at=now)
+        )
+        return self._execute_update(statement)
 
     def acquire_submit(
         self,
@@ -285,6 +414,18 @@ class GlobalDeduplicationTaskRepository:
             .values(**values)
         )
         return self._execute_update(statement)
+
+    @staticmethod
+    def _ensure_same_request(
+        task: GlobalDeduplicationTask,
+        fingerprint: str,
+    ) -> None:
+        if task.request_fingerprint != fingerprint:
+            raise GlobalDeduplicationDomainError(
+                GlobalDeduplicationApiErrorCode.IDEMPOTENCY_CONFLICT,
+                "相同幂等键对应了不同请求参数",
+                http_status=409,
+            )
 
     def _execute_update(self, statement: Any) -> bool:
         result = self._session.exec(
