@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import fsspec
 import pytest
 
 from app.features.global_deduplication.errors import (
@@ -59,3 +60,25 @@ def test_publisher_recovers_only_matching_existing_output(tmp_path: Path) -> Non
     with pytest.raises(GlobalDeduplicationProcessingError) as error:
         publisher.publish(prepared, target, allow_recovery=True)
     assert error.value.code is GlobalDeduplicationErrorCode.OUTPUT_CONFLICT
+
+
+def test_publisher_supports_allowlisted_s3_without_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    filesystem = fsspec.filesystem("memory")
+    monkeypatch.setattr(
+        "app.features.global_deduplication.publisher.fsspec.filesystem",
+        lambda *_args, **_kwargs: filesystem,
+    )
+    publisher = FinalResultPublisher(allowed_s3_buckets=("approved",))
+    prepared = publisher.prepare(results(), tmp_path / "staging.json")
+    target = "s3://approved/result.json"
+
+    published = publisher.publish(prepared, target, allow_recovery=False)
+
+    assert published.path == target
+    assert filesystem.cat("approved/result.json") == prepared.path.read_bytes()
+    with pytest.raises(GlobalDeduplicationProcessingError) as error:
+        publisher.publish(prepared, target, allow_recovery=False)
+    assert error.value.code == "OUTPUT_CONFLICT"

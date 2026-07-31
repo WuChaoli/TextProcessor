@@ -1,5 +1,7 @@
 import hashlib
+import time
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -46,6 +48,24 @@ class ProfileSpy:
 class FailingProfile:
     def execute(self, *args, **kwargs):
         raise OSError("temporary storage failure")
+
+
+class SlowProfile:
+    def __init__(self, delegate: TextExactMinhashV1, delay: float) -> None:
+        self.delegate = delegate
+        self.delay = delay
+
+    def execute(self, *args, **kwargs):
+        time.sleep(self.delay)
+        return self.delegate.execute(*args, **kwargs)
+
+
+class DispatcherSpy:
+    def __init__(self) -> None:
+        self.messages = []
+
+    def enqueue(self, message) -> None:
+        self.messages.append(message)
 
 
 def repository_factory(
@@ -241,3 +261,45 @@ def test_expired_queued_job_is_finalized_as_timeout(
         assert job.status is JobStatus.FAILED
         assert job.error_code == "JOB_TIMEOUT"
     assert not output_path.exists()
+
+
+def test_heartbeat_prevents_recovery_from_redispatching_long_phase(
+    orchestration_session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "input.jsonl"
+    output_path = tmp_path / "output.jsonl"
+    input_path.write_text('{"uid":0,"text":"only"}\n', encoding="utf-8")
+    started = datetime.now(UTC)
+    job_id = create_queued_job(
+        orchestration_session_factory,
+        input_path,
+        output_path,
+        now=started,
+    )
+    dispatcher = DispatcherSpy()
+
+    def real_repository_factory():
+        return repository_factory(
+            orchestration_session_factory,
+            lease_seconds=1,
+        )()
+
+    orchestrator = JobOrchestrator(
+        repository_factory=real_repository_factory,
+        profile_resolver=lambda _name: SlowProfile(
+            TextExactMinhashV1(LIMITS),
+            1.5,
+        ),
+        dispatcher=dispatcher,
+        now=lambda: datetime.now(UTC),
+        lease_heartbeat_seconds=0.1,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(orchestrator.execute, job_id)
+        time.sleep(1.2)
+        assert orchestrator.recover() == 0
+        future.result(timeout=5)
+
+    assert dispatcher.messages == []

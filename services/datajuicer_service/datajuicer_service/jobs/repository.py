@@ -174,6 +174,27 @@ class JobRepository:
             raise InvalidTransition("INVALID_TRANSITION_TO_QUEUED")
         self._session.commit()
 
+    def retry_failed_submission(self, job_id: UUID, *, now: datetime) -> bool:
+        statement = (
+            update(DataJuicerJob)
+            .where(
+                DataJuicerJob.job_id == job_id,
+                DataJuicerJob.status == JobStatus.FAILED,
+                DataJuicerJob.error_code == "QUEUE_SUBMISSION_FAILED",
+            )
+            .values(
+                status=JobStatus.PENDING,
+                processing_phase="pending",
+                error_code=None,
+                error_message=None,
+                finished_at=None,
+                updated_at=now,
+            )
+        )
+        result = cast(CursorResult[Any], self._session.execute(statement))
+        self._session.commit()
+        return result.rowcount == 1
+
     def acquire_execution(
         self,
         job_id: UUID,
@@ -235,6 +256,27 @@ class JobRepository:
                 progress_total=progress.total,
                 progress_processed=progress.processed,
                 progress_percent=progress.percent,
+                lease_expires_at=now + timedelta(seconds=self._lease_seconds),
+                updated_at=now,
+            )
+        )
+        self._execute_with_lease(statement)
+
+    def renew_lease(
+        self,
+        job_id: UUID,
+        lease_token: UUID,
+        *,
+        now: datetime,
+    ) -> None:
+        statement = (
+            update(DataJuicerJob)
+            .where(
+                DataJuicerJob.job_id == job_id,
+                DataJuicerJob.status == JobStatus.RUNNING,
+                DataJuicerJob.lease_token == lease_token,
+            )
+            .values(
                 lease_expires_at=now + timedelta(seconds=self._lease_seconds),
                 updated_at=now,
             )
@@ -403,9 +445,7 @@ class JobRepository:
             .where(
                 or_(
                     and_(
-                        DataJuicerJob.status.in_(
-                            [JobStatus.PENDING, JobStatus.QUEUED]
-                        ),
+                        DataJuicerJob.status.in_([JobStatus.PENDING, JobStatus.QUEUED]),
                         DataJuicerJob.updated_at <= stale_before,
                     ),
                     and_(

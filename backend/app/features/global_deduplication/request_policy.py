@@ -46,20 +46,18 @@ class GlobalDeduplicationRequestPolicy:
         output_roots: Sequence[Path],
         allowed_http_hosts: Sequence[str],
         allowed_http_cidrs: Sequence[str],
+        allowed_s3_buckets: Sequence[str] = (),
         resolver: AddressResolver = _system_resolver,
     ) -> None:
-        self._input_roots = tuple(
-            root.resolve(strict=False) for root in input_roots
-        )
-        self._output_roots = tuple(
-            root.resolve(strict=False) for root in output_roots
-        )
+        self._input_roots = tuple(root.resolve(strict=False) for root in input_roots)
+        self._output_roots = tuple(root.resolve(strict=False) for root in output_roots)
         self._allowed_http_hosts = frozenset(
             host.rstrip(".").lower() for host in allowed_http_hosts
         )
         self._allowed_http_networks = tuple(
             ipaddress.ip_network(cidr) for cidr in allowed_http_cidrs
         )
+        self._allowed_s3_buckets = frozenset(allowed_s3_buckets)
         self._resolver = resolver
 
     def validate_request(
@@ -76,12 +74,14 @@ class GlobalDeduplicationRequestPolicy:
         parsed = urlsplit(value)
         if parsed.scheme.lower() in {"http", "https"}:
             return self._validate_http(value)
+        if parsed.scheme.lower() == "s3":
+            return self._validate_s3(value, output=False)
         if parsed.scheme.lower() == "file":
             value = parsed.path
         path = Path(value)
         try:
             resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError):
+        except OSError, RuntimeError:
             raise self._error(
                 GlobalDeduplicationApiErrorCode.INPUT_PATH_NOT_ALLOWED,
                 "输入清单不存在或不可访问",
@@ -103,6 +103,8 @@ class GlobalDeduplicationRequestPolicy:
             pass
         elif parsed.scheme.lower() == "file":
             value = parsed.path
+        elif parsed.scheme.lower() == "s3":
+            return self._validate_s3(value, output=True)
         elif parsed.scheme:
             raise self._error(
                 GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED,
@@ -111,7 +113,7 @@ class GlobalDeduplicationRequestPolicy:
         path = Path(value)
         try:
             resolved = path.resolve(strict=False)
-        except (OSError, RuntimeError):
+        except OSError, RuntimeError:
             raise self._error(
                 GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED,
                 "目标路径不可用",
@@ -119,15 +121,35 @@ class GlobalDeduplicationRequestPolicy:
         if (
             not path.is_absolute()
             or resolved.suffix.lower() != ".json"
-            or not any(
-                resolved.is_relative_to(root) for root in self._output_roots
-            )
+            or not any(resolved.is_relative_to(root) for root in self._output_roots)
         ):
             raise self._error(
                 GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED,
                 "目标路径必须是允许目录内的绝对 JSON 文件路径",
             )
         return str(resolved)
+
+    def _validate_s3(self, value: str, *, output: bool) -> str:
+        parsed = urlsplit(value)
+        bucket = parsed.hostname
+        if (
+            bucket is None
+            or bucket not in self._allowed_s3_buckets
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path
+            or parsed.path.endswith("/")
+            or (output and not parsed.path.lower().endswith(".json"))
+        ):
+            code = (
+                GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED
+                if output
+                else GlobalDeduplicationApiErrorCode.INPUT_PATH_NOT_ALLOWED
+            )
+            raise self._error(code, "S3 路径未获授权")
+        return f"s3://{bucket}{parsed.path}"
 
     def _validate_http(self, value: str) -> str:
         try:
@@ -154,7 +176,7 @@ class GlobalDeduplicationRequestPolicy:
                 ipaddress.ip_address(value)
                 for value in self._resolver(hostname, expected_port)
             )
-        except (OSError, ValueError):
+        except OSError, ValueError:
             raise self._url_error("输入 URL host 无法安全解析") from None
         if not addresses or any(
             address.is_loopback
@@ -162,9 +184,7 @@ class GlobalDeduplicationRequestPolicy:
             or address.is_unspecified
             or address.is_multicast
             or address.is_reserved
-            or not any(
-                address in network for network in self._allowed_http_networks
-            )
+            or not any(address in network for network in self._allowed_http_networks)
             for address in addresses
         ):
             raise self._url_error("输入 URL 地址未获授权")

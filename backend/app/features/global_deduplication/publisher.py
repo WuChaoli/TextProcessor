@@ -1,8 +1,13 @@
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+from urllib.parse import SplitResult, urlsplit
+
+import fsspec  # type: ignore[import-untyped]
 
 from app.features.global_deduplication.errors import (
     GlobalDeduplicationErrorCode,
@@ -36,12 +41,34 @@ class PreparedFinalResult:
 
 @dataclass(frozen=True, slots=True)
 class PublishedFinalResult:
-    path: Path
+    path: str
     sha256: str
     size_bytes: int
 
 
 class FinalResultPublisher:
+    def __init__(
+        self,
+        *,
+        allowed_s3_buckets: tuple[str, ...] = (),
+        s3_storage_options: Mapping[str, object] | None = None,
+    ) -> None:
+        self._allowed_s3_buckets = frozenset(allowed_s3_buckets)
+        self._s3_storage_options = dict(s3_storage_options or {})
+
+    def exists(self, target: str | Path) -> bool:
+        parsed = urlsplit(str(target))
+        if parsed.scheme == "s3":
+            filesystem, key = self._s3_target(parsed)
+            try:
+                return bool(filesystem.exists(key))
+            except Exception:
+                raise _output_error(
+                    GlobalDeduplicationErrorCode.OUTPUT_WRITE_FAILED,
+                    "无法检查目标结果路径",
+                ) from None
+        return Path(target).exists()
+
     def prepare(
         self,
         results: tuple[BusinessResult, ...],
@@ -104,27 +131,35 @@ class FinalResultPublisher:
     def publish(
         self,
         prepared: PreparedFinalResult,
-        target: Path,
+        target: str | Path,
         *,
         allow_recovery: bool,
     ) -> PublishedFinalResult:
+        parsed = urlsplit(str(target))
+        if parsed.scheme == "s3":
+            return self._publish_s3(
+                prepared,
+                parsed,
+                allow_recovery=allow_recovery,
+            )
+        local_target = Path(target)
         try:
             if _sha256(prepared.path) != prepared.sha256:
                 raise _output_error(
                     GlobalDeduplicationErrorCode.OUTPUT_INTEGRITY_FAILED,
                     "prepared 输出摘要不一致",
                 )
-            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            local_target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             try:
-                os.link(prepared.path, target)
+                os.link(prepared.path, local_target)
             except FileExistsError:
-                if not allow_recovery or _sha256(target) != prepared.sha256:
+                if not allow_recovery or _sha256(local_target) != prepared.sha256:
                     raise _output_error(
                         GlobalDeduplicationErrorCode.OUTPUT_CONFLICT,
                         "目标结果文件已存在",
                     ) from None
             return PublishedFinalResult(
-                path=target,
+                path=str(local_target),
                 sha256=prepared.sha256,
                 size_bytes=prepared.size_bytes,
             )
@@ -135,3 +170,81 @@ class FinalResultPublisher:
                 GlobalDeduplicationErrorCode.OUTPUT_WRITE_FAILED,
                 "最终结果发布失败",
             ) from None
+
+    def _publish_s3(
+        self,
+        prepared: PreparedFinalResult,
+        parsed: SplitResult,
+        *,
+        allow_recovery: bool,
+    ) -> PublishedFinalResult:
+        filesystem, key = self._s3_target(parsed)
+        try:
+            if _sha256(prepared.path) != prepared.sha256:
+                raise _output_error(
+                    GlobalDeduplicationErrorCode.OUTPUT_INTEGRITY_FAILED,
+                    "prepared 输出摘要不一致",
+                )
+            if filesystem.exists(key):
+                if (
+                    not allow_recovery
+                    or self._remote_sha256(filesystem, key) != prepared.sha256
+                ):
+                    raise _output_error(
+                        GlobalDeduplicationErrorCode.OUTPUT_CONFLICT,
+                        "目标结果文件已存在",
+                    )
+            else:
+                with (
+                    prepared.path.open("rb") as source,
+                    filesystem.open(key, "xb") as output,
+                ):
+                    while chunk := source.read(1024 * 1024):
+                        output.write(chunk)
+            if self._remote_sha256(filesystem, key) != prepared.sha256:
+                raise _output_error(
+                    GlobalDeduplicationErrorCode.OUTPUT_INTEGRITY_FAILED,
+                    "发布结果摘要不一致",
+                )
+            return PublishedFinalResult(
+                path=f"s3://{parsed.hostname}{parsed.path}",
+                sha256=prepared.sha256,
+                size_bytes=prepared.size_bytes,
+            )
+        except GlobalDeduplicationProcessingError:
+            raise
+        except FileExistsError:
+            raise _output_error(
+                GlobalDeduplicationErrorCode.OUTPUT_CONFLICT,
+                "目标结果文件已存在",
+            ) from None
+        except Exception:
+            raise _output_error(
+                GlobalDeduplicationErrorCode.OUTPUT_WRITE_FAILED,
+                "最终结果发布失败",
+            ) from None
+
+    def _s3_target(self, parsed: SplitResult) -> tuple[Any, str]:
+        bucket = parsed.hostname
+        if (
+            bucket is None
+            or bucket not in self._allowed_s3_buckets
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path
+            or parsed.path.endswith("/")
+        ):
+            raise _output_error(
+                GlobalDeduplicationErrorCode.OUTPUT_PATH_NOT_ALLOWED,
+                "S3 目标路径不在允许范围内",
+            )
+        filesystem = fsspec.filesystem("s3", **self._s3_storage_options)
+        return filesystem, f"{bucket}{parsed.path}"
+
+    @staticmethod
+    def _remote_sha256(filesystem: Any, key: str) -> str:
+        digest = hashlib.sha256()
+        with filesystem.open(key, "rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()

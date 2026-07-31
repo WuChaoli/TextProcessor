@@ -180,3 +180,28 @@ def test_failure_and_recovery_query_persist_stable_error(
     assert failed_job.status is JobStatus.FAILED
     assert failed_job.error_code == "QUEUE_SUBMISSION_FAILED"
     assert failed_job.error_message == "任务入队失败"
+
+
+def test_queue_submission_failure_can_return_to_pending(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        repository = JobRepository(session)
+        job = repository.create_or_get(make_request(), now=NOW).job
+        repository.mark_failed(
+            job.job_id,
+            lease_token=None,
+            error=JobError(code="QUEUE_SUBMISSION_FAILED", message="任务入队失败"),
+            now=NOW,
+        )
+
+        assert repository.retry_failed_submission(
+            job.job_id,
+            now=NOW + timedelta(seconds=1),
+        )
+        refreshed = repository.get(job.job_id)
+
+    assert refreshed is not None
+    assert refreshed.status is JobStatus.PENDING
+    assert refreshed.error_code is None
+    assert refreshed.finished_at is None

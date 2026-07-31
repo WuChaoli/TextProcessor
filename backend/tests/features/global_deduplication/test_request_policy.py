@@ -96,3 +96,27 @@ def test_http_manifest_requires_host_and_cidr_allowlist(tmp_path: Path) -> None:
             )
         )
     assert error.value.code == "INPUT_URL_NOT_ALLOWED"
+
+
+def test_s3_input_and_output_require_bucket_allowlist() -> None:
+    policy = GlobalDeduplicationRequestPolicy(
+        input_roots=(),
+        output_roots=(Path("/unused"),),
+        allowed_http_hosts=(),
+        allowed_http_cidrs=(),
+        allowed_s3_buckets=("approved",),
+    )
+
+    validated = policy.validate_request(
+        request(
+            "s3://approved/manifests/input.json",
+            "s3://approved/results/output.json",
+        )
+    )
+
+    assert validated.input_json_path == "s3://approved/manifests/input.json"
+    assert validated.target_path == "s3://approved/results/output.json"
+
+    with pytest.raises(GlobalDeduplicationDomainError) as error:
+        policy.validate_input("s3://other/manifests/input.json")
+    assert error.value.code == "INPUT_PATH_NOT_ALLOWED"

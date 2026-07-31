@@ -1,7 +1,8 @@
-from collections.abc import Callable
-from contextlib import AbstractContextManager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
 from typing import Protocol
 from uuid import UUID
 
@@ -54,6 +55,14 @@ class OrchestrationRepository(Protocol):
         job_id: UUID,
         lease_token: UUID,
         progress: JobProgress,
+        *,
+        now: datetime,
+    ) -> None: ...
+
+    def renew_lease(
+        self,
+        job_id: UUID,
+        lease_token: UUID,
         *,
         now: datetime,
     ) -> None: ...
@@ -147,12 +156,14 @@ class JobOrchestrator:
         now: Callable[[], datetime],
         dispatcher: JobDispatcher | None = None,
         recovery_batch_size: int = 100,
+        lease_heartbeat_seconds: float = 30,
     ) -> None:
         self._repository_factory = repository_factory
         self._profile_resolver = profile_resolver
         self._now = now
         self._dispatcher = dispatcher
         self._recovery_batch_size = recovery_batch_size
+        self._lease_heartbeat_seconds = lease_heartbeat_seconds
 
     def execute(self, job_id: UUID) -> None:
         with self._repository_factory() as repository:
@@ -176,13 +187,14 @@ class JobOrchestrator:
                 if output_path.exists():
                     raise OutputConflictError("OUTPUT_CONFLICT")
                 profile = self._profile_resolver(job.profile)
-                result = profile.execute(
-                    Path(job.input_path),
-                    output_path,
-                    request_id=job.request_id,
-                    progress=self._progress_callback(repository, job, lease),
-                    prepared=self._prepared_callback(repository, job, lease),
-                )
+                with self._lease_heartbeat(job.job_id, lease):
+                    result = profile.execute(
+                        Path(job.input_path),
+                        output_path,
+                        request_id=job.request_id,
+                        progress=self._progress_callback(repository, job, lease),
+                        prepared=self._prepared_callback(repository, job, lease),
+                    )
                 repository.mark_succeeded(
                     job.job_id,
                     lease.token,
@@ -221,7 +233,10 @@ class JobOrchestrator:
                 self._fail(repository, job, lease, "JOB_TIMEOUT", "任务执行超时")
             except OSError as error:
                 refreshed = repository.get(job.job_id)
-                if refreshed is not None and refreshed.attempt_count >= refreshed.max_attempts:
+                if (
+                    refreshed is not None
+                    and refreshed.attempt_count >= refreshed.max_attempts
+                ):
                     self._fail(
                         repository,
                         refreshed,
@@ -264,6 +279,42 @@ class JobOrchestrator:
                 dispatched += 1
             return dispatched
 
+    @contextmanager
+    def _lease_heartbeat(
+        self,
+        job_id: UUID,
+        lease: ExecutionLease,
+    ) -> Iterator[None]:
+        stopped = Event()
+        errors: list[Exception] = []
+
+        def renew() -> None:
+            while not stopped.wait(self._lease_heartbeat_seconds):
+                try:
+                    with self._repository_factory() as repository:
+                        repository.renew_lease(
+                            job_id,
+                            lease.token,
+                            now=self._now(),
+                        )
+                except Exception as error:
+                    errors.append(error)
+                    stopped.set()
+
+        thread = Thread(
+            target=renew,
+            name=f"datajuicer-lease-{job_id}",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            thread.join(timeout=self._lease_heartbeat_seconds + 1)
+        if errors:
+            raise errors[0]
+
     def _recover_prepared(
         self,
         repository: OrchestrationRepository,
@@ -276,9 +327,10 @@ class JobOrchestrator:
         if output_path.exists():
             if sha256_file(output_path) != job.prepared_output_sha256:
                 raise OutputConflictError("OUTPUT_CONFLICT")
-        elif job.staging_output_path is not None and Path(
-            job.staging_output_path
-        ).exists():
+        elif (
+            job.staging_output_path is not None
+            and Path(job.staging_output_path).exists()
+        ):
             publish_prepared_output(
                 Path(job.staging_output_path),
                 output_path,

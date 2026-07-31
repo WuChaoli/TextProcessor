@@ -119,6 +119,12 @@ class GlobalDeduplicationWorkerSettings(BaseModel):
     max_document_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     max_total_bytes: int = Field(default=10 * 1024 * 1024 * 1024, gt=0)
     copy_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
+    max_http_redirects: int = Field(default=3, ge=0)
+    s3_allowed_buckets: tuple[str, ...] = ()
+    s3_endpoint_url: HttpUrl | None = None
+    s3_region: str | None = None
+    s3_access_key_id: str | None = Field(default=None, repr=False)
+    s3_secret_access_key: str | None = Field(default=None, repr=False)
     datajuicer_base_url: HttpUrl | None = None
     datajuicer_profile: Literal["text_exact_minhash_v1"] = "text_exact_minhash_v1"
     datajuicer_connect_timeout_seconds: float = Field(default=10, gt=0)

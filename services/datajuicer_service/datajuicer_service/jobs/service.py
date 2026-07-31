@@ -26,6 +26,8 @@ class JobRepositoryProtocol(Protocol):
 
     def mark_queued(self, job_id: UUID, *, now: datetime) -> None: ...
 
+    def retry_failed_submission(self, job_id: UUID, *, now: datetime) -> bool: ...
+
     def mark_failed(
         self,
         job_id: UUID,
@@ -83,7 +85,15 @@ class JobService:
         with self._repository_factory() as repository:
             created = repository.create_or_get(request, now=now)
             if not created.created:
-                return created.job
+                if not (
+                    created.job.error_code == "QUEUE_SUBMISSION_FAILED"
+                    and repository.retry_failed_submission(
+                        created.job.job_id,
+                        now=self._now(),
+                    )
+                ):
+                    refreshed = repository.get(created.job.job_id)
+                    return refreshed or created.job
             message = ExecutionMessage(job_id=created.job.job_id)
             try:
                 self._dispatcher.enqueue(message)

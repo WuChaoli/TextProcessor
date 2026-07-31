@@ -106,7 +106,7 @@ class GlobalDeduplicationOrchestrator:
             return
         try:
             target = self._validated_target(task.target_path)
-            if target.exists():
+            if self._publisher.exists(target):
                 raise GlobalDeduplicationProcessingError(
                     GlobalDeduplicationErrorCode.OUTPUT_CONFLICT,
                     "目标结果文件已存在",
@@ -141,9 +141,7 @@ class GlobalDeduplicationOrchestrator:
             if not self._repository.save_prepared_input(
                 task.id,
                 staging_path=str(prepared.layout.root),
-                input_manifest_sha256=hashlib.sha256(
-                    manifest_content
-                ).hexdigest(),
+                input_manifest_sha256=hashlib.sha256(manifest_content).hexdigest(),
                 input_jsonl_sha256=prepared.input_jsonl_sha256,
                 mapping_sha256=prepared.mapping_sha256,
                 progress_total=len(documents),
@@ -164,9 +162,7 @@ class GlobalDeduplicationOrchestrator:
                 external_profile=submission.profile,
                 next_poll_at=submitted_at
                 + timedelta(
-                    seconds=(
-                        self._settings.datajuicer_poll_initial_delay_seconds
-                    )
+                    seconds=(self._settings.datajuicer_poll_initial_delay_seconds)
                 ),
                 processing_deadline=submitted_at
                 + timedelta(
@@ -268,8 +264,7 @@ class GlobalDeduplicationOrchestrator:
             self._finalize(task, layout, job)
         except GlobalDeduplicationProcessingError as error:
             if (
-                error.code
-                is GlobalDeduplicationErrorCode.PROCESSOR_JOB_NOT_FOUND
+                error.code is GlobalDeduplicationErrorCode.PROCESSOR_JOB_NOT_FOUND
                 and not self._job_not_found_was_resubmitted(task)
             ):
                 try:
@@ -454,7 +449,9 @@ class GlobalDeduplicationOrchestrator:
             updated_at=finished,
         )
 
-    def _validated_target(self, value: str) -> Path:
+    def _validated_target(self, value: str) -> str | Path:
+        if value.startswith("s3://"):
+            return value
         target = Path(value).resolve(strict=False)
         if not any(
             target == root or root in target.parents

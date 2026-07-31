@@ -63,6 +63,7 @@ def create_worker_application(settings: Settings | None = None) -> Celery:
             dispatcher=dispatcher,
             now=lambda: datetime.now(UTC),
             recovery_batch_size=resolved_settings.recovery_batch_size,
+            lease_heartbeat_seconds=resolved_settings.lease_heartbeat_seconds,
         )
 
     register_tasks(

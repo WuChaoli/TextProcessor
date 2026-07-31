@@ -66,6 +66,21 @@ class FakeRepository:
         job.queued_at = now
         job.updated_at = now
 
+    def retry_failed_submission(self, job_id: UUID, *, now: datetime) -> bool:
+        job = self.jobs[job_id]
+        if (
+            job.status is not JobStatus.FAILED
+            or job.error_code != "QUEUE_SUBMISSION_FAILED"
+        ):
+            return False
+        job.status = JobStatus.PENDING
+        job.processing_phase = "pending"
+        job.error_code = None
+        job.error_message = None
+        job.finished_at = None
+        job.updated_at = now
+        return True
+
     def mark_failed(
         self,
         job_id: UUID,
@@ -210,6 +225,22 @@ def test_enqueue_failure_marks_job_failed_and_returns_503() -> None:
     job = next(iter(repository.jobs.values()))
     assert job.status is JobStatus.FAILED
     assert job.error_code == "QUEUE_SUBMISSION_FAILED"
+
+
+def test_identical_request_retries_after_enqueue_failure() -> None:
+    dispatcher = FakeDispatcher(fail=True)
+    client, repository, _ = make_client(dispatcher=dispatcher)
+    assert client.post("/v1/jobs", json=VALID_REQUEST).status_code == 503
+
+    dispatcher.fail = False
+    response = client.post("/v1/jobs", json=VALID_REQUEST)
+
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
+    assert len(dispatcher.messages) == 1
+    job = next(iter(repository.jobs.values()))
+    assert job.status is JobStatus.QUEUED
+    assert job.error_code is None
 
 
 def test_get_job_maps_progress_and_null_result_error() -> None:

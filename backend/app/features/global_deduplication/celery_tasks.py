@@ -22,12 +22,34 @@ from app.features.global_deduplication.orchestration import (
     GlobalDeduplicationOrchestrator,
     GlobalDeduplicationScheduler,
 )
+from app.features.global_deduplication.publisher import FinalResultPublisher
 from app.features.global_deduplication.repository import (
     GlobalDeduplicationTaskRepository,
+)
+from app.features.global_deduplication.request_policy import (
+    GlobalDeduplicationRequestPolicy,
 )
 from app.features.global_deduplication.staging import GlobalDeduplicationStaging
 
 _TRANSIENT_RETRY_LIMIT = 3
+
+
+def _s3_storage_options(
+    configured: GlobalDeduplicationWorkerSettings,
+) -> dict[str, object]:
+    options: dict[str, object] = {}
+    client_kwargs: dict[str, str] = {}
+    if configured.s3_endpoint_url is not None:
+        client_kwargs["endpoint_url"] = str(configured.s3_endpoint_url).rstrip("/")
+    if configured.s3_region is not None:
+        client_kwargs["region_name"] = configured.s3_region
+    if client_kwargs:
+        options["client_kwargs"] = client_kwargs
+    if configured.s3_access_key_id is not None:
+        options["key"] = configured.s3_access_key_id
+    if configured.s3_secret_access_key is not None:
+        options["secret"] = configured.s3_secret_access_key
+    return options
 
 
 class CeleryGlobalDeduplicationScheduler(GlobalDeduplicationScheduler):
@@ -87,9 +109,10 @@ def submit_global_deduplication_task(self: Task, **payload: object) -> None:
         max_retries = self.max_retries
         if max_retries is not None and self.request.retries >= max_retries:
             message = GlobalDeduplicationMessage.parse(payload)
-            with Session(engine) as session, _http_client(
-                settings.GLOBAL_DEDUP_WORKER
-            ) as client:
+            with (
+                Session(engine) as session,
+                _http_client(settings.GLOBAL_DEDUP_WORKER) as client,
+            ):
                 build_orchestrator(
                     session,
                     http_client=client,
@@ -112,9 +135,10 @@ def poll_global_deduplication_task(**payload: object) -> None:
     name="global_deduplication.recover",
 )
 def recover_global_deduplication_tasks() -> dict[str, int]:
-    with Session(engine) as session, _http_client(
-        settings.GLOBAL_DEDUP_WORKER
-    ) as client:
+    with (
+        Session(engine) as session,
+        _http_client(settings.GLOBAL_DEDUP_WORKER) as client,
+    ):
         return handle_recover_task(
             orchestrator=build_orchestrator(session, http_client=client)
         )
@@ -132,11 +156,24 @@ def build_orchestrator(
     if configured.datajuicer_base_url is None:
         raise RuntimeError("未配置 Data-Juicer 服务地址")
     roots = input_roots or tuple(settings.GLOBAL_DEDUP_INPUT_ROOTS)
+    policy = GlobalDeduplicationRequestPolicy(
+        input_roots=roots,
+        output_roots=configured.output_roots,
+        allowed_http_hosts=settings.GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS,
+        allowed_http_cidrs=settings.GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS,
+        allowed_s3_buckets=configured.s3_allowed_buckets,
+    )
+    storage_options = _s3_storage_options(configured)
     return GlobalDeduplicationOrchestrator(
         repository=GlobalDeduplicationTaskRepository(session),
         reader=BoundedUriReader(
             input_roots=roots,
             chunk_bytes=configured.copy_chunk_bytes,
+            remote_url_validator=policy.validate_input,
+            http_client=http_client,
+            max_http_redirects=configured.max_http_redirects,
+            allowed_s3_buckets=configured.s3_allowed_buckets,
+            s3_storage_options=storage_options,
         ),
         staging=GlobalDeduplicationStaging(configured.staging_root),
         adapter=DataJuicerAdapter(
@@ -146,6 +183,10 @@ def build_orchestrator(
         scheduler=scheduler or CeleryGlobalDeduplicationScheduler(),
         settings=configured,
         now=lambda: datetime.now(UTC),
+        publisher=FinalResultPublisher(
+            allowed_s3_buckets=configured.s3_allowed_buckets,
+            s3_storage_options=storage_options,
+        ),
     )
 
 
@@ -153,9 +194,10 @@ def _run_with_orchestrator(
     handler: Callable[..., None],
     payload: object,
 ) -> None:
-    with Session(engine) as session, _http_client(
-        settings.GLOBAL_DEDUP_WORKER
-    ) as client:
+    with (
+        Session(engine) as session,
+        _http_client(settings.GLOBAL_DEDUP_WORKER) as client,
+    ):
         orchestrator = build_orchestrator(session, http_client=client)
         handler(payload, orchestrator=orchestrator)
 
