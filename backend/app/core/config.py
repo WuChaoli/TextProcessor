@@ -111,6 +111,40 @@ class ExtractionWorkerSettings(BaseModel):
         return self
 
 
+class GlobalDeduplicationWorkerSettings(BaseModel):
+    staging_root: Path = Path("/data/textprocessor/global-deduplication")
+    max_documents: int = Field(default=100_000, gt=0)
+    max_manifest_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    max_document_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    max_total_bytes: int = Field(default=10 * 1024 * 1024 * 1024, gt=0)
+    copy_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
+    datajuicer_base_url: HttpUrl | None = None
+    datajuicer_profile: Literal["text_exact_minhash_v1"] = "text_exact_minhash_v1"
+    datajuicer_connect_timeout_seconds: float = Field(default=10, gt=0)
+    datajuicer_submit_timeout_seconds: float = Field(default=30, gt=0)
+    datajuicer_poll_timeout_seconds: float = Field(default=10, gt=0)
+    datajuicer_poll_initial_delay_seconds: int = Field(default=5, gt=0)
+    datajuicer_poll_max_delay_seconds: int = Field(default=60, gt=0)
+    datajuicer_processing_timeout_seconds: int = Field(default=3600, gt=0)
+    submit_lease_seconds: int = Field(default=300, gt=0)
+    poll_lease_seconds: int = Field(default=30, gt=0)
+    recovery_interval_seconds: int = Field(default=30, gt=0)
+    recovery_batch_size: int = Field(default=100, gt=0)
+    staging_retention_seconds: int = Field(default=86400, ge=0)
+
+    @model_validator(mode="after")
+    def _normalize_and_validate_limits(self) -> Self:
+        if self.max_total_bytes < self.max_document_bytes:
+            raise ValueError("批次累计限制不能小于单文档限制")
+        if (
+            self.datajuicer_poll_max_delay_seconds
+            < self.datajuicer_poll_initial_delay_seconds
+        ):
+            raise ValueError("最大轮询间隔不能小于初始轮询间隔")
+        self.staging_root = self.staging_root.resolve(strict=False)
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         # Use top level .env file (one level above ./backend/)
@@ -154,6 +188,9 @@ class Settings(BaseSettings):
     CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=3660, gt=0)
     EXTRACTION_WORKER: ExtractionWorkerSettings = Field(
         default_factory=ExtractionWorkerSettings
+    )
+    GLOBAL_DEDUP_WORKER: GlobalDeduplicationWorkerSettings = Field(
+        default_factory=GlobalDeduplicationWorkerSettings
     )
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
 

@@ -37,7 +37,7 @@
 - Produces: `GlobalDeduplicationErrorCode`, `GlobalDeduplicationProcessingError`.
 - Produces: `GlobalDeduplicationMessage.parse(payload) -> GlobalDeduplicationMessage` and `.as_payload()`.
 
-- [ ] **Step 1: Write failing configuration and message tests**
+- [x] **Step 1: Write failing configuration and message tests**
 
 ```python
 def test_global_dedup_defaults_are_bounded(tmp_path: Path) -> None:
@@ -56,13 +56,13 @@ def test_message_rejects_wrong_type_and_schema() -> None:
         )
 ```
 
-- [ ] **Step 2: Run the tests and verify import/behavior failures**
+- [x] **Step 2: Run the tests and verify import/behavior failures**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_config.py backend/tests/features/global_deduplication/test_messages.py -q
 ```
 
-- [ ] **Step 3: Implement bounded settings and strict message parsing**
+- [x] **Step 3: Implement bounded settings and strict message parsing**
 
 ```python
 class GlobalDeduplicationMessage(BaseModel):
@@ -77,7 +77,7 @@ class GlobalDeduplicationMessage(BaseModel):
 
 Add all spec configuration fields under `Settings.GLOBAL_DEDUP_WORKER`, with positive numeric validation, resolved staging root, independently configurable connect/read timeouts and fixed profile validation.
 
-- [ ] **Step 4: Run focused tests and static checks**
+- [x] **Step 4: Run focused tests and static checks**
 
 ```powershell
 uv run --project backend pytest backend/tests/features/global_deduplication/test_config.py backend/tests/features/global_deduplication/test_messages.py -q
@@ -85,7 +85,7 @@ uv run --project backend ruff check backend/app/core/config.py backend/app/featu
 uv run --project backend mypy backend/app/features/global_deduplication
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add backend/app/core/config.py backend/app/features/global_deduplication backend/tests/features/global_deduplication
