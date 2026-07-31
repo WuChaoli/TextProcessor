@@ -1,0 +1,3 @@
+[submodule "services/datajuicer_service/vendor/data-juicer"]
+	path = services/datajuicer_service/vendor/data-juicer
+	url = https://github.com/datajuicer/data-juicer.git

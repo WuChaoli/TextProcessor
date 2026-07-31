@@ -41,7 +41,7 @@ services/
 └── datajuicer_service/
     ├── pyproject.toml
     ├── uv.lock
-    ├── app/
+    ├── datajuicer_service/
     │   ├── api/
     │   ├── core/
     │   ├── jobs/
@@ -65,7 +65,7 @@ commit: 7061da6ad06287aa0305eda162429b34361a56a3
 Python: 3.11
 ```
 
-wrapper 不修改 submodule 内的上游文件。自定义 profile、adapter、HTTP、Celery 和数据库代码全部位于 `services/datajuicer_service/app/`。
+wrapper 不修改 submodule 内的上游文件。由于 Data-Juicer 源码根目录包含 `app.py`，wrapper 使用唯一 package 名 `datajuicer_service` 避免导入冲突；自定义 profile、adapter、HTTP、Celery 和数据库代码全部位于 `services/datajuicer_service/datajuicer_service/`。
 
 源码环境使用独立 `.venv` 和 `uv.lock`。只安装首版文本去重及服务运行所需依赖，不安装 Data-Juicer 的 `all`、`dist`、`tools`、Ray、GPU 或多模态 extras。MinHash 自动计算 LSH bands/rows 需要显式安装 SciPy。
 

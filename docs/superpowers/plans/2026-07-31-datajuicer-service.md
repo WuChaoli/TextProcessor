@@ -30,8 +30,8 @@
 - Create: `.gitmodules`
 - Create: `services/datajuicer_service/pyproject.toml`
 - Create: `services/datajuicer_service/.python-version`
-- Create: `services/datajuicer_service/app/__init__.py`
-- Create: `services/datajuicer_service/app/core/config.py`
+- Create: `services/datajuicer_service/datajuicer_service/__init__.py`
+- Create: `services/datajuicer_service/datajuicer_service/core/config.py`
 - Create: `services/datajuicer_service/tests/test_config.py`
 - Create: `services/datajuicer_service/README.md`
 - Add submodule: `services/datajuicer_service/vendor/data-juicer`
@@ -43,7 +43,7 @@
 - [ ] **Step 1: Write configuration tests**
 
 ```python
-from app.core.config import Settings
+from datajuicer_service.core.config import Settings
 
 
 def test_settings_use_isolated_queue_defaults() -> None:
@@ -118,7 +118,10 @@ dev = [
 ]
 ```
 
-Add Data-Juicer as an editable local source dependency using uv workspace/source configuration pointing at `vendor/data-juicer`, then run:
+安装固定版本的官方 `py-data-juicer==1.5.4` wheel 以提供依赖和包元数据。由于
+v1.5.4 的 Hatch build hook 在 Windows editable install 时无条件编译 Cython/C++
+扩展，源码运行由启动脚本把固定的 `vendor/data-juicer` 放在 `PYTHONPATH`
+首位；兼容性测试必须断言实际 `data_juicer.__file__` 位于该 submodule。
 
 ```powershell
 uv lock --project services/datajuicer_service
@@ -150,7 +153,8 @@ class Settings(BaseSettings):
 Run:
 
 ```powershell
-uv run --project services/datajuicer_service python -c "import data_juicer; print(data_juicer.__version__)"
+$env:PYTHONPATH=(Resolve-Path services/datajuicer_service/vendor/data-juicer)
+uv run --project services/datajuicer_service python -c "import data_juicer; print(data_juicer.__version__); print(data_juicer.__file__)"
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/test_config.py -q
 uv run --project services/datajuicer_service ruff check services/datajuicer_service
 ```
@@ -169,9 +173,9 @@ git commit -m "构建：初始化Data-Juicer独立服务"
 ### Task 2: Profile 输入输出模型与精准分组
 
 **Files:**
-- Create: `services/datajuicer_service/app/profiles/models.py`
-- Create: `services/datajuicer_service/app/profiles/exact.py`
-- Create: `services/datajuicer_service/app/profiles/io.py`
+- Create: `services/datajuicer_service/datajuicer_service/profiles/models.py`
+- Create: `services/datajuicer_service/datajuicer_service/profiles/exact.py`
+- Create: `services/datajuicer_service/datajuicer_service/profiles/io.py`
 - Create: `services/datajuicer_service/tests/profiles/test_exact.py`
 - Create: `services/datajuicer_service/tests/profiles/test_io.py`
 
@@ -238,8 +242,8 @@ uid ASC
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles/test_io.py services/datajuicer_service/tests/profiles/test_exact.py -q
-uv run --project services/datajuicer_service mypy services/datajuicer_service/app/profiles
-uv run --project services/datajuicer_service ty check services/datajuicer_service/app/profiles
+uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service/profiles
+uv run --project services/datajuicer_service ty check services/datajuicer_service/datajuicer_service/profiles
 ```
 
 Expected: all pass.
@@ -247,7 +251,7 @@ Expected: all pass.
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add services/datajuicer_service/app/profiles services/datajuicer_service/tests/profiles
+git add services/datajuicer_service/datajuicer_service/profiles services/datajuicer_service/tests/profiles
 git commit -m "功能：实现文本精准分组"
 ```
 
@@ -256,8 +260,8 @@ git commit -m "功能：实现文本精准分组"
 ### Task 3: Data-Juicer MinHash adapter 与完整聚类
 
 **Files:**
-- Create: `services/datajuicer_service/app/profiles/minhash.py`
-- Create: `services/datajuicer_service/app/profiles/compatibility.py`
+- Create: `services/datajuicer_service/datajuicer_service/profiles/minhash.py`
+- Create: `services/datajuicer_service/datajuicer_service/profiles/compatibility.py`
 - Create: `services/datajuicer_service/tests/profiles/test_minhash.py`
 - Create: `services/datajuicer_service/tests/profiles/test_datajuicer_compatibility.py`
 
@@ -340,9 +344,9 @@ If `pytest-repeat` is not installed, run the same pytest command twice explicitl
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles -q
-uv run --project services/datajuicer_service ruff check services/datajuicer_service/app/profiles services/datajuicer_service/tests/profiles
-uv run --project services/datajuicer_service mypy services/datajuicer_service/app/profiles
-git add services/datajuicer_service/app/profiles services/datajuicer_service/tests/profiles
+uv run --project services/datajuicer_service ruff check services/datajuicer_service/datajuicer_service/profiles services/datajuicer_service/tests/profiles
+uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service/profiles
+git add services/datajuicer_service/datajuicer_service/profiles services/datajuicer_service/tests/profiles
 git commit -m "功能：接入Data-Juicer MinHash聚类"
 ```
 
@@ -351,9 +355,9 @@ git commit -m "功能：接入Data-Juicer MinHash聚类"
 ### Task 4: `text_exact_minhash_v1` 合并、代表与输出
 
 **Files:**
-- Create: `services/datajuicer_service/app/profiles/text_exact_minhash_v1.py`
-- Create: `services/datajuicer_service/app/profiles/registry.py`
-- Modify: `services/datajuicer_service/app/profiles/io.py`
+- Create: `services/datajuicer_service/datajuicer_service/profiles/text_exact_minhash_v1.py`
+- Create: `services/datajuicer_service/datajuicer_service/profiles/registry.py`
+- Modify: `services/datajuicer_service/datajuicer_service/profiles/io.py`
 - Create: `services/datajuicer_service/tests/profiles/test_text_exact_minhash_v1.py`
 
 **Interfaces:**
@@ -416,14 +420,14 @@ Write all uid decisions to a job-owned `.part`, validate full uid equality and c
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles -q
-uv run --project services/datajuicer_service ruff check services/datajuicer_service/app/profiles services/datajuicer_service/tests/profiles
-uv run --project services/datajuicer_service mypy services/datajuicer_service/app/profiles
+uv run --project services/datajuicer_service ruff check services/datajuicer_service/datajuicer_service/profiles services/datajuicer_service/tests/profiles
+uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service/profiles
 ```
 
 - [ ] **Step 7: Commit**
 
 ```powershell
-git add services/datajuicer_service/app/profiles services/datajuicer_service/tests/profiles
+git add services/datajuicer_service/datajuicer_service/profiles services/datajuicer_service/tests/profiles
 git commit -m "功能：实现精准与MinHash两阶段去重"
 ```
 
@@ -432,10 +436,10 @@ git commit -m "功能：实现精准与MinHash两阶段去重"
 ### Task 5: Job 持久化、状态机与 migration
 
 **Files:**
-- Create: `services/datajuicer_service/app/core/database.py`
-- Create: `services/datajuicer_service/app/jobs/models.py`
-- Create: `services/datajuicer_service/app/jobs/state_machine.py`
-- Create: `services/datajuicer_service/app/jobs/repository.py`
+- Create: `services/datajuicer_service/datajuicer_service/core/database.py`
+- Create: `services/datajuicer_service/datajuicer_service/jobs/models.py`
+- Create: `services/datajuicer_service/datajuicer_service/jobs/state_machine.py`
+- Create: `services/datajuicer_service/datajuicer_service/jobs/repository.py`
 - Create: `services/datajuicer_service/alembic.ini`
 - Create: `services/datajuicer_service/migrations/env.py`
 - Create: `services/datajuicer_service/migrations/versions/20260731_01_create_datajuicer_job.py`
@@ -497,9 +501,9 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 - [ ] **Step 6: Run type gates and commit**
 
 ```powershell
-uv run --project services/datajuicer_service mypy services/datajuicer_service/app/jobs
-uv run --project services/datajuicer_service ty check services/datajuicer_service/app/jobs
-git add services/datajuicer_service/app/core/database.py services/datajuicer_service/app/jobs services/datajuicer_service/migrations services/datajuicer_service/alembic.ini services/datajuicer_service/tests/jobs
+uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service/jobs
+uv run --project services/datajuicer_service ty check services/datajuicer_service/datajuicer_service/jobs
+git add services/datajuicer_service/datajuicer_service/core/database.py services/datajuicer_service/datajuicer_service/jobs services/datajuicer_service/migrations services/datajuicer_service/alembic.ini services/datajuicer_service/tests/jobs
 git commit -m "功能：持久化Data-Juicer任务状态"
 ```
 
@@ -508,11 +512,11 @@ git commit -m "功能：持久化Data-Juicer任务状态"
 ### Task 6: POST/GET API 与幂等入队
 
 **Files:**
-- Create: `services/datajuicer_service/app/api/schemas.py`
-- Create: `services/datajuicer_service/app/api/routes.py`
-- Create: `services/datajuicer_service/app/jobs/service.py`
-- Create: `services/datajuicer_service/app/jobs/dispatcher.py`
-- Create: `services/datajuicer_service/app/main.py`
+- Create: `services/datajuicer_service/datajuicer_service/api/schemas.py`
+- Create: `services/datajuicer_service/datajuicer_service/api/routes.py`
+- Create: `services/datajuicer_service/datajuicer_service/jobs/service.py`
+- Create: `services/datajuicer_service/datajuicer_service/jobs/dispatcher.py`
+- Create: `services/datajuicer_service/datajuicer_service/main.py`
 - Create: `services/datajuicer_service/tests/api/test_jobs.py`
 
 **Interfaces:**
@@ -566,8 +570,8 @@ Add `/health` that verifies process health only; database readiness belongs to a
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/api -q
-uv run --project services/datajuicer_service ruff check services/datajuicer_service/app/api services/datajuicer_service/tests/api
-git add services/datajuicer_service/app/api services/datajuicer_service/app/jobs/service.py services/datajuicer_service/app/jobs/dispatcher.py services/datajuicer_service/app/main.py services/datajuicer_service/tests/api
+uv run --project services/datajuicer_service ruff check services/datajuicer_service/datajuicer_service/api services/datajuicer_service/tests/api
+git add services/datajuicer_service/datajuicer_service/api services/datajuicer_service/datajuicer_service/jobs/service.py services/datajuicer_service/datajuicer_service/jobs/dispatcher.py services/datajuicer_service/datajuicer_service/main.py services/datajuicer_service/tests/api
 git commit -m "功能：提供Data-Juicer异步任务接口"
 ```
 
@@ -576,9 +580,9 @@ git commit -m "功能：提供Data-Juicer异步任务接口"
 ### Task 7: Celery execute、原子发布与 recovery
 
 **Files:**
-- Create: `services/datajuicer_service/app/core/celery_app.py`
-- Create: `services/datajuicer_service/app/jobs/tasks.py`
-- Create: `services/datajuicer_service/app/jobs/orchestration.py`
+- Create: `services/datajuicer_service/datajuicer_service/core/celery_app.py`
+- Create: `services/datajuicer_service/datajuicer_service/jobs/tasks.py`
+- Create: `services/datajuicer_service/datajuicer_service/jobs/orchestration.py`
 - Create: `services/datajuicer_service/tests/jobs/test_orchestration.py`
 - Create: `services/datajuicer_service/tests/jobs/test_recovery.py`
 
@@ -625,8 +629,8 @@ Recover pending/queued dispatch gaps, expired running leases and published-outpu
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/jobs -q
-uv run --project services/datajuicer_service ruff check services/datajuicer_service/app/jobs services/datajuicer_service/app/core/celery_app.py
-git add services/datajuicer_service/app/core/celery_app.py services/datajuicer_service/app/jobs services/datajuicer_service/tests/jobs
+uv run --project services/datajuicer_service ruff check services/datajuicer_service/datajuicer_service/jobs services/datajuicer_service/datajuicer_service/core/celery_app.py
+git add services/datajuicer_service/datajuicer_service/core/celery_app.py services/datajuicer_service/datajuicer_service/jobs services/datajuicer_service/tests/jobs
 git commit -m "功能：编排Data-Juicer后台任务"
 ```
 
@@ -677,8 +681,8 @@ No script starts Docker.
 
 ```powershell
 uv run --project services/datajuicer_service ruff check services/datajuicer_service
-uv run --project services/datajuicer_service mypy services/datajuicer_service/app
-uv run --project services/datajuicer_service ty check services/datajuicer_service/app
+uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service
+uv run --project services/datajuicer_service ty check services/datajuicer_service/datajuicer_service
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests -q
 ```
 
@@ -748,8 +752,8 @@ Document exact commands and expected results in `docs/runbooks/datajuicer-servic
 
 ```powershell
 uv run --project services/datajuicer_service ruff check services/datajuicer_service
-uv run --project services/datajuicer_service mypy services/datajuicer_service/app
-uv run --project services/datajuicer_service ty check services/datajuicer_service/app
+uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service
+uv run --project services/datajuicer_service ty check services/datajuicer_service/datajuicer_service
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests -q
 uv run --project services/datajuicer_service pytest -m real_integration services/datajuicer_service/tests/real_integration -q
 ```
