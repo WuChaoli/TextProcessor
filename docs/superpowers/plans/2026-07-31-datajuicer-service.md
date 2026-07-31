@@ -1,6 +1,6 @@
 # Data-Juicer 独立处理服务 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 实现可从源码启动的独立 Data-Juicer 异步处理服务，完成 `text_exact_minhash_v1`、POST/GET job、Celery 恢复、聚类结果发布以及自动化与真实文本数据测试。
 
@@ -40,7 +40,7 @@
 - Produces: `Settings` with `database_url`, `celery_broker_url`, `celery_queue`, `job_timeout_seconds`, `max_attempts`, `recovery_interval_seconds`, `worker_concurrency`, `profile_np`.
 - Produces: package commands `datajuicer-api`, `datajuicer-worker`, `datajuicer-beat`.
 
-- [ ] **Step 1: Write configuration tests**
+- [x] **Step 1: Write configuration tests**
 
 ```python
 from datajuicer_service.core.config import Settings
@@ -65,7 +65,7 @@ def test_settings_reject_non_positive_limits() -> None:
         )
 ```
 
-- [ ] **Step 2: Run the test and verify missing package failure**
+- [x] **Step 2: Run the test and verify missing package failure**
 
 Run:
 
@@ -75,7 +75,7 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 
 Expected: FAIL because the service package and settings do not exist.
 
-- [ ] **Step 3: Add the pinned Data-Juicer submodule**
+- [x] **Step 3: Add the pinned Data-Juicer submodule**
 
 Run:
 
@@ -87,7 +87,7 @@ git submodule status
 
 Expected: the submodule line starts with commit `7061da6ad06287aa0305eda162429b34361a56a3`.
 
-- [ ] **Step 4: Create the Python 3.11 package**
+- [x] **Step 4: Create the Python 3.11 package**
 
 `pyproject.toml` must declare:
 
@@ -128,7 +128,7 @@ uv lock --project services/datajuicer_service
 uv sync --project services/datajuicer_service --locked
 ```
 
-- [ ] **Step 5: Implement validated settings**
+- [x] **Step 5: Implement validated settings**
 
 ```python
 class Settings(BaseSettings):
@@ -148,7 +148,7 @@ class Settings(BaseSettings):
     profile_np: int = Field(default=1, gt=0)
 ```
 
-- [ ] **Step 6: Verify package and pinned upstream**
+- [x] **Step 6: Verify package and pinned upstream**
 
 Run:
 
@@ -161,7 +161,7 @@ uv run --project services/datajuicer_service ruff check services/datajuicer_serv
 
 Expected: Data-Juicer reports `1.5.4`; tests and Ruff pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add .gitmodules services/datajuicer_service
@@ -185,7 +185,7 @@ git commit -m "构建：初始化Data-Juicer独立服务"
 - Produces: `load_input_jsonl(path: Path, limits: InputLimits) -> list[InputSample]`.
 - Produces: `group_exact(samples: Sequence[InputSample]) -> ExactGroupingResult`.
 
-- [ ] **Step 1: Write failing input and exact grouping tests**
+- [x] **Step 1: Write failing input and exact grouping tests**
 
 ```python
 def test_load_input_rejects_duplicate_uid(tmp_path: Path) -> None:
@@ -207,7 +207,7 @@ def test_exact_grouping_ignores_outer_whitespace_only() -> None:
     assert result.independent_uids == (2, 3)
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -217,7 +217,7 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 
 Expected: FAIL because profile models and functions do not exist.
 
-- [ ] **Step 3: Implement strict JSONL loading**
+- [x] **Step 3: Implement strict JSONL loading**
 
 Implement:
 
@@ -229,7 +229,7 @@ def load_input_jsonl(path: Path, limits: InputLimits) -> list[InputSample]:
 
 The loader must stream lines and track bytes/characters without loading an unbounded file first.
 
-- [ ] **Step 4: Implement collision-safe exact grouping**
+- [x] **Step 4: Implement collision-safe exact grouping**
 
 Use normalized text `sample.text.strip()`. Hash it for bucket lookup, but compare the normalized string inside each hash bucket before grouping. Select the temporary representative by:
 
@@ -238,7 +238,7 @@ normalized length DESC
 uid ASC
 ```
 
-- [ ] **Step 5: Run profile tests and type gates**
+- [x] **Step 5: Run profile tests and type gates**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles/test_io.py services/datajuicer_service/tests/profiles/test_exact.py -q
@@ -248,7 +248,7 @@ uv run --project services/datajuicer_service ty check services/datajuicer_servic
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add services/datajuicer_service/datajuicer_service/profiles services/datajuicer_service/tests/profiles
@@ -271,7 +271,7 @@ git commit -m "功能：实现文本精准分组"
 - Produces: `cluster_minhash(samples: Sequence[InputSample], config: MinHashConfig) -> tuple[MinHashCluster, ...]`.
 - Produces: `verify_datajuicer_runtime() -> DataJuicerRuntime`.
 
-- [ ] **Step 1: Write compatibility and Chinese near-duplicate tests**
+- [x] **Step 1: Write compatibility and Chinese near-duplicate tests**
 
 ```python
 def test_runtime_is_pinned_datajuicer() -> None:
@@ -290,7 +290,7 @@ def test_minhash_clusters_chinese_near_duplicates() -> None:
     assert clusters == (MinHashCluster(member_uids=(0, 1)),)
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles/test_datajuicer_compatibility.py services/datajuicer_service/tests/profiles/test_minhash.py -q
@@ -298,7 +298,7 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 
 Expected: FAIL because the adapter does not exist.
 
-- [ ] **Step 3: Implement runtime pin verification**
+- [x] **Step 3: Implement runtime pin verification**
 
 Verify without importing the upstream operator registry (which triggers the
 Data-Juicer LazyLoader and installs Ray):
@@ -310,7 +310,7 @@ Data-Juicer LazyLoader and installs Ray):
 
 The API process and worker must fail startup if compatibility validation fails.
 
-- [ ] **Step 4: Implement MinHash config and signature computation**
+- [x] **Step 4: Implement MinHash config and signature computation**
 
 Use fixed v1 values:
 
@@ -332,11 +332,11 @@ Do not import the upstream operator registry or invoke its final
 `dataset.filter`, because that import path activates the LazyLoader and adds
 Ray outside the lock file.
 
-- [ ] **Step 5: Implement full-membership LSH and union-find clustering**
+- [x] **Step 5: Implement full-membership LSH and union-find clustering**
 
 Build LSH buckets from signatures, union candidate uid values, and return sorted member uid tuples for every component of size greater than one. Do not return or filter singleton components.
 
-- [ ] **Step 6: Verify deterministic behavior**
+- [x] **Step 6: Verify deterministic behavior**
 
 Run the tests twice with reversed sample iteration and assert identical sorted clusters:
 
@@ -346,7 +346,7 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 
 If `pytest-repeat` is not installed, run the same pytest command twice explicitly.
 
-- [ ] **Step 7: Run gates and commit**
+- [x] **Step 7: Run gates and commit**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles -q
@@ -371,7 +371,7 @@ git commit -m "功能：接入Data-Juicer MinHash聚类"
 - Produces: `TextExactMinhashV1.execute(input_path, output_path, progress) -> ProfileResult`.
 - Produces: `get_profile(name: str, limits: InputLimits) -> ProfileExecutor`.
 
-- [ ] **Step 1: Write failing exact-plus-minhash expansion tests**
+- [x] **Step 1: Write failing exact-plus-minhash expansion tests**
 
 ```python
 def test_profile_expands_exact_group_into_minhash_cluster(tmp_path: Path) -> None:
@@ -391,7 +391,7 @@ def test_profile_expands_exact_group_into_minhash_cluster(tmp_path: Path) -> Non
     assert decisions[-1].representative is True
 ```
 
-- [ ] **Step 2: Run test and verify failure**
+- [x] **Step 2: Run test and verify failure**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles/test_text_exact_minhash_v1.py -q
@@ -399,7 +399,7 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 
 Expected: FAIL because profile orchestration does not exist.
 
-- [ ] **Step 3: Implement two-stage expansion**
+- [x] **Step 3: Implement two-stage expansion**
 
 Create exact groups, select exact representatives, run MinHash only on representatives and original independent samples, then expand every MinHash component back to all exact members.
 
@@ -410,7 +410,7 @@ Assign method:
 - final group containing an exact group and a MinHash edge: `exact_minhash`;
 - singleton: `None`.
 
-- [ ] **Step 4: Implement representative and cluster ID**
+- [x] **Step 4: Implement representative and cluster ID**
 
 Select exactly one final representative by normalized length descending and uid ascending. Generate internal UUIDv5 using a fixed service namespace and:
 
@@ -418,11 +418,11 @@ Select exactly one final representative by normalized length descending and uid 
 requestId + "\0" + ",".join(sorted member uid)
 ```
 
-- [ ] **Step 5: Implement atomic JSONL profile output**
+- [x] **Step 5: Implement atomic JSONL profile output**
 
 Write all uid decisions to a job-owned `.part`, validate full uid equality and cluster invariants, compute SHA-256, then publish with no overwrite.
 
-- [ ] **Step 6: Verify profile output**
+- [x] **Step 6: Verify profile output**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/profiles -q
@@ -430,7 +430,7 @@ uv run --project services/datajuicer_service ruff check services/datajuicer_serv
 uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service/profiles
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add services/datajuicer_service/datajuicer_service/profiles services/datajuicer_service/tests/profiles
@@ -456,7 +456,7 @@ git commit -m "功能：实现精准与MinHash两阶段去重"
 - Produces: `JobStatus`, `DataJuicerJob`, `JobRepository`.
 - Produces: conditional state transitions and lease acquisition.
 
-- [ ] **Step 1: Write failing state and idempotency tests**
+- [x] **Step 1: Write failing state and idempotency tests**
 
 ```python
 def test_illegal_terminal_transition_is_rejected() -> None:
@@ -469,17 +469,17 @@ def test_concurrent_request_id_has_one_job(session_factory) -> None:
     # Assert one row exists and both callers resolve to the same job id.
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/jobs -q
 ```
 
-- [ ] **Step 3: Implement model and migration**
+- [x] **Step 3: Implement model and migration**
 
 Implement all logical fields from the service spec, including unique `request_id`, request fingerprint, progress, lease, attempts, prepared/output digests and lifecycle timestamps.
 
-- [ ] **Step 4: Implement repository**
+- [x] **Step 4: Implement repository**
 
 Required methods:
 
@@ -494,7 +494,7 @@ mark_failed(job_id: UUID, lease_token: UUID | None, error: JobError) -> None
 find_recoverable(now: datetime, limit: int) -> list[DataJuicerJob]
 ```
 
-- [ ] **Step 5: Run PostgreSQL-backed tests**
+- [x] **Step 5: Run PostgreSQL-backed tests**
 
 Use a dedicated test database URL:
 
@@ -504,7 +504,7 @@ uv run --project services/datajuicer_service alembic upgrade head
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/jobs -q
 ```
 
-- [ ] **Step 6: Run type gates and commit**
+- [x] **Step 6: Run type gates and commit**
 
 ```powershell
 uv run --project services/datajuicer_service mypy services/datajuicer_service/datajuicer_service/jobs
@@ -529,7 +529,7 @@ git commit -m "功能：持久化Data-Juicer任务状态"
 - Produces: `POST /v1/jobs`, `GET /v1/jobs/{jobId}`.
 - Produces: `JobService.create_job()` and `CeleryJobDispatcher.enqueue()`.
 
-- [ ] **Step 1: Write API contract tests**
+- [x] **Step 1: Write API contract tests**
 
 ```python
 def test_create_job_returns_202(client: TestClient) -> None:
@@ -547,17 +547,17 @@ def test_same_request_id_with_different_path_returns_409(client: TestClient) -> 
     assert response.json()["detail"]["code"] == "IDEMPOTENCY_CONFLICT"
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/api/test_jobs.py -q
 ```
 
-- [ ] **Step 3: Implement camelCase schemas and response invariants**
+- [x] **Step 3: Implement camelCase schemas and response invariants**
 
 Implement `JobCreate`, `JobAccepted`, `JobPublic`, `JobProgressPublic`, `JobResultPublic`, and `JobErrorPublic`. Enforce result/error mutual exclusion.
 
-- [ ] **Step 4: Implement create service and dispatch boundary**
+- [x] **Step 4: Implement create service and dispatch boundary**
 
 On a new job:
 
@@ -568,11 +568,11 @@ On a new job:
 
 On enqueue failure, mark failed with `QUEUE_SUBMISSION_FAILED` and return 503.
 
-- [ ] **Step 5: Implement GET mapping and health check**
+- [x] **Step 5: Implement GET mapping and health check**
 
 Add `/health` that verifies process health only; database readiness belongs to a separate `/ready` check that performs a lightweight query.
 
-- [ ] **Step 6: Run API tests and commit**
+- [x] **Step 6: Run API tests and commit**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/api -q
@@ -597,7 +597,7 @@ git commit -m "功能：提供Data-Juicer异步任务接口"
 - Produces: Celery tasks `datajuicer.execute`, `datajuicer.recover`.
 - Produces: `JobOrchestrator.execute(job_id)` and `recover(now)`.
 
-- [ ] **Step 1: Write duplicate message and crash-window tests**
+- [x] **Step 1: Write duplicate message and crash-window tests**
 
 ```python
 def test_duplicate_execute_message_runs_profile_once(orchestrator, profile_spy, job) -> None:
@@ -612,27 +612,27 @@ def test_published_digest_recovers_success(orchestrator, job, published_output) 
     assert repository.get(job.id).status is JobStatus.SUCCEEDED
 ```
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/jobs/test_orchestration.py services/datajuicer_service/tests/jobs/test_recovery.py -q
 ```
 
-- [ ] **Step 3: Configure isolated Celery**
+- [x] **Step 3: Configure isolated Celery**
 
 Use queue `datajuicer.jobs`, task namespace `datajuicer.*`, JSON serialization, late ack, reject-on-worker-lost, prefetch 1, no Celery result backend and Beat recovery schedule.
 
-- [ ] **Step 4: Implement execute orchestration**
+- [x] **Step 4: Implement execute orchestration**
 
 Acquire a lease, verify deadline and output state, call the profile with throttled progress persistence, save prepared digest before publish and only mark success after publication.
 
 Map deterministic profile/input/output errors without retry. Retry transient infrastructure errors with bounded exponential backoff using the same job id.
 
-- [ ] **Step 5: Implement recovery**
+- [x] **Step 5: Implement recovery**
 
 Recover pending/queued dispatch gaps, expired running leases and published-output/database crash windows. Recovery must enqueue work, not execute profile code inside Beat.
 
-- [ ] **Step 6: Run orchestration tests and commit**
+- [x] **Step 6: Run orchestration tests and commit**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/jobs -q
@@ -657,7 +657,7 @@ git commit -m "功能：编排Data-Juicer后台任务"
 **Interfaces:**
 - Produces: documented source commands for migration, API, worker and Beat.
 
-- [ ] **Step 1: Write a PostgreSQL/Celery integration test**
+- [x] **Step 1: Write a PostgreSQL/Celery integration test**
 
 The test must:
 
@@ -668,13 +668,13 @@ The test must:
 5. GET the succeeded job;
 6. verify output SHA-256 and complete uid set.
 
-- [ ] **Step 2: Run integration test and verify failure**
+- [x] **Step 2: Run integration test and verify failure**
 
 ```powershell
 uv run --project services/datajuicer_service pytest services/datajuicer_service/tests/integration/test_job_flow.py -q
 ```
 
-- [ ] **Step 3: Implement source startup scripts**
+- [x] **Step 3: Implement source startup scripts**
 
 Scripts must use `uv run --project services/datajuicer_service` and fail if:
 
@@ -685,7 +685,7 @@ Scripts must use `uv run --project services/datajuicer_service` and fail if:
 
 No script starts Docker.
 
-- [ ] **Step 4: Run all service gates**
+- [x] **Step 4: Run all service gates**
 
 ```powershell
 uv run --project services/datajuicer_service ruff check services/datajuicer_service
@@ -696,7 +696,7 @@ uv run --project services/datajuicer_service pytest services/datajuicer_service/
 
 Expected: all pass; tests requiring real external Hugging Face access remain separately marked.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add services/datajuicer_service
