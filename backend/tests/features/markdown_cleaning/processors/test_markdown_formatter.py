@@ -146,17 +146,30 @@ def test_table_pipe_normalization_only_in_table(monkeypatch: pytest.MonkeyPatch)
     assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
 
 
-def test_table_pipe_normalization_with_link_prefix_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
-    markdown = "[link](https://example.com)\n|a|b|\n|---|---|\n|x|y|\n"
+@pytest.mark.parametrize(
+    ("prefix", "formatted_prefix"),
+    [
+        ("[link](https://example.com)\n", "[link](https://example.com)\n"),
+        ("before <span>raw</span> after\n", "before <span>raw</span> after\n"),
+        ("<div>\nraw\n</div>\n\n", "<div>\nraw\n</div>\n\n"),
+    ],
+)
+def test_table_pipe_normalization_with_protected_prefix_is_accepted(
+    prefix: str,
+    formatted_prefix: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    markdown = f"{prefix}|a|b|\n|---|---|\n|x|y|\n"
 
     def _bad_format(*_args: object, **_kwargs: object) -> str:
-        return "[link](https://example.com)\n| a | b |\n| --- | --- |\n| x | y |\n"
+        return f"{formatted_prefix}| a | b |\n| --- | --- |\n| x | y |\n"
 
     monkeypatch.setattr(markdown_formatter.mdformat, "text", _bad_format)
     result = MarkdownFormatterAdapter().format(markdown)
 
     assert result.formatting_changes >= 1
     assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
+    assert _collect_protected_units(markdown) == _collect_protected_units(result.text)
 
 
 def test_table_pipe_change_with_code_prefix_requires_no_semantic_delta(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,6 +195,14 @@ def test_table_pipe_change_with_code_prefix_requires_no_semantic_delta(monkeypat
         (
             "`code`\n|a|b|\n|---|---|\n|x|y|\n",
             "`code`\n| a | b |\n| --- | --- |\n| z | y |\n",
+        ),
+        (
+            "before <span>raw</span> after\n|a|b|\n|---|---|\n|x|y|\n",
+            "before <span>raw</span> after\n| a | b |\n| --- | --- |\n| z | y |\n",
+        ),
+        (
+            "<div>\nraw\n</div>\n\n|a|b|\n|---|---|\n|x|y|\n",
+            "<div>\nraw\n</div>\n\n| a | b |\n| --- | --- |\n| z | y |\n",
         ),
     ],
 )
