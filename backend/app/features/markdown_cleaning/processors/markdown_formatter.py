@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Final
@@ -134,6 +136,73 @@ class MarkdownFormatterAdapter:
         return change_count
 
     @staticmethod
+    def _normalize_semantic_text(markdown: str) -> str:
+        normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
+        normalized = re.sub(r"\\\s*\n", " ", normalized)
+        normalized = re.sub(
+            r"\!\[([^\]]*)\]\([^)]*\)",
+            lambda match: match.group(1),
+            normalized,
+        )
+        normalized = re.sub(
+            r"\[([^\]]*)\]\([^)]*\)",
+            lambda match: match.group(1),
+            normalized,
+        )
+
+        lines: list[str] = []
+        for line in normalized.split("\n"):
+            line = line.strip()
+            line = re.sub(r"^[\t ]*>\s*", "", line)
+            line = re.sub(r"^[\t ]{0,3}#{1,6}\s+", "", line)
+            line = re.sub(r"^[\t ]*(?:\d+[.)]|\-|\+|\*)\s+", "", line)
+
+            line = re.sub(r"\*\*([^*\n]+)\*\*", r"\1", line)
+            line = re.sub(r"__([^_\n]+)__", r"\1", line)
+            line = re.sub(r"\*([^*\n]+)\*", r"\1", line)
+            line = re.sub(r"_([^_\n]+)_", r"\1", line)
+            line = re.sub(r"~~([^~\n]+)~~", r"\1", line)
+
+            line = line.replace("|", " ")
+            lines.append(line)
+
+        normalized = "\n".join(lines)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized
+
+    @staticmethod
+    def _line_and_column(markdown: str, offset: int) -> tuple[int, int]:
+        line = markdown.count("\n", 0, offset)
+        previous_newline = markdown.rfind("\n", 0, offset)
+        if previous_newline < 0:
+            return 0, offset
+        return line, offset - previous_newline - 1
+
+    @staticmethod
+    def _collect_visible_semantic_signature(
+        markdown: str,
+        parsed: MarkdownParseResult,
+    ) -> str:
+        if not parsed.protected_spans:
+            return MarkdownFormatterAdapter._normalize_semantic_text(markdown)
+
+        parts: list[str] = []
+        cursor = 0
+        for span in parsed.protected_spans:
+            parts.append(markdown[cursor : span.start])
+            cursor = span.end
+        parts.append(markdown[cursor:])
+
+        return MarkdownFormatterAdapter._normalize_semantic_text("".join(parts))
+
+    @staticmethod
+    def _collect_inline_leaf_signature(parsed: MarkdownParseResult) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (leaf.kind.value, leaf.parent_block_kind.value)
+            for leaf in parsed.inline_leaves
+        )
+
+    @staticmethod
     def _normalize_protected_text(text: str) -> str:
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
@@ -141,40 +210,62 @@ class MarkdownFormatterAdapter:
     def _collect_protected_units(
         markdown: str,
         parsed: MarkdownParseResult,
-    ) -> tuple[tuple[str, str, str], ...]:
-        units: list[tuple[int, str, str, str]] = []
+    ) -> tuple[tuple[str, str, str, str], ...]:
+        units: list[tuple[int, str, str, str, str]] = []
+        block_ordinal = 0
 
         for block in parsed.blocks:
             if block.block_type in {
                 MarkdownBlockType.FENCED_CODE,
                 MarkdownBlockType.HTML_BLOCK,
             }:
+                anchor = (
+                    f"block:{block.block_type.value}:"
+                    f"ord={block_ordinal}"
+                )
+                block_ordinal += 1
                 units.append(
                     (
                         block.source_span.start,
+                        "block",
                         block.block_type.value,
-                        block.block_type.value,
+                        anchor,
                         MarkdownFormatterAdapter._normalize_protected_text(
                             markdown[block.source_span.start : block.source_span.end]
                         ),
                     )
                 )
 
+        inline_occurrence: Counter[str] = Counter()
         for leaf in parsed.inline_leaves:
-            if leaf.kind in {
+            if leaf.kind not in {
                 MarkdownInlineLeafType.CODE_INLINE,
                 MarkdownInlineLeafType.HTML_INLINE,
+                MarkdownInlineLeafType.LINK_DESTINATION,
+                MarkdownInlineLeafType.IMAGE_DESTINATION,
             }:
-                units.append(
-                    (
-                        leaf.source_span.start,
-                        leaf.kind.value,
-                        leaf.parent_block_kind.value,
-                        MarkdownFormatterAdapter._normalize_protected_text(
-                            markdown[leaf.source_span.start : leaf.source_span.end]
-                        ),
-                    )
+                continue
+
+            key = f"{leaf.kind.value}|{leaf.parent_block_kind.value}"
+            occurrence = inline_occurrence[key]
+            inline_occurrence[key] += 1
+
+            anchor = (
+                f"inline:{leaf.kind.value}:"
+                f"parent={leaf.parent_block_kind.value}:"
+                f"ord={occurrence}"
+            )
+            units.append(
+                (
+                    leaf.source_span.start,
+                    "inline",
+                    leaf.kind.value,
+                    anchor,
+                    MarkdownFormatterAdapter._normalize_protected_text(
+                        markdown[leaf.source_span.start : leaf.source_span.end]
+                    ),
                 )
+            )
 
         units.sort(key=lambda item: item[0])
         return tuple(unit[1:] for unit in units)
@@ -214,6 +305,23 @@ class MarkdownFormatterAdapter:
         ):
             raise map_processing_exception(
                 ValueError("block structure changed"),
+                MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
+            )
+
+        if self._collect_inline_leaf_signature(parsed_input) != self._collect_inline_leaf_signature(
+            parsed_normalized
+        ):
+            raise map_processing_exception(
+                ValueError("inline leaf structure changed"),
+                MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
+            )
+
+        if self._collect_visible_semantic_signature(markdown, parsed_input) != self._collect_visible_semantic_signature(
+            normalized,
+            parsed_normalized,
+        ):
+            raise map_processing_exception(
+                ValueError("visible semantic content changed"),
                 MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
             )
 
