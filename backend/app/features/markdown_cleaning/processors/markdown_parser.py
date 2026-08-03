@@ -219,19 +219,28 @@ class MarkdownParserAdapter:
 
                     try:
                         line_start = inline_map[0]
+                        line_end = inline_map[1]
                     except TypeError as exc:
                         raise MarkdownParserError(
                             MarkdownParserErrorCode.MARKDOWN_PARSE_FAILED,
                             "inline token line map is invalid",
                         ) from exc
 
-                    base_offset = line_offsets[line_start] if line_start >= 0 else 0
+                    inline_content, inline_offsets = self._build_inline_source_projection(
+                        markdown=markdown,
+                        line_offsets=line_offsets,
+                        inline_map=[line_start, line_end],
+                        open_stack=open_stack,
+                        expected_content=token.content,
+                    )
+                    if not inline_content:
+                        continue
                     parent_block_kind = self._current_parent_block_kind(open_stack)
                     inline_leaves.extend(
                         self._collect_inline_leaves(
                             token.children,
-                            token.content,
-                            base_offset,
+                            inline_content,
+                            inline_offsets,
                             parent_block_kind,
                         )
                     )
@@ -260,13 +269,240 @@ class MarkdownParserAdapter:
     ) -> MarkdownBlockType:
         if not open_stack:
             return MarkdownBlockType.PARAGRAPH
+
+        for block_type, _, _ in reversed(open_stack):
+            if block_type != MarkdownBlockType.PARAGRAPH:
+                return block_type
+
         return open_stack[-1][0]
+
+    @staticmethod
+    def _build_inline_source_projection(
+        markdown: str,
+        line_offsets: tuple[int, ...],
+        inline_map: list[int] | tuple[int, int],
+        open_stack: list[tuple[MarkdownBlockType, int, int]],
+        expected_content: str = "",
+    ) -> tuple[str, tuple[int, ...]]:
+        if len(inline_map) != 2:
+            return "", ()
+
+        line_start = inline_map[0]
+        line_end = inline_map[1]
+        if line_start < 0 or line_end < line_start:
+            return "", ()
+
+        try:
+            raw_start = line_offsets[line_start]
+            raw_end = line_offsets[line_end]
+        except (TypeError, IndexError):
+            return "", ()
+
+        raw_block = markdown[raw_start:raw_end]
+        if not raw_block:
+            return "", ()
+
+        open_blocks = [block_type for block_type, _, _ in open_stack]
+        blockquote_depth = open_blocks.count(MarkdownBlockType.BLOCKQUOTE)
+        list_depth = open_blocks.count(MarkdownBlockType.LIST_ITEM)
+        is_heading = MarkdownBlockType.HEADING in open_blocks
+
+        lines = raw_block.splitlines(keepends=True)
+        if not lines:
+            return "", ()
+
+        list_indents: list[int] = []
+        if list_depth > 0 and lines:
+            first_cursor = 0
+            first_line = lines[0]
+            first_cursor = MarkdownParserAdapter._consume_blockquote_prefix(
+                first_line,
+                first_cursor,
+                blockquote_depth,
+            )
+            if is_heading:
+                first_cursor = MarkdownParserAdapter._consume_heading_prefix(
+                    first_line,
+                    first_cursor,
+                )
+            for _ in range(list_depth):
+                first_cursor, indent = MarkdownParserAdapter._consume_list_prefix(
+                    first_line,
+                    first_cursor,
+                )
+                if indent == 0:
+                    break
+                list_indents.append(indent)
+
+        mapped_chars: list[str] = []
+        offset_map: list[int] = []
+        line_cursor = raw_start
+
+        for line_index, line in enumerate(lines):
+            cursor = 0
+            cursor = MarkdownParserAdapter._consume_blockquote_prefix(
+                line,
+                cursor,
+                blockquote_depth,
+            )
+            if is_heading and line_index == 0:
+                cursor = MarkdownParserAdapter._consume_heading_prefix(line, cursor)
+
+            if list_indents:
+                if line_index == 0:
+                    temp_cursor = cursor
+                    for _ in range(list_depth):
+                        temp_cursor, consumed = MarkdownParserAdapter._consume_list_prefix(
+                            line,
+                            temp_cursor,
+                        )
+                        if consumed == 0:
+                            break
+                        cursor = temp_cursor
+                else:
+                    cursor = MarkdownParserAdapter._consume_list_indent_prefix(
+                        line,
+                        cursor,
+                        list_indents,
+                    )
+
+            absolute_position = line_cursor + cursor
+            while cursor < len(line):
+                if (
+                    line[cursor] == "\r"
+                    and cursor + 1 < len(line)
+                    and line[cursor + 1] == "\n"
+                ):
+                    mapped_chars.append("\n")
+                    offset_map.append(absolute_position)
+                    cursor += 2
+                    absolute_position += 2
+                    continue
+
+                mapped_chars.append(line[cursor])
+                offset_map.append(absolute_position)
+                cursor += 1
+                absolute_position += 1
+            line_cursor += len(line)
+
+        mapped = "".join(mapped_chars)
+        expected = expected_content.replace("\r\n", "\n")
+
+        if mapped != expected:
+            trailing_chars = mapped[len(expected) :]
+            if mapped.startswith(expected) and trailing_chars and trailing_chars.strip("\n") == "":
+                mapped = expected
+                offset_map = offset_map[: len(expected)]
+            else:
+                return "", ()
+
+        if len(mapped) != len(offset_map):
+            return "", ()
+
+        if "".join(mapped) != expected:
+            return "", ()
+
+        return mapped, tuple(offset_map)
+
+    @staticmethod
+    def _consume_list_indent_prefix(
+        line: str,
+        cursor: int,
+        list_indents: list[int],
+    ) -> int:
+        for indent in list_indents:
+            next_cursor = cursor
+            removed = 0
+            while removed < indent and next_cursor < len(line):
+                if line[next_cursor] not in " \t":
+                    break
+                next_cursor += 1
+                removed += 1
+            cursor = next_cursor
+        return cursor
+
+    @staticmethod
+    def _consume_list_prefix(line: str, cursor: int) -> tuple[int, int]:
+        n = len(line)
+        start = cursor
+        while cursor < n and line[cursor] in " \t":
+            cursor += 1
+        marker_start = cursor
+        if cursor >= n:
+            return start, 0
+
+        first = line[cursor]
+        if first in ("-", "+", "*"):
+            cursor += 1
+            if cursor < n and line[cursor] in "\t ":
+                while cursor < n and line[cursor] in "\t ":
+                    cursor += 1
+                return cursor, cursor - start
+            return start, 0
+
+        if not first.isdigit():
+            return start, 0
+
+        while cursor < n and line[cursor].isdigit():
+            cursor += 1
+        if cursor >= n:
+            return start, 0
+
+        if line[cursor] not in (".", ")"):
+            return start, 0
+
+        cursor += 1
+        if cursor >= n or line[cursor] not in "\t ":
+            return start, 0
+
+        while cursor < n and line[cursor] in "\t ":
+            cursor += 1
+
+        return cursor, cursor - marker_start
+
+    @staticmethod
+    def _consume_blockquote_prefix(
+        line: str,
+        cursor: int,
+        depth: int,
+    ) -> int:
+        n = len(line)
+        for _ in range(depth):
+            while cursor < n and line[cursor] in " \t":
+                cursor += 1
+            if cursor >= n or line[cursor] != ">":
+                break
+            cursor += 1
+            while cursor < n and line[cursor] in " \t":
+                cursor += 1
+        return cursor
+
+    @staticmethod
+    def _consume_heading_prefix(line: str, cursor: int) -> int:
+        n = len(line)
+        if cursor >= n:
+            return cursor
+        start = cursor
+        # heading in markdown is up to 6 # followed by at least one whitespace
+        while cursor < n and line[cursor] in " \t":
+            cursor += 1
+        marker = 0
+        while cursor < n and line[cursor] == "#" and marker < 6:
+            cursor += 1
+            marker += 1
+        if marker == 0:
+            return start
+        if cursor >= n or line[cursor] not in "\t ":
+            return start
+        while cursor < n and line[cursor] in "\t ":
+            cursor += 1
+        return cursor
 
     def _collect_inline_leaves(
         self,
         children: Sequence[object],
         inline_markdown: str,
-        base_offset: int,
+        inline_offsets: tuple[int, ...],
         parent_block_kind: MarkdownBlockType,
     ) -> list[MarkdownInlineLeaf]:
         leaves: list[MarkdownInlineLeaf] = []
@@ -279,18 +515,20 @@ class MarkdownParserAdapter:
                     child,
                     inline_markdown,
                     cursor,
-                    base_offset,
                 )
                 if span is None:
+                    continue
+                source_span = self._rebase_span(span, inline_offsets)
+                if source_span is None:
                     continue
                 leaves.append(
                     MarkdownInlineLeaf(
                         kind=MarkdownInlineLeafType.CODE_INLINE,
                         parent_block_kind=parent_block_kind,
-                        source_span=span,
+                        source_span=source_span,
                     )
                 )
-                cursor = span.end - base_offset
+                cursor = span[1]
                 continue
 
             if child_type == "html_inline":
@@ -299,14 +537,17 @@ class MarkdownParserAdapter:
                     continue
                 span = self._find_lexeme_span(inline_markdown, cursor, content)
                 if span is not None:
+                    source_span = self._rebase_span(span, inline_offsets)
+                    if source_span is None:
+                        continue
                     leaves.append(
                         MarkdownInlineLeaf(
                             kind=MarkdownInlineLeafType.HTML_INLINE,
                             parent_block_kind=parent_block_kind,
-                            source_span=span,
+                            source_span=source_span,
                         )
                     )
-                    cursor = span.end - base_offset
+                    cursor = span[1]
                 continue
 
             if child_type == "link_open":
@@ -318,17 +559,17 @@ class MarkdownParserAdapter:
                         destination,
                     )
                     if span is not None:
+                        source_span = self._rebase_span(span, inline_offsets)
+                        if source_span is None:
+                            continue
                         leaves.append(
                             MarkdownInlineLeaf(
                                 kind=MarkdownInlineLeafType.LINK_DESTINATION,
                                 parent_block_kind=parent_block_kind,
-                                source_span=SourceSpan(
-                                    start=base_offset + span.start,
-                                    end=base_offset + span.end,
-                                ),
+                                source_span=source_span,
                             )
                         )
-                        cursor = span.end
+                        cursor = span[1]
                 continue
 
             if child_type == "image":
@@ -340,17 +581,17 @@ class MarkdownParserAdapter:
                         destination,
                     )
                     if span is not None:
+                        source_span = self._rebase_span(span, inline_offsets)
+                        if source_span is None:
+                            continue
                         leaves.append(
                             MarkdownInlineLeaf(
                                 kind=MarkdownInlineLeafType.IMAGE_DESTINATION,
                                 parent_block_kind=parent_block_kind,
-                                source_span=SourceSpan(
-                                    start=base_offset + span.start,
-                                    end=base_offset + span.end,
-                                ),
+                                source_span=source_span,
                             )
                         )
-                        cursor = span.end
+                        cursor = span[1]
                 continue
 
         return leaves
@@ -360,22 +601,21 @@ class MarkdownParserAdapter:
         inline_markdown: str,
         cursor: int,
         content: str,
-    ) -> SourceSpan | None:
+    ) -> tuple[int, int] | None:
         if not content:
             return None
 
         index = inline_markdown.find(content, cursor)
         if index < 0:
             return None
-        return SourceSpan(start=index, end=index + len(content))
+        return (index, index + len(content))
 
     def _extract_code_inline_span(
         self,
         child: object,
         inline_markdown: str,
         cursor: int,
-        base_offset: int,
-    ) -> SourceSpan | None:
+    ) -> tuple[int, int] | None:
         markup = getattr(child, "markup", "")
         content = getattr(child, "content", "")
         if not isinstance(markup, str) or not isinstance(content, str) or not markup:
@@ -392,7 +632,7 @@ class MarkdownParserAdapter:
 
         if span is None:
             return None
-        return SourceSpan(start=base_offset + span[0], end=base_offset + span[1])
+        return span
 
     @staticmethod
     def _extract_token_span(
@@ -444,7 +684,7 @@ class MarkdownParserAdapter:
         inline_markdown: str,
         cursor: int,
         destination: str,
-    ) -> SourceSpan | None:
+    ) -> tuple[int, int] | None:
         anchor = cursor
         while anchor < len(inline_markdown):
             link_start = inline_markdown.find("](", anchor)
@@ -471,9 +711,9 @@ class MarkdownParserAdapter:
                     tail += 1
                 if inline_markdown[tail : tail + 1] == ")":
                     if _normalize_destination(inline_markdown[start:end]) == destination:
-                        return SourceSpan(start=start, end=end)
+                        return (start, end)
                 if _normalize_destination(inline_markdown[start:end]) == destination:
-                    return SourceSpan(start=start, end=end)
+                    return (start, end)
             else:
                 start = open_paren
                 destination_end = MarkdownParserAdapter._scan_destination_end(
@@ -486,11 +726,31 @@ class MarkdownParserAdapter:
 
                 raw_destination = inline_markdown[start:destination_end]
                 if _normalize_destination(raw_destination) == destination:
-                    return SourceSpan(start=start, end=destination_end)
+                    return (start, destination_end)
 
             anchor = link_start + 1
 
         return None
+
+    @staticmethod
+    def _rebase_span(
+        span: tuple[int, int],
+        inline_offsets: tuple[int, ...],
+    ) -> SourceSpan | None:
+        start, end = span
+        if start < 0 or end < start or end > len(inline_offsets):
+            return None
+        if start == end:
+            if start == len(inline_offsets):
+                return SourceSpan(start=inline_offsets[-1], end=inline_offsets[-1])
+            return SourceSpan(start=inline_offsets[start], end=inline_offsets[start])
+        if end > len(inline_offsets) or start >= len(inline_offsets):
+            return None
+        start_offset = inline_offsets[start]
+        end_offset = inline_offsets[end - 1] + 1
+        if end_offset < start_offset:
+            return None
+        return SourceSpan(start=start_offset, end=end_offset)
 
     @staticmethod
     def _scan_destination_end(inline_markdown: str, start: int) -> int | None:

@@ -164,3 +164,62 @@ def test_crlf_and_unicode_offsets_are_stable() -> None:
     spans = list(result.protected_spans)
     assert (3, 6) in [(span.start, span.end) for span in spans]
     assert len(markdown) >= 3
+
+
+def test_container_prefix_inline_leaves_use_absolute_spans() -> None:
+    markdown = (
+        "> [x](foo(bar))\n"
+        "- item [y](foo\\)bar)\n"
+        "# Heading > <b>Hi</b>\n"
+        "- `` `a` ```\n"
+        "> `` `b` ```\n"
+    )
+    result = MarkdownParserAdapter().parse(markdown)
+
+    link_spans = [
+        leaf.source_span
+        for leaf in result.inline_leaves
+        if leaf.kind == MarkdownInlineLeafType.LINK_DESTINATION
+    ]
+    link_texts = {
+        markdown[span.start : span.end] for span in link_spans
+    }
+
+    assert link_texts == {"foo(bar)", "foo\\)bar"}
+
+    assert (markdown.index("foo(bar)"), markdown.index("foo(bar)") + len("foo(bar)")) in [
+        (span.start, span.end) for span in link_spans
+    ]
+    assert (markdown.index("foo\\)bar"), markdown.index("foo\\)bar") + len("foo\\)bar")) in [
+        (span.start, span.end) for span in link_spans
+    ]
+
+    parent_by_text = {
+        markdown[leaf.source_span.start : leaf.source_span.end]: leaf.parent_block_kind
+        for leaf in result.inline_leaves
+        if leaf.kind in {
+            MarkdownInlineLeafType.LINK_DESTINATION,
+            MarkdownInlineLeafType.CODE_INLINE,
+            MarkdownInlineLeafType.HTML_INLINE,
+        }
+    }
+    assert parent_by_text["foo(bar)"] == MarkdownBlockType.BLOCKQUOTE
+    assert parent_by_text["foo\\)bar"] == MarkdownBlockType.LIST_ITEM
+    assert parent_by_text["<b>"] == MarkdownBlockType.HEADING
+
+
+def test_container_blockquote_and_list_code_inline_spans_are_absolute() -> None:
+    markdown = (
+        "- `` `a` ```\n"
+        "> `` `b` ```\n"
+    )
+    result = MarkdownParserAdapter().parse(markdown)
+
+    code_spans = {
+        (leaf.source_span.start, leaf.source_span.end)
+        for leaf in result.inline_leaves
+        if leaf.kind == MarkdownInlineLeafType.CODE_INLINE
+    }
+
+    assert (markdown.index("`a`"), markdown.index("`a`") + 3) in code_spans
+    assert (markdown.index("`b`"), markdown.index("`b`") + 3) in code_spans
