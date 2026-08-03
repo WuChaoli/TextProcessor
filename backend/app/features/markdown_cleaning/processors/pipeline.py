@@ -165,7 +165,9 @@ class MarkdownCleaningPipeline:
             and not _run_inline
             and _runtime_command is None
         ):
-            raise ValueError("custom stages and clocks require explicit inline execution")
+            raise ValueError(
+                "custom stages and clocks require explicit inline execution"
+            )
         self._staging_root = resolved_staging_root
         self._parser = parser or MarkdownParserAdapter()
         self._deduplicator = deduplicator or ParagraphDeduplicator(parser=self._parser)
@@ -317,32 +319,41 @@ class MarkdownCleaningPipeline:
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
-        try:
-            process = subprocess.Popen(
-                runtime_command,
-                cwd=Path(__file__).resolve().parents[4],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                env=self._runtime_environment(),
-            )
-        except OSError as exc:
-            raise map_processing_exception(
-                exc,
-                MarkdownCleaningErrorCode.INTERNAL_ERROR,
-            ) from exc
+        protocol_limit = self._limits.max_output_bytes + 64 * 1024
+        with tempfile.TemporaryFile(mode="w+b") as response_spool:
+            try:
+                process = subprocess.Popen(
+                    runtime_command,
+                    cwd=Path(__file__).resolve().parents[4],
+                    stdin=subprocess.PIPE,
+                    stdout=response_spool,
+                    stderr=subprocess.DEVNULL,
+                    env=self._runtime_environment(),
+                )
+            except OSError as exc:
+                raise map_processing_exception(
+                    exc,
+                    MarkdownCleaningErrorCode.INTERNAL_ERROR,
+                ) from exc
 
-        try:
-            stdout, _stderr = process.communicate(
-                input=request,
-                timeout=deadline.remaining_seconds(),
-            )
-        except subprocess.TimeoutExpired as exc:
-            self._terminate_runtime(process)
-            raise map_processing_exception(
-                TimeoutError("isolated transform timeout"),
-                MarkdownCleaningErrorCode.PROCESSING_TIMEOUT,
-            ) from exc
+            try:
+                process.communicate(
+                    input=request,
+                    timeout=deadline.remaining_seconds(),
+                )
+            except subprocess.TimeoutExpired as exc:
+                self._terminate_runtime(process)
+                raise map_processing_exception(
+                    TimeoutError("isolated transform timeout"),
+                    MarkdownCleaningErrorCode.PROCESSING_TIMEOUT,
+                ) from exc
+            response_spool.seek(0)
+            stdout = response_spool.read(protocol_limit + 1)
+            if len(stdout) > protocol_limit:
+                raise map_processing_exception(
+                    ValueError("isolated runtime protocol response exceeds limit"),
+                    MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+                )
 
         deadline.check()
         if process.returncode != 0:
@@ -398,9 +409,7 @@ class MarkdownCleaningPipeline:
     @staticmethod
     def _runtime_environment() -> dict[str, str]:
         environment = {
-            key: os.environ[key]
-            for key in _RUNTIME_ENV_ALLOWLIST
-            if key in os.environ
+            key: os.environ[key] for key in _RUNTIME_ENV_ALLOWLIST if key in os.environ
         }
         environment["PYTHONIOENCODING"] = "utf-8"
         environment["PYTHONUTF8"] = "1"
@@ -646,7 +655,10 @@ class MarkdownCleaningPipeline:
             )
 
         for block in blocks:
-            if block.source_span.end - block.source_span.start > self._limits.max_block_char_span:
+            if (
+                block.source_span.end - block.source_span.start
+                > self._limits.max_block_char_span
+            ):
                 raise map_processing_exception(
                     ValueError("single block size exceeds limit"),
                     MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
