@@ -501,3 +501,46 @@ def test_publish_pins_every_ancestor_during_relative_descent(
 
     assert (moved / "b" / "result.md").read_text(encoding="utf-8") == "safe"
     assert not list(outside.iterdir())
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction race regression")
+def test_publish_rejects_junction_swapped_before_first_descendant_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    source = tmp_path / "source.md"
+    source.write_text("safe", encoding="utf-8")
+    root = tmp_path / "root"
+    ancestor = root / "a"
+    moved = root / "a-original"
+    outside = tmp_path / "outside"
+    ancestor.mkdir(parents=True)
+    outside.mkdir()
+    publisher = MarkdownCleaningResultPublisher(output_roots=(root,))
+    prepared = publisher.prepare(source)
+    original_open_child = publisher._open_child_directory
+
+    def _swap_before_opening_a(parent_handle: int, name: str) -> int:
+        if name == "a" and not moved.exists():
+            ancestor.rename(moved)
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(ancestor), str(outside)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                pytest.skip("junction creation unavailable")
+        return original_open_child(parent_handle, name)
+
+    monkeypatch.setattr(publisher, "_open_child_directory", _swap_before_opening_a)
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        publisher.publish(
+            prepared, root / "a" / "b" / "result.md", allow_recovery=False
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert not list(outside.iterdir())
+    assert not (moved / "b").exists()

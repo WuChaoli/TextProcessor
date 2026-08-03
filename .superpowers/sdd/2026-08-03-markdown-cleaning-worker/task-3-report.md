@@ -42,3 +42,10 @@
 - source 的 open/stat/read/decode 错误统一映射为安全的 `INVALID_MARKDOWN_INPUT`；missing、symlink/junction 不泄露真实路径。
 
 Round 2 RED：新增四项回归初次运行 `3 failed, 1 passed`；失败分别对应 source 篡改、中间祖先未固定、missing source 原生异常泄漏。Round 2 GREEN：Task3 两组完整测试 `44 passed in 3.65s`，Windows 多进程与两类 junction 竞态专项 `3 passed in 3.23s`。
+
+## Round 3 Windows descendant no-follow 修复
+
+- Windows 相对目录 `NtCreateFile` 的 `CreateOptions` 增加 `FILE_OPEN_REPARSE_POINT`，确保首次打开尚未固定的 descendant 时不会跟随 junction/reparse point。
+- 每个相对目录句柄通过 `GetFileInformationByHandleEx(FileAttributeTagInfo)` 检查 `FILE_ATTRIBUTE_REPARSE_POINT`；命中后立即关闭句柄并安全失败，不进入下一层。
+- 新增在首次打开 `root/a` 之前将 `a` 替换为 junction 的竞态回归，断言发布失败、原目录不创建 `b`、outside 保持为空。
+- Round 3 RED：新增回归初次运行 `1 failed`（未抛安全错误）；GREEN 后 Task3 完整测试 `45 passed in 3.77s`，Windows 多进程及三类 swap 专项 `4 passed in 3.24s`，Ruff/format/Mypy/Pyright/ty 全部通过。

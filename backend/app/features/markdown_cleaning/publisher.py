@@ -486,9 +486,13 @@ class _WindowsPinnedDirectory:
 
     @staticmethod
     def open_directory_relative(parent: int, name: str, *, create: bool) -> int:
-        return _WindowsPinnedDirectory._nt_open_relative(
+        handle = _WindowsPinnedDirectory._nt_open_relative(
             parent, name, create=create, directory=True
         )
+        if _WindowsPinnedDirectory.is_reparse_point(handle):
+            _WindowsPinnedDirectory.close(handle)
+            raise OSError(errno.ELOOP, "relative directory is a reparse point")
+        return handle
 
     @staticmethod
     def _nt_open_relative(
@@ -536,7 +540,9 @@ class _WindowsPinnedDirectory:
         desired_access = (
             0x001F01FF if directory else (0x0012019F if create else 0x00120089)
         )
-        create_options = 0x00000020 | (0x00000001 if directory else 0x00000040)
+        create_options = 0x00000020 | (
+            0x00000001 | 0x00200000 if directory else 0x00000040
+        )
         status = ctypes.WinDLL("ntdll").NtCreateFile(
             ctypes.byref(handle),
             desired_access,
@@ -559,6 +565,34 @@ class _WindowsPinnedDirectory:
         if handle.value is None:
             raise OSError(errno.EIO, "relative NT file operation returned no handle")
         return handle.value
+
+    @staticmethod
+    def is_reparse_point(handle: int) -> bool:
+        from ctypes import wintypes
+
+        class FileAttributeTagInfo(ctypes.Structure):
+            _fields_ = [
+                ("FileAttributes", wintypes.DWORD),
+                ("ReparseTag", wintypes.DWORD),
+            ]
+
+        information = FileAttributeTagInfo()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetFileInformationByHandleEx.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        ok = kernel32.GetFileInformationByHandleEx(
+            wintypes.HANDLE(handle),
+            9,  # FileAttributeTagInfo
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        )
+        if not ok:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return bool(information.FileAttributes & 0x00000400)
 
     @staticmethod
     def link_no_replace(file_fd: int, parent: int, target_name: str) -> None:
