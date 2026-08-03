@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import app.features.markdown_cleaning.publisher as publisher_module
 from app.features.markdown_cleaning.processors.errors import (
     MarkdownCleaningErrorCode,
     MarkdownCleaningProcessorError,
@@ -248,15 +249,81 @@ def test_publish_fails_when_hardlink_is_unavailable(
     prepared = publisher.prepare(source)
     target = tmp_path / "result.md"
 
-    def _unsupported_link(_: Path, __: Path) -> None:
+    def _unsupported_link(*_args: object, **_kwargs: object) -> None:
         raise OSError("hardlink unsupported")
 
-    monkeypatch.setattr(os, "link", _unsupported_link)
+    if os.name == "nt":
+        monkeypatch.setattr(
+            publisher_module._WindowsPinnedDirectory,
+            "link_no_replace",
+            _unsupported_link,
+        )
+    else:
+        monkeypatch.setattr(os, "link", _unsupported_link)
 
     with pytest.raises(MarkdownCleaningProcessorError) as error:
         publisher.publish(prepared, target, allow_recovery=False)
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+
+
+def test_publish_uses_directory_fd_for_hardlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("ok", encoding="utf-8")
+    publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path,))
+    prepared = publisher.prepare(source)
+    original_link = os.link
+    observed = {"src_dir_fd": None, "dst_dir_fd": None}
+
+    def _spy_link(
+        source_name: str,
+        target_name: str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        observed["src_dir_fd"] = src_dir_fd
+        observed["dst_dir_fd"] = dst_dir_fd
+        return original_link(
+            source_name,
+            target_name,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+
+    monkeypatch.setattr(os, "link", _spy_link)
+
+    result = publisher.publish(prepared, tmp_path / "result.md", allow_recovery=False)
+
+    assert result.path == tmp_path / "result.md"
+    if os.name != "nt":
+        assert observed["src_dir_fd"] is not None
+        assert observed["dst_dir_fd"] is not None
+
+
+def test_publish_calls_fsync_for_output_and_parent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("ok", encoding="utf-8")
+    publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path,))
+    prepared = publisher.prepare(source)
+    calls = []
+
+    def _fake_fsync(descriptor: int) -> None:
+        calls.append(descriptor)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(publisher_module.os, "fsync", _fake_fsync)
+    try:
+        publisher.publish(prepared, tmp_path / "result.md", allow_recovery=False)
+    finally:
+        monkeypatch.undo()
+
+    assert len(calls) == 2
 
 
 def test_publish_rejects_target_escape_via_output_symlink(
@@ -283,30 +350,89 @@ def test_publish_rejects_target_escape_via_output_symlink(
     assert "不在允许输出目录" in error.value.safe_message
 
 
-def test_publish_rejects_resolved_target_outside_output_root(
+def test_publish_rejects_target_parent_open_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source = tmp_path / "source.md"
     source.write_text("ok", encoding="utf-8")
     output_root = tmp_path / "output"
-    outside = tmp_path / "outside" / "result.md"
     output_root.mkdir()
-    output_root_provider = output_root / "result.md"
+    target = output_root / "result.md"
     publisher = MarkdownCleaningResultPublisher(output_roots=(output_root,))
     prepared = publisher.prepare(source)
-    original_resolve = Path.resolve
+    original_open_directory = (
+        publisher_module.MarkdownCleaningResultPublisher._open_directory_no_follow
+    )
 
-    def fake_resolve(self: Path, strict: bool = False) -> Path:
-        if self == output_root_provider:
-            return outside
-        return original_resolve(self, strict=strict)
+    def _open_directory_no_follow(path: Path) -> int:
+        if path == output_root:
+            raise OSError("output root swapped")
+        return original_open_directory(path)
 
-    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    monkeypatch.setattr(
+        publisher_module.MarkdownCleaningResultPublisher,
+        "_open_directory_no_follow",
+        _open_directory_no_follow,
+    )
 
     with pytest.raises(MarkdownCleaningProcessorError) as error:
-        publisher.publish(prepared, output_root_provider, allow_recovery=False)
+        publisher.publish(prepared, target, allow_recovery=False)
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
-    assert "不在允许输出目录" in error.value.safe_message
-    assert "outside" not in str(error.value)
+
+
+def test_publish_propagates_unexpected_fsync_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("ok", encoding="utf-8")
+    publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path,))
+    prepared = publisher.prepare(source)
+
+    def _fail_fsync(_descriptor: int) -> None:
+        raise OSError(5, "unexpected fsync failure")
+
+    monkeypatch.setattr(publisher_module.os, "fsync", _fail_fsync)
+    with pytest.raises(OSError, match="unexpected fsync failure"):
+        publisher.publish(prepared, tmp_path / "result.md", allow_recovery=False)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction race regression")
+def test_publish_pins_parent_when_path_is_swapped_to_junction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("safe", encoding="utf-8")
+    output = tmp_path / "output"
+    pinned = tmp_path / "pinned"
+    outside = tmp_path / "outside"
+    output.mkdir()
+    outside.mkdir()
+    publisher = MarkdownCleaningResultPublisher(output_roots=(output,))
+    prepared = publisher.prepare(source)
+    original_copy = publisher._copy_to_exclusive_temporary
+
+    def _swap_then_copy(*args: object, **kwargs: object) -> int:
+        output.rename(pinned)
+        import subprocess
+
+        completed = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(output), str(outside)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            pytest.skip("junction creation unavailable")
+        return original_copy(*args, **kwargs)
+
+    monkeypatch.setattr(publisher, "_copy_to_exclusive_temporary", _swap_then_copy)
+    published = publisher.publish(prepared, output / "result.md", allow_recovery=False)
+
+    assert published.sha256 == prepared.sha256
+    assert (pinned / "result.md").read_text(encoding="utf-8") == "safe"
+    assert not (outside / "result.md").exists()
+    assert not list(outside.iterdir())

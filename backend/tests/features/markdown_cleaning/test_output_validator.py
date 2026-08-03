@@ -39,25 +39,29 @@ def _make_result(
     expected_input_sha: str | None = None,
 ) -> ProcessorResult:
     if output_payload is None:
-        output_payload = b"cleaned"
+        output_payload = b"cleaned\n"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_bytes(output_payload)
-    return ProcessorResult(
-        output_path=output_file,
-        input_sha256=hashlib.sha256(input_payload).hexdigest(),
-        output_sha256=hashlib.sha256(output_payload).hexdigest(),
-        contract_version=contract_version,
-        summary=_make_summary(),
-        input_bytes=len(input_payload),
-        output_bytes=len(output_payload),
-    ) if expected_input_sha is None else ProcessorResult(
-        output_path=output_file,
-        input_sha256=expected_input_sha,
-        output_sha256=hashlib.sha256(output_payload).hexdigest(),
-        contract_version=contract_version,
-        summary=_make_summary(),
-        input_bytes=len(input_payload),
-        output_bytes=len(output_payload),
+    return (
+        ProcessorResult(
+            output_path=output_file,
+            input_sha256=hashlib.sha256(input_payload).hexdigest(),
+            output_sha256=hashlib.sha256(output_payload).hexdigest(),
+            contract_version=contract_version,
+            summary=_make_summary(),
+            input_bytes=len(input_payload),
+            output_bytes=len(output_payload),
+        )
+        if expected_input_sha is None
+        else ProcessorResult(
+            output_path=output_file,
+            input_sha256=expected_input_sha,
+            output_sha256=hashlib.sha256(output_payload).hexdigest(),
+            contract_version=contract_version,
+            summary=_make_summary(),
+            input_bytes=len(input_payload),
+            output_bytes=len(output_payload),
+        )
     )
 
 
@@ -66,7 +70,7 @@ def test_validate_pipeline_output_accepts_valid_result(
 ) -> None:
     source = tmp_path / "source.txt"
     output_path = tmp_path / "result.md"
-    payload = b"cleaned"
+    payload = b"cleaned\n"
     source.write_bytes(b"input-content")
 
     validated = validate_pipeline_output(
@@ -124,7 +128,9 @@ def test_validator_rejects_missing_expected_input_digest(
     result = _make_result(tmp_path / "result.md", input_payload=source.read_bytes())
 
     with pytest.raises(MarkdownCleaningProcessorError) as error:
-        validate_pipeline_output(result, expected_input_sha256="", max_output_bytes=1024)
+        validate_pipeline_output(
+            result, expected_input_sha256="", max_output_bytes=1024
+        )
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
     assert "缺少输入摘要" in error.value.safe_message
@@ -228,10 +234,13 @@ def test_validator_rejects_output_read_failure(
     result = _make_result(output_file, input_payload=source.read_bytes())
     expected_input_sha = hashlib.sha256(source.read_bytes()).hexdigest()
 
-    def _boom(_: Path) -> bytes:
+    def _boom(*_args, **_kwargs) -> None:
         raise OSError("io error")
 
-    monkeypatch.setattr(Path, "read_bytes", _boom)
+    monkeypatch.setattr(
+        "app.features.markdown_cleaning.output_validator._open_path_nofollow",
+        _boom,
+    )
     with pytest.raises(MarkdownCleaningProcessorError) as error:
         validate_pipeline_output(
             result,
@@ -269,10 +278,10 @@ def test_validator_rechecks_output_hash_and_length_from_actual_file(
     source = tmp_path / "source.md"
     source.write_text("input", encoding="utf-8")
     output_file = tmp_path / "result.md"
-    output_file.write_text("cleaned", encoding="utf-8")
+    output_file.write_text("cleaned\n", encoding="utf-8")
     result = _make_result(output_file, input_payload=source.read_bytes())
     expected_input_sha = hashlib.sha256(source.read_bytes()).hexdigest()
-    output_file.write_text("tamperd", encoding="utf-8")
+    output_file.write_text("tamperd!\n", encoding="utf-8")
 
     with pytest.raises(MarkdownCleaningProcessorError) as error:
         validate_pipeline_output(
@@ -313,3 +322,258 @@ def test_output_validator_rejects_invalid_summary_fields(
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
     assert "id_card_redactions" in error.value.safe_message
+
+
+def test_validator_rejects_expected_output_path_mismatch(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    output.write_text("cleaned\n", encoding="utf-8")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"cleaned\n",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+            expected_output_path=tmp_path / "other.md",
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "预期" in error.value.safe_message
+
+
+def test_validator_rejects_source_path_digest_mismatch(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    result_source = tmp_path / "source_result.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    result_source.write_text("other", encoding="utf-8")
+    output.write_text("cleaned\n", encoding="utf-8")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"cleaned\n",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+            source_path=result_source,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+
+
+def test_validator_rejects_output_with_invalid_utf8(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    output.write_bytes(b"cleaned\xff\n")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"cleaned\xff\n",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "UTF-8" in error.value.safe_message
+
+
+def test_validator_rejects_output_with_bom(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    output.write_bytes(b"\xef\xbb\xbfcleaned\n")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"\xef\xbb\xbfcleaned\n",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "BOM" in error.value.safe_message
+
+
+def test_validator_rejects_output_with_crlf_newline(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    output.write_bytes(b"cleaned\r\n")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"cleaned\r\n",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "换行" in error.value.safe_message
+
+
+def test_validator_rejects_output_with_no_terminal_newline(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    output.write_text("cleaned", encoding="utf-8")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"cleaned",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "换行约束" in error.value.safe_message
+
+
+def test_validator_rejects_extra_terminal_newline(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    output.write_text("cleaned\n\n", encoding="utf-8")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"cleaned\n\n",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "换行约束" in error.value.safe_message
+
+
+def test_validator_rejects_output_matching_protected_baseline(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input", encoding="utf-8")
+    output.write_text("cleaned\n", encoding="utf-8")
+    protected_output_hash = hashlib.sha256(b"cleaned\n").hexdigest()
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output,
+                input_payload=source.read_bytes(),
+                output_payload=b"cleaned\n",
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+            protected_baseline=protected_output_hash,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "受保护基线" in error.value.safe_message
+
+
+def test_validator_rejects_changed_protected_regions(tmp_path: Path) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("before `secret`\n\n```txt\nkeep\n```\n", encoding="utf-8")
+    payload = b"before `changed`\n\n```txt\nkeep\n```\n"
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output, input_payload=source.read_bytes(), output_payload=payload
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+            expected_output_path=output,
+            source_path=source,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "保护区" in error.value.safe_message
+
+
+def test_validator_rejects_changed_protected_region_order_and_parent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("- `first`\n- `second`\n", encoding="utf-8")
+    payload = b"`second`\n\n`first`\n"
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output, input_payload=source.read_bytes(), output_payload=payload
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+            expected_output_path=output,
+            source_path=source,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "保护区" in error.value.safe_message
+
+
+@pytest.mark.parametrize("token", ("__MD_INTERNAL_0__", "\ue000MD_CLEAN_0\ue001"))
+def test_validator_rejects_internal_tokens(tmp_path: Path, token: str) -> None:
+    source = tmp_path / "source.md"
+    output = tmp_path / "result.md"
+    source.write_text("input\n", encoding="utf-8")
+    payload = f"{token}\n".encode()
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(
+                output, input_payload=source.read_bytes(), output_payload=payload
+            ),
+            expected_input_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            max_output_bytes=1024,
+            expected_output_path=output,
+            source_path=source,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "内部标记" in error.value.safe_message

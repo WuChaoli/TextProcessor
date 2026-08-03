@@ -1,5 +1,10 @@
+from __future__ import annotations
+
+import ctypes
+import errno
 import hashlib
 import os
+import stat
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,6 +13,11 @@ from app.features.markdown_cleaning.processors.errors import (
     MarkdownCleaningErrorCode,
     MarkdownCleaningProcessorError,
 )
+
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+_O_BINARY = getattr(os, "O_BINARY", 0)
 
 
 @dataclass(frozen=True)
@@ -39,19 +49,23 @@ class MarkdownCleaningResultPublisher:
             raise ValueError("max_output_bytes 必须为正整数")
         if copy_chunk_bytes <= 0:
             raise ValueError("copy_chunk_bytes 必须为正整数")
-        self._output_roots = tuple(root.resolve(strict=False) for root in output_roots)
+        self._output_roots = tuple(self._normalize_root(root) for root in output_roots)
         self._max_output_bytes = max_output_bytes
         self._copy_chunk_bytes = copy_chunk_bytes
 
     def prepare(self, source: Path) -> PreparedMarkdownResult:
         try:
-            content = source.read_bytes()
+            descriptor = os.open(
+                source,
+                os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC | _O_BINARY,
+            )
+            with os.fdopen(descriptor, "rb") as stream:
+                content = stream.read()
             content.decode("utf-8", errors="strict")
         except OSError as exc:
             raise _invalid_output("清洗结果读取失败") from exc
         except UnicodeDecodeError as exc:
             raise _invalid_output("清洗结果包含非法 UTF-8") from exc
-
         if not content:
             raise _invalid_output("清洗结果为空")
         if self._max_output_bytes is not None and len(content) > self._max_output_bytes:
@@ -69,113 +83,384 @@ class MarkdownCleaningResultPublisher:
         *,
         allow_recovery: bool,
     ) -> PublishedMarkdownResult:
-        target = self._normalize_target(target)
-        if target.exists():
-            return self._resolve_existing(prepared, target, allow_recovery=allow_recovery)
-
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = target.parent / f".markdown-cleaning-publish-{uuid.uuid4()}.tmp"
+        normalized_target = self._normalize_target(target)
+        normalized_target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         try:
-            self._copy_to_exclusive_temporary(prepared.path, temporary)
-            try:
-                os.link(temporary, target)
-            except OSError as exc:
-                if target.exists():
-                    return self._resolve_existing(
-                        prepared,
-                        target,
-                        allow_recovery=allow_recovery,
-                    )
-                raise _output_conflict("清洗结果发布失败") from exc
-            finally:
-                self._fsync_directory(target.parent)
-        except MarkdownCleaningProcessorError:
-            raise
+            parent_handle = type(self)._open_directory_no_follow(
+                normalized_target.parent
+            )
         except OSError as exc:
-            if target.exists():
-                return self._resolve_existing(
+            raise _output_conflict("目标目录无法安全打开") from exc
+        temporary_name = f".markdown-cleaning-publish-{uuid.uuid4()}.tmp"
+        temporary_fd: int | None = None
+        try:
+            try:
+                existing_fd = self._open_relative(parent_handle, normalized_target.name)
+            except FileNotFoundError:
+                existing_fd = None
+            if existing_fd is not None:
+                return self._resolve_existing_fd(
                     prepared,
-                    target,
+                    normalized_target,
+                    existing_fd,
                     allow_recovery=allow_recovery,
                 )
-            raise _output_conflict("清洗结果发布失败") from exc
-        finally:
-            temporary.unlink(missing_ok=True)
 
-        return PublishedMarkdownResult(
-            path=target,
-            sha256=prepared.sha256,
-            size_bytes=prepared.size_bytes,
-            recovered=False,
-        )
-
-    def _fsync_directory(self, directory: Path) -> None:
-        try:
-            fd = os.open(directory, os.O_RDONLY)
-        except OSError:
-            return
-        try:
-            os.fsync(fd)
+            temporary_fd = self._copy_to_exclusive_temporary(
+                prepared.path,
+                normalized_target.parent,
+                temporary_name,
+                parent_fd=parent_handle,
+            )
+            try:
+                self._link_no_replace(
+                    parent_handle,
+                    temporary_name,
+                    normalized_target.name,
+                    temporary_fd,
+                )
+            except FileExistsError:
+                existing_fd = self._open_relative(parent_handle, normalized_target.name)
+                return self._resolve_existing_fd(
+                    prepared,
+                    normalized_target,
+                    existing_fd,
+                    allow_recovery=allow_recovery,
+                )
+            self._fsync_fd(temporary_fd)
+            self._fsync_directory(parent_handle)
+            return PublishedMarkdownResult(
+                path=normalized_target,
+                sha256=prepared.sha256,
+                size_bytes=prepared.size_bytes,
+                recovered=False,
+            )
+        except MarkdownCleaningProcessorError:
+            raise
         finally:
-            os.close(fd)
+            if temporary_fd is not None:
+                self._remove_temporary(parent_handle, temporary_name, temporary_fd)
+                os.close(temporary_fd)
+            self._close_parent(parent_handle)
+
+    @classmethod
+    def _normalize_root(cls, root: Path) -> Path:
+        normalized_root = root.resolve(strict=False)
+        if not normalized_root.is_absolute():
+            raise ValueError("输出根目录必须是绝对路径")
+        if cls._has_link_or_junction_component(normalized_root):
+            raise ValueError("输出根目录不安全")
+        return normalized_root
 
     def _normalize_target(self, target: Path) -> Path:
-        normalized = target.resolve(strict=False)
-        if (
-            not normalized.is_absolute()
-            or normalized.suffix.lower() != ".md"
-            or not any(
-                normalized == root or normalized.is_relative_to(root)
-                for root in self._output_roots
-            )
+        if not target.is_absolute():
+            raise _output_conflict("目标路径不在允许输出目录")
+        normalized = Path(os.path.abspath(target))
+        if normalized.suffix.lower() != ".md" or not any(
+            normalized.is_relative_to(root) for root in self._output_roots
         ):
+            raise _output_conflict("目标路径不在允许输出目录")
+        if self._has_link_or_junction_component(normalized.parent):
             raise _output_conflict("目标路径不在允许输出目录")
         return normalized
 
-    def _resolve_existing(
-        self,
+    @classmethod
+    def _has_link_or_junction_component(cls, path: Path) -> bool:
+        absolute = Path(os.path.abspath(path))
+        cursor = Path(absolute.anchor)
+        for part in absolute.parts[1:]:
+            cursor /= part
+            if cursor.is_symlink() or (
+                hasattr(os.path, "isjunction") and os.path.isjunction(cursor)
+            ):
+                return True
+        return False
+
+    @staticmethod
+    def _is_regular_file(descriptor: int) -> None:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise _output_conflict("结果文件不安全")
+
+    @staticmethod
+    def _open_directory_no_follow(path: Path) -> int:
+        if os.name != "nt":
+            return os.open(
+                path,
+                os.O_RDONLY | _O_CLOEXEC | _O_DIRECTORY | _O_NOFOLLOW,
+            )
+        return _WindowsPinnedDirectory.open(path)
+
+    @staticmethod
+    def _close_parent(parent_handle: int) -> None:
+        if os.name == "nt":
+            _WindowsPinnedDirectory.close(parent_handle)
+        else:
+            os.close(parent_handle)
+
+    @staticmethod
+    def _open_relative(parent_handle: int, name: str) -> int:
+        if os.name == "nt":
+            return _WindowsPinnedDirectory.open_relative(
+                parent_handle, name, create=False
+            )
+        return os.open(
+            name,
+            os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC | _O_BINARY,
+            dir_fd=parent_handle,
+        )
+
+    @classmethod
+    def _resolve_existing_fd(
+        cls,
         prepared: PreparedMarkdownResult,
         target: Path,
+        descriptor: int,
         *,
         allow_recovery: bool,
     ) -> PublishedMarkdownResult:
-        if not allow_recovery:
-            raise _output_conflict("结果文件已存在")
         try:
-            current = target.read_bytes()
-        except OSError as exc:
-            raise _output_conflict("结果文件读取失败") from exc
-        if (
-            len(current) == prepared.size_bytes
-            and hashlib.sha256(current).hexdigest() == prepared.sha256
-        ):
-            return PublishedMarkdownResult(
-                path=target,
-                sha256=prepared.sha256,
-                size_bytes=prepared.size_bytes,
-                recovered=True,
-            )
-        raise _output_conflict("结果文件已存在")
-
-    def _copy_to_exclusive_temporary(self, source: Path, temporary: Path) -> None:
-        descriptor = os.open(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
-        )
-        try:
-            with (
-                source.open("rb") as input_file,
-                os.fdopen(descriptor, "wb") as output_file,
+            if not allow_recovery:
+                raise _output_conflict("结果文件已存在")
+            cls._is_regular_file(descriptor)
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                current = stream.read()
+            if (
+                len(current) == prepared.size_bytes
+                and hashlib.sha256(current).hexdigest() == prepared.sha256
             ):
-                descriptor = -1
-                while chunk := input_file.read(self._copy_chunk_bytes):
-                    output_file.write(chunk)
-                output_file.flush()
-                os.fsync(output_file.fileno())
+                return PublishedMarkdownResult(
+                    path=target,
+                    sha256=prepared.sha256,
+                    size_bytes=prepared.size_bytes,
+                    recovered=True,
+                )
+            raise _output_conflict("结果文件已存在")
         finally:
-            if descriptor >= 0:
-                os.close(descriptor)
+            os.close(descriptor)
+
+    def _copy_to_exclusive_temporary(
+        self,
+        source: Path,
+        target_parent: Path,
+        temporary_name: str,
+        parent_fd: int | None = None,
+    ) -> int:
+        assert parent_fd is not None
+        if os.name == "nt":
+            descriptor = _WindowsPinnedDirectory.open_relative(
+                parent_fd,
+                temporary_name,
+                create=True,
+            )
+        else:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_CLOEXEC | _O_BINARY,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        try:
+            source_fd = os.open(
+                source, os.O_RDONLY | _O_NOFOLLOW | _O_CLOEXEC | _O_BINARY
+            )
+            with os.fdopen(source_fd, "rb") as input_file:
+                while chunk := input_file.read(self._copy_chunk_bytes):
+                    os.write(descriptor, chunk)
+            self._fsync_fd(descriptor)
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    @staticmethod
+    def _link_no_replace(
+        parent_handle: int,
+        temporary_name: str,
+        target_name: str,
+        temporary_fd: int,
+    ) -> None:
+        try:
+            if os.name == "nt":
+                _WindowsPinnedDirectory.link_no_replace(
+                    temporary_fd,
+                    parent_handle,
+                    target_name,
+                )
+            else:
+                os.link(
+                    temporary_name,
+                    target_name,
+                    src_dir_fd=parent_handle,
+                    dst_dir_fd=parent_handle,
+                )
+        except OSError as exc:
+            if exc.errno == errno.EEXIST:
+                raise FileExistsError(errno.EEXIST, "target exists") from exc
+            raise _output_conflict("文件系统不支持安全的无覆盖发布") from exc
+
+    @staticmethod
+    def _remove_temporary(parent_handle: int, name: str, descriptor: int) -> None:
+        try:
+            if os.name == "nt":
+                _WindowsPinnedDirectory.mark_delete(descriptor)
+            else:
+                os.unlink(name, dir_fd=parent_handle)
+        except OSError:
+            pass
+
+    @staticmethod
+    def _fsync_fd(descriptor: int) -> None:
+        os.fsync(descriptor)
+
+    @classmethod
+    def _fsync_directory(cls, parent_handle: int) -> None:
+        if os.name != "nt":
+            cls._fsync_fd(parent_handle)
+
+
+class _WindowsPinnedDirectory:
+    """Windows NTFS operations relative to a pinned, non-reparse parent handle."""
+
+    @staticmethod
+    def open(path: Path) -> int:
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.CreateFileW(
+            str(path),
+            0x80000000 | 0x40000000 | 0x00010000,  # read/write/delete
+            0x00000001 | 0x00000002 | 0x00000004,
+            None,
+            3,
+            0x02000000 | 0x00200000,  # BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+            None,
+        )
+        invalid = wintypes.HANDLE(-1).value
+        if handle == invalid:
+            raise ctypes.WinError(ctypes.get_last_error())
+        return int(handle)
+
+    @staticmethod
+    def close(handle: int) -> None:
+        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(handle)
+
+    @staticmethod
+    def open_relative(parent: int, name: str, *, create: bool) -> int:
+        import msvcrt
+        from ctypes import wintypes
+
+        class UnicodeString(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.USHORT),
+                ("MaximumLength", wintypes.USHORT),
+                ("Buffer", wintypes.LPWSTR),
+            ]
+
+        class ObjectAttributes(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.ULONG),
+                ("RootDirectory", wintypes.HANDLE),
+                ("ObjectName", ctypes.POINTER(UnicodeString)),
+                ("Attributes", wintypes.ULONG),
+                ("SecurityDescriptor", wintypes.LPVOID),
+                ("SecurityQualityOfService", wintypes.LPVOID),
+            ]
+
+        buffer = ctypes.create_unicode_buffer(name)
+        string = UnicodeString(
+            len(name) * 2,
+            (len(name) + 1) * 2,
+            ctypes.cast(buffer, wintypes.LPWSTR),
+        )
+        attributes = ObjectAttributes(
+            ctypes.sizeof(ObjectAttributes),
+            parent,
+            ctypes.pointer(string),
+            0x40,  # OBJ_CASE_INSENSITIVE
+            None,
+            None,
+        )
+        handle = wintypes.HANDLE()
+        iosb = (ctypes.c_size_t * 2)()
+        status = ctypes.WinDLL("ntdll").NtCreateFile(
+            ctypes.byref(handle),
+            0x0012019F if create else 0x00120089,
+            ctypes.byref(attributes),
+            ctypes.byref(iosb),
+            None,
+            0,
+            0x00000001 | 0x00000002 | 0x00000004,
+            2 if create else 1,  # FILE_CREATE / FILE_OPEN
+            0x00000020 | 0x00000040,  # synchronous, non-directory
+            None,
+            0,
+        )
+        if status < 0:
+            if status & 0xFFFFFFFF in {0xC0000034, 0xC000003A}:
+                raise FileNotFoundError(errno.ENOENT, "entry missing")
+            if status & 0xFFFFFFFF in {0xC0000035, 0xC00000BA}:
+                raise FileExistsError(errno.EEXIST, "entry exists")
+            raise OSError(errno.EIO, "relative NT file operation failed")
+        flags = os.O_BINARY | (os.O_RDWR if create else os.O_RDONLY)
+        if handle.value is None:
+            raise OSError(errno.EIO, "relative NT file operation returned no handle")
+        return msvcrt.open_osfhandle(handle.value, flags)
+
+    @staticmethod
+    def link_no_replace(file_fd: int, parent: int, target_name: str) -> None:
+        import msvcrt
+        from ctypes import wintypes
+
+        name_bytes = target_name.encode("utf-16-le")
+
+        class FileLinkInfoHeader(ctypes.Structure):
+            _fields_ = [
+                ("ReplaceIfExists", wintypes.BOOLEAN),
+                ("RootDirectory", wintypes.HANDLE),
+                ("FileNameLength", wintypes.DWORD),
+            ]
+
+        name_offset = FileLinkInfoHeader.FileNameLength.offset + ctypes.sizeof(
+            wintypes.DWORD
+        )
+        size = name_offset + len(name_bytes)
+        buffer = ctypes.create_string_buffer(size)
+        header = FileLinkInfoHeader.from_buffer(buffer)
+        header.ReplaceIfExists = False
+        header.RootDirectory = parent
+        header.FileNameLength = len(name_bytes)
+        ctypes.memmove(
+            ctypes.addressof(buffer) + name_offset,
+            name_bytes,
+            len(name_bytes),
+        )
+        iosb = (ctypes.c_size_t * 2)()
+        status = ctypes.WinDLL("ntdll").NtSetInformationFile(
+            msvcrt.get_osfhandle(file_fd),
+            ctypes.byref(iosb),
+            buffer,
+            size,
+            11,  # FileLinkInformation
+        )
+        if status < 0:
+            error = status & 0xFFFFFFFF
+            if error in {0xC0000035, 0xC00000BA}:
+                raise FileExistsError(errno.EEXIST, "target exists")
+            raise OSError(errno.ENOTSUP, "safe hardlink unavailable")
+
+    @staticmethod
+    def mark_delete(file_fd: int) -> None:
+        import msvcrt
+
+        delete = ctypes.c_ubyte(1)
+        ok = ctypes.WinDLL("kernel32", use_last_error=True).SetFileInformationByHandle(
+            msvcrt.get_osfhandle(file_fd),
+            4,  # FileDispositionInfo
+            ctypes.byref(delete),
+            ctypes.sizeof(delete),
+        )
+        if not ok:
+            raise ctypes.WinError(ctypes.get_last_error())
 
 
 def _invalid_output(message: str) -> MarkdownCleaningProcessorError:
