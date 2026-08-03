@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Engine, func, or_, update
+from sqlalchemy import Engine, and_, func, or_, update
 from sqlalchemy import select as sa_select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +36,21 @@ class ConditionalMarkdownCleaningUpdateFailed(RuntimeError):
 
 _local_lock_guard = threading.Lock()
 _local_locks: dict[int, threading.Lock] = {}
+
+
+def _require_aware_utc_datetime(value: datetime, *, field_name: str) -> None:
+    if value.tzinfo is None:
+        raise ValueError(f"{field_name} 必须包含时区信息")
+    if value.utcoffset() != timedelta(0):
+        raise ValueError(f"{field_name} 必须是 UTC 时间")
+
+
+def _recovery_due_before(
+    now: datetime,
+    *,
+    queue_recovery_interval_seconds: int,
+) -> datetime:
+    return now - timedelta(seconds=queue_recovery_interval_seconds)
 
 
 def request_fingerprint(
@@ -176,6 +191,8 @@ class MarkdownCleaningTaskRepository:
         *,
         now: datetime | None = None,
     ) -> bool:
+        if now is not None:
+            _require_aware_utc_datetime(now, field_name="now")
         dispatched_at = now or get_datetime_utc()
         statement = (
             update(MarkdownCleaningTask)
@@ -195,6 +212,7 @@ class MarkdownCleaningTaskRepository:
         now: datetime,
         lease_seconds: int,
     ) -> MarkdownCleaningTask | None:
+        _require_aware_utc_datetime(now, field_name="now")
         token = str(uuid.uuid7())
         statement = (
             update(MarkdownCleaningTask)
@@ -232,6 +250,7 @@ class MarkdownCleaningTaskRepository:
         now: datetime,
         lease_seconds: int,
     ) -> bool:
+        _require_aware_utc_datetime(now, field_name="now")
         statement = (
             update(MarkdownCleaningTask)
             .where(
@@ -256,11 +275,12 @@ class MarkdownCleaningTaskRepository:
         lease_token: str,
         progress_percent: int,
         processing_phase: str | None = None,
+        now: datetime | None = None,
     ) -> bool:
         values: dict[str, Any] = {"progress_percent": progress_percent}
         if processing_phase is not None:
             values["processing_phase"] = processing_phase
-        return self._update_for_running_lease(task_id, lease_token, **values)
+        return self._update_for_running_lease(task_id, lease_token, **values, now=now)
 
     def save_prepared(
         self,
@@ -269,6 +289,14 @@ class MarkdownCleaningTaskRepository:
         lease_token: str,
         staging_path: str,
         input_sha256: str,
+        prepared_output_sha256: str,
+        duplicate_paragraphs_removed: int | None = None,
+        phone_redaction_count: int | None = None,
+        id_card_redaction_count: int | None = None,
+        bank_card_redaction_count: int | None = None,
+        email_redaction_count: int | None = None,
+        ipv4_redaction_count: int | None = None,
+        formatting_change_count: int | None = None,
         progress_percent: int = 30,
         now: datetime | None = None,
     ) -> bool:
@@ -277,6 +305,14 @@ class MarkdownCleaningTaskRepository:
             lease_token,
             staging_path=staging_path,
             input_sha256=input_sha256,
+            prepared_output_sha256=prepared_output_sha256,
+            duplicate_paragraphs_removed=duplicate_paragraphs_removed,
+            phone_redaction_count=phone_redaction_count,
+            id_card_redaction_count=id_card_redaction_count,
+            bank_card_redaction_count=bank_card_redaction_count,
+            email_redaction_count=email_redaction_count,
+            ipv4_redaction_count=ipv4_redaction_count,
+            formatting_change_count=formatting_change_count,
             progress_percent=progress_percent,
             processing_phase=MarkdownCleaningProcessingPhase.SAVING_PREPARED,
             updated_at=now or get_datetime_utc(),
@@ -290,7 +326,6 @@ class MarkdownCleaningTaskRepository:
         lease_token: str,
         now: datetime,
         output_sha256: str | None = None,
-        prepared_output_sha256: str | None = None,
         duplicate_paragraphs_removed: int | None = None,
         phone_redaction_count: int | None = None,
         id_card_redaction_count: int | None = None,
@@ -299,6 +334,7 @@ class MarkdownCleaningTaskRepository:
         ipv4_redaction_count: int | None = None,
         formatting_change_count: int | None = None,
     ) -> bool:
+        _require_aware_utc_datetime(now, field_name="now")
         return self._update_for_running_lease(
             task_id,
             lease_token,
@@ -306,7 +342,6 @@ class MarkdownCleaningTaskRepository:
             processing_phase=MarkdownCleaningProcessingPhase.SUCCEEDED,
             progress_percent=100,
             output_sha256=output_sha256,
-            prepared_output_sha256=prepared_output_sha256,
             duplicate_paragraphs_removed=duplicate_paragraphs_removed,
             phone_redaction_count=phone_redaction_count,
             id_card_redaction_count=id_card_redaction_count,
@@ -321,6 +356,7 @@ class MarkdownCleaningTaskRepository:
             updated_at=now,
             now=now,
             clear_lease_token=True,
+            require_prepared_artifacts=True,
         )
 
     def mark_failed(
@@ -333,6 +369,7 @@ class MarkdownCleaningTaskRepository:
         error_message: str,
         processing_phase: str = MarkdownCleaningProcessingPhase.FAILED,
     ) -> bool:
+        _require_aware_utc_datetime(now, field_name="now")
         return self._update_for_running_lease(
             task_id,
             lease_token,
@@ -346,12 +383,52 @@ class MarkdownCleaningTaskRepository:
             clear_lease_token=True,
         )
 
+    def mark_recovery_dispatched(
+        self,
+        task_id: uuid.UUID,
+        *,
+        now: datetime,
+        queue_recovery_interval_seconds: int,
+    ) -> bool:
+        if queue_recovery_interval_seconds <= 0:
+            raise ValueError("queue_recovery_interval_seconds 必须大于 0")
+        _require_aware_utc_datetime(now, field_name="now")
+        recovery_before = _recovery_due_before(
+            now, queue_recovery_interval_seconds=queue_recovery_interval_seconds
+        )
+        statement = (
+            update(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.id) == task_id,
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.QUEUED,
+                col(MarkdownCleaningTask.attempt_count)
+                < col(MarkdownCleaningTask.max_attempts),
+                or_(
+                    and_(
+                        col(MarkdownCleaningTask.last_dispatched_at).is_(None),
+                        col(MarkdownCleaningTask.queued_at) <= recovery_before,
+                    ),
+                    col(MarkdownCleaningTask.last_dispatched_at) <= recovery_before,
+                ),
+            )
+            .values(last_dispatched_at=now, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        return self._execute_update(statement)
+
     def list_recoverable_queued(
         self,
         *,
         now: datetime,
+        queue_recovery_interval_seconds: int,
         limit: int,
     ) -> list[MarkdownCleaningTask]:
+        _require_aware_utc_datetime(now, field_name="now")
+        if queue_recovery_interval_seconds <= 0:
+            raise ValueError("queue_recovery_interval_seconds 必须大于 0")
+        recovery_before = _recovery_due_before(
+            now, queue_recovery_interval_seconds=queue_recovery_interval_seconds
+        )
         statement = (
             select(MarkdownCleaningTask)
             .where(
@@ -363,8 +440,21 @@ class MarkdownCleaningTaskRepository:
                     col(MarkdownCleaningTask.lease_expires_at).is_(None),
                     col(MarkdownCleaningTask.lease_expires_at) <= now,
                 ),
+                or_(
+                    and_(
+                        col(MarkdownCleaningTask.last_dispatched_at).is_(None),
+                        col(MarkdownCleaningTask.queued_at) <= recovery_before,
+                    ),
+                    col(MarkdownCleaningTask.last_dispatched_at) <= recovery_before,
+                ),
             )
-            .order_by(col(MarkdownCleaningTask.queued_at), col(MarkdownCleaningTask.id))
+            .order_by(
+                func.coalesce(
+                    col(MarkdownCleaningTask.last_dispatched_at),
+                    col(MarkdownCleaningTask.queued_at),
+                ),
+                col(MarkdownCleaningTask.id),
+            )
             .limit(limit)
         )
         return list(self._session.exec(statement).all())
@@ -375,6 +465,7 @@ class MarkdownCleaningTaskRepository:
         now: datetime,
         limit: int,
     ) -> list[MarkdownCleaningTask]:
+        _require_aware_utc_datetime(now, field_name="now")
         statement = (
             select(MarkdownCleaningTask)
             .where(
@@ -394,17 +485,15 @@ class MarkdownCleaningTaskRepository:
         return list(self._session.exec(statement).all())
 
     def count_active_running(self, *, now: datetime) -> int:
+        _require_aware_utc_datetime(now, field_name="now")
         statement = (
             select(func.count())
             .select_from(MarkdownCleaningTask)
             .where(
-            col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
-            col(MarkdownCleaningTask.lease_token).is_not(None),
-            or_(
-                col(MarkdownCleaningTask.lease_expires_at).is_(None),
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+                col(MarkdownCleaningTask.lease_token).is_not(None),
                 col(MarkdownCleaningTask.lease_expires_at) > now,
-            ),
-        )
+            )
         )
         return int(self._session.exec(statement).one())
 
@@ -446,6 +535,7 @@ class MarkdownCleaningTaskRepository:
         status: MarkdownCleaningTaskStatus | None = None,
         clear_lease_token: bool = False,
         now: datetime | None = None,
+        require_prepared_artifacts: bool = False,
         **values: Any,
     ) -> bool:
         if status is not None:
@@ -454,6 +544,7 @@ class MarkdownCleaningTaskRepository:
             values["lease_token"] = None
             values["lease_expires_at"] = None
         now = now or get_datetime_utc()
+        _require_aware_utc_datetime(now, field_name="now")
         values.setdefault("updated_at", now)
         statement = (
             update(MarkdownCleaningTask)
@@ -461,8 +552,16 @@ class MarkdownCleaningTaskRepository:
                 col(MarkdownCleaningTask.id) == task_id,
                 col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
                 col(MarkdownCleaningTask.lease_token) == lease_token,
-                col(MarkdownCleaningTask.lease_expires_at).is_not(None),
                 col(MarkdownCleaningTask.lease_expires_at) > now,
+                *(
+                    (
+                        col(MarkdownCleaningTask.staging_path).is_not(None),
+                        col(MarkdownCleaningTask.input_sha256).is_not(None),
+                        col(MarkdownCleaningTask.prepared_output_sha256).is_not(None),
+                    )
+                    if require_prepared_artifacts
+                    else ()
+                ),
             )
             .values(**values)
             .execution_options(synchronize_session=False)

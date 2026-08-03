@@ -26,6 +26,10 @@ def parse_cors(v: Any) -> list[str] | str:
     raise ValueError(v)
 
 
+def _has_parent_or_child_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
+
+
 class MinerUProfile(BaseModel):
     backend: str = "hybrid-engine"
     parse_method: str = "auto"
@@ -374,15 +378,32 @@ class Settings(BaseSettings):
         }
         if markdown_input_roots & markdown_output_roots:
             raise ValueError("Markdown 清洗输入根目录和输出根目录不能重叠")
-        if markdown_input_roots & set(self.MARKDOWN_CLEANING_WORKER.output_roots):
+        if any(
+            _has_parent_or_child_overlap(root, self.MARKDOWN_CLEANING_WORKER.staging_root)
+            for root in markdown_input_roots
+        ):
+            raise ValueError("Markdown 清洗输入根目录和 worker 根目录不能重叠")
+        if any(
+            _has_parent_or_child_overlap(root, self.MARKDOWN_CLEANING_WORKER.staging_root)
+            for root in markdown_output_roots
+        ):
+            raise ValueError("Markdown 清洗输出根目录和 worker 根目录不能重叠")
+        if any(
+            _has_parent_or_child_overlap(
+                root, worker_output_root
+            )
+            for root in markdown_input_roots
+            for worker_output_root in self.MARKDOWN_CLEANING_WORKER.output_roots
+        ):
             raise ValueError("Markdown 清洗输入根目录和输出任务根目录不能重叠")
-        if markdown_output_roots & set(self.MARKDOWN_CLEANING_WORKER.output_roots):
+        if any(
+            _has_parent_or_child_overlap(
+                root, worker_output_root
+            )
+            for root in markdown_output_roots
+            for worker_output_root in self.MARKDOWN_CLEANING_WORKER.output_roots
+        ):
             raise ValueError("Markdown 清洗输出根目录和输出任务根目录不能重叠")
-        if self.MARKDOWN_CLEANING_WORKER.staging_root in {
-            *markdown_input_roots,
-            *markdown_output_roots,
-        }:
-            raise ValueError("Markdown 清洗 worker staging 根目录不能与 API 根目录重叠")
         self.MARKDOWN_CLEANING_INPUT_ROOTS = sorted(markdown_input_roots, key=str)
         self.MARKDOWN_CLEANING_OUTPUT_ROOTS = sorted(markdown_output_roots, key=str)
         return self
