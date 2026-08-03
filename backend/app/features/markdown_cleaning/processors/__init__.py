@@ -8,6 +8,8 @@ from .errors import (
 from .markdown_parser import (
     MarkdownBlock,
     MarkdownBlockType,
+    MarkdownInlineLeaf,
+    MarkdownInlineLeafType,
     MarkdownParserAdapter,
     MarkdownParserError,
     MarkdownParserErrorCode,
@@ -26,6 +28,8 @@ __all__ = [
     "SourceSpan",
     "MarkdownBlock",
     "MarkdownBlockType",
+    "MarkdownInlineLeaf",
+    "MarkdownInlineLeafType",
     "MarkdownParseResult",
     "MarkdownParserAdapter",
     "MarkdownParserError",

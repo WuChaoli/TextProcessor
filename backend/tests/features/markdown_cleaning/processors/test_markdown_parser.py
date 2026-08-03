@@ -2,6 +2,7 @@ import pytest
 
 from app.features.markdown_cleaning.processors.markdown_parser import (
     MarkdownBlockType,
+    MarkdownInlineLeafType,
     MarkdownParserAdapter,
     MarkdownParserError,
     MarkdownParserErrorCode,
@@ -60,8 +61,65 @@ def test_inline_code_and_link_destination_are_protected() -> None:
         markdown.index("https://example.com/a") + len("https://example.com/a"),
     ) in spans
 
-    inline_types = [block.block_type for block in result.blocks]
-    assert MarkdownBlockType.INLINE_CODE not in inline_types
+    leaf_kinds = [leaf.kind for leaf in result.inline_leaves]
+    assert MarkdownInlineLeafType.CODE_INLINE in leaf_kinds
+    assert MarkdownInlineLeafType.LINK_DESTINATION in leaf_kinds
+
+
+def test_link_destination_supports_parenthesized_destination() -> None:
+    markdown = "[x](foo(bar)) and [y](foo\\)bar)"
+    result = MarkdownParserAdapter().parse(markdown)
+    destinations = [
+        markdown[leaf.source_span.start : leaf.source_span.end]
+        for leaf in result.inline_leaves
+        if leaf.kind == MarkdownInlineLeafType.LINK_DESTINATION
+    ]
+
+    assert "foo(bar)" in destinations
+    assert "foo\\)bar" in destinations
+
+
+def test_inline_code_double_delimiter_is_protected() -> None:
+    markdown = "`` `a` `` and `b`\n"
+    result = MarkdownParserAdapter().parse(markdown)
+
+    code_leaf_spans = [
+        (leaf.source_span.start, leaf.source_span.end)
+        for leaf in result.inline_leaves
+        if leaf.kind == MarkdownInlineLeafType.CODE_INLINE
+    ]
+
+    assert len(code_leaf_spans) >= 2
+    assert (0, len("`` `a` ``")) in code_leaf_spans
+    assert (markdown.index("`b`"), markdown.index("`b`") + 3) in code_leaf_spans
+
+
+def test_inline_leaf_records_include_parent_block_kind() -> None:
+    markdown = "[x](foo(bar)) <b>html</b> `` `a` ``\n"
+    result = MarkdownParserAdapter().parse(markdown)
+    blocks = {leaf.kind: leaf.parent_block_kind for leaf in result.inline_leaves}
+    assert blocks[MarkdownInlineLeafType.LINK_DESTINATION] == MarkdownBlockType.PARAGRAPH
+    assert blocks[MarkdownInlineLeafType.HTML_INLINE] == MarkdownBlockType.PARAGRAPH
+    assert blocks[MarkdownInlineLeafType.CODE_INLINE] == MarkdownBlockType.PARAGRAPH
+
+
+def test_html_inline_with_repeated_markup_stays_stable() -> None:
+    markdown = "A <b>Hi</b> and <b>Hi</b>"
+    result = MarkdownParserAdapter().parse(markdown)
+    html_spans = [
+        (leaf.source_span.start, leaf.source_span.end)
+        for leaf in result.inline_leaves
+        if leaf.kind == MarkdownInlineLeafType.HTML_INLINE
+    ]
+
+    expected = [
+        (2, 5),
+        (7, 11),
+        (16, 19),
+        (21, 25),
+    ]
+    assert html_spans == expected
+    assert html_spans == sorted(html_spans)
 
 
 def test_unclosed_fence_marked_invalid() -> None:

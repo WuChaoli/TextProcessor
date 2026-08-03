@@ -41,6 +41,13 @@ class MarkdownBlockType(StrEnum):
     BLANK = "blank"
 
 
+class MarkdownInlineLeafType(StrEnum):
+    CODE_INLINE = "code_inline"
+    HTML_INLINE = "html_inline"
+    LINK_DESTINATION = "link_destination"
+    IMAGE_DESTINATION = "image_destination"
+
+
 @dataclass(frozen=True, slots=True)
 class MarkdownBlock:
     block_type: MarkdownBlockType
@@ -50,9 +57,17 @@ class MarkdownBlock:
 
 
 @dataclass(frozen=True, slots=True)
+class MarkdownInlineLeaf:
+    kind: MarkdownInlineLeafType
+    parent_block_kind: MarkdownBlockType
+    source_span: SourceSpan
+
+
+@dataclass(frozen=True, slots=True)
 class MarkdownParseResult:
     blocks: tuple[MarkdownBlock, ...]
     protected_spans: tuple[SourceSpan, ...]
+    inline_leaves: tuple[MarkdownInlineLeaf, ...]
 
 
 _BLOCK_OPEN_TO_TYPE: dict[str, MarkdownBlockType] = {
@@ -77,7 +92,6 @@ _FENCED_CODE_OPEN = re.compile(
 _FENCED_CODE_CLOSE_PREFIX = re.compile(
     r"^[ \t]{0,3}(?P<marker>`{3,}|~{3,})(?P<trailing>[ \t]*)$",
 )
-_INLINE_CODE_ESCAPE_PATTERN = re.compile(r"(?<!`)(`+)([^`\\n]+?)\1(?!`)")
 
 
 class MarkdownParserAdapter:
@@ -104,6 +118,7 @@ class MarkdownParserAdapter:
 
         blocks: list[MarkdownBlock] = []
         protected: list[SourceSpan] = []
+        inline_leaves: list[MarkdownInlineLeaf] = []
         open_stack: list[tuple[MarkdownBlockType, int, int]] = []
 
         try:
@@ -211,16 +226,19 @@ class MarkdownParserAdapter:
                         ) from exc
 
                     base_offset = line_offsets[line_start] if line_start >= 0 else 0
-                    protected.extend(
-                        self._collect_inline_protected_spans(
+                    parent_block_kind = self._current_parent_block_kind(open_stack)
+                    inline_leaves.extend(
+                        self._collect_inline_leaves(
                             token.children,
                             token.content,
                             base_offset,
+                            parent_block_kind,
                         )
                     )
 
             blocks.extend(self._blank_blocks(lines, line_offsets))
             blocks.sort(key=lambda block: (block.source_span.start, block.source_span.end))
+            protected.extend(leaf.source_span for leaf in inline_leaves)
             protected_sorted = merge_source_spans(protected)
         except MarkdownParserError:
             raise
@@ -230,15 +248,28 @@ class MarkdownParserAdapter:
                 "Markdown parser execution failed",
             ) from exc
 
-        return MarkdownParseResult(blocks=tuple(blocks), protected_spans=protected_sorted)
+        return MarkdownParseResult(
+            blocks=tuple(blocks),
+            protected_spans=protected_sorted,
+            inline_leaves=tuple(inline_leaves),
+        )
 
-    def _collect_inline_protected_spans(
+    @staticmethod
+    def _current_parent_block_kind(
+        open_stack: list[tuple[MarkdownBlockType, int, int]],
+    ) -> MarkdownBlockType:
+        if not open_stack:
+            return MarkdownBlockType.PARAGRAPH
+        return open_stack[-1][0]
+
+    def _collect_inline_leaves(
         self,
         children: Sequence[object],
         inline_markdown: str,
         base_offset: int,
-    ) -> list[SourceSpan]:
-        spans: list[SourceSpan] = []
+        parent_block_kind: MarkdownBlockType,
+    ) -> list[MarkdownInlineLeaf]:
+        leaves: list[MarkdownInlineLeaf] = []
         cursor = 0
 
         for child in children:
@@ -252,22 +283,30 @@ class MarkdownParserAdapter:
                 )
                 if span is None:
                     continue
-                spans.append(span)
+                leaves.append(
+                    MarkdownInlineLeaf(
+                        kind=MarkdownInlineLeafType.CODE_INLINE,
+                        parent_block_kind=parent_block_kind,
+                        source_span=span,
+                    )
+                )
                 cursor = span.end - base_offset
                 continue
 
             if child_type == "html_inline":
                 content = getattr(child, "content", "")
-                if content:
-                    index = inline_markdown.find(content, cursor)
-                    if index >= 0:
-                        spans.append(
-                            SourceSpan(
-                                start=base_offset + index,
-                                end=base_offset + index + len(content),
-                            )
+                if not isinstance(content, str):
+                    continue
+                span = self._find_lexeme_span(inline_markdown, cursor, content)
+                if span is not None:
+                    leaves.append(
+                        MarkdownInlineLeaf(
+                            kind=MarkdownInlineLeafType.HTML_INLINE,
+                            parent_block_kind=parent_block_kind,
+                            source_span=span,
                         )
-                        cursor = index + len(content)
+                    )
+                    cursor = span.end - base_offset
                 continue
 
             if child_type == "link_open":
@@ -279,11 +318,16 @@ class MarkdownParserAdapter:
                         destination,
                     )
                     if span is not None:
-                        protected = SourceSpan(
-                            start=base_offset + span.start,
-                            end=base_offset + span.end,
+                        leaves.append(
+                            MarkdownInlineLeaf(
+                                kind=MarkdownInlineLeafType.LINK_DESTINATION,
+                                parent_block_kind=parent_block_kind,
+                                source_span=SourceSpan(
+                                    start=base_offset + span.start,
+                                    end=base_offset + span.end,
+                                ),
+                            )
                         )
-                        spans.append(protected)
                         cursor = span.end
                 continue
 
@@ -296,42 +340,104 @@ class MarkdownParserAdapter:
                         destination,
                     )
                     if span is not None:
-                        protected = SourceSpan(
-                            start=base_offset + span.start,
-                            end=base_offset + span.end,
+                        leaves.append(
+                            MarkdownInlineLeaf(
+                                kind=MarkdownInlineLeafType.IMAGE_DESTINATION,
+                                parent_block_kind=parent_block_kind,
+                                source_span=SourceSpan(
+                                    start=base_offset + span.start,
+                                    end=base_offset + span.end,
+                                ),
+                            )
                         )
-                        spans.append(protected)
                         cursor = span.end
+                continue
 
-        return spans
+        return leaves
 
     @staticmethod
+    def _find_lexeme_span(
+        inline_markdown: str,
+        cursor: int,
+        content: str,
+    ) -> SourceSpan | None:
+        if not content:
+            return None
+
+        index = inline_markdown.find(content, cursor)
+        if index < 0:
+            return None
+        return SourceSpan(start=index, end=index + len(content))
+
     def _extract_code_inline_span(
+        self,
         child: object,
         inline_markdown: str,
         cursor: int,
         base_offset: int,
     ) -> SourceSpan | None:
-        markup = getattr(child, "markup", "`")
+        markup = getattr(child, "markup", "")
         content = getattr(child, "content", "")
-        if not isinstance(markup, str) or not isinstance(content, str):
+        if not isinstance(markup, str) or not isinstance(content, str) or not markup:
             return None
 
-        pattern = re.escape(markup) + re.escape(content) + re.escape(markup)
-        match = re.compile(pattern).search(inline_markdown, cursor)
-        if match is None:
-            fallback = _INLINE_CODE_ESCAPE_PATTERN.search(
+        span = self._extract_token_span(inline_markdown, cursor, markup, content)
+        if span is None:
+            span = self._extract_code_span_by_delimiter_run(
                 inline_markdown,
                 cursor,
+                markup,
+                content,
             )
-            if fallback is None:
-                return None
-            match = fallback
 
-        return SourceSpan(
-            start=base_offset + match.start(),
-            end=base_offset + match.end(),
-        )
+        if span is None:
+            return None
+        return SourceSpan(start=base_offset + span[0], end=base_offset + span[1])
+
+    @staticmethod
+    def _extract_token_span(
+        inline_markdown: str,
+        cursor: int,
+        prefix: str,
+        content: str,
+    ) -> tuple[int, int] | None:
+        match = re.compile(
+            rf"{re.escape(prefix)}{re.escape(content)}{re.escape(prefix)}",
+        ).search(inline_markdown, cursor)
+        if match is None:
+            return None
+        return (match.start(), match.end())
+
+    @staticmethod
+    def _extract_code_span_by_delimiter_run(
+        inline_markdown: str,
+        cursor: int,
+        delimiter: str,
+        content: str,
+    ) -> tuple[int, int] | None:
+        open_cursor = cursor
+        delimiter_length = len(delimiter)
+
+        while True:
+            open_index = inline_markdown.find(delimiter, open_cursor)
+            if open_index < 0:
+                return None
+
+            search_from = open_index + delimiter_length
+            while True:
+                close_index = inline_markdown.find(delimiter, search_from)
+                if close_index < 0:
+                    break
+
+                candidate_body = inline_markdown[
+                    open_index + delimiter_length : close_index
+                ]
+                if _normalize_code_body(candidate_body) == content:
+                    return (open_index, close_index + delimiter_length)
+
+                search_from = close_index + delimiter_length
+
+            open_cursor = open_index + delimiter_length
 
     @staticmethod
     def _extract_destination_span(
@@ -339,22 +445,13 @@ class MarkdownParserAdapter:
         cursor: int,
         destination: str,
     ) -> SourceSpan | None:
-        if not destination:
-            return None
-
-        # Parse markdown link/image syntax from cursor and map destination span precisely.
         anchor = cursor
-        while anchor + 1 < len(inline_markdown):
-            if inline_markdown[anchor] == ")" or inline_markdown[anchor] == "\n":
+        while anchor < len(inline_markdown):
+            link_start = inline_markdown.find("](", anchor)
+            if link_start < 0:
                 return None
-            if inline_markdown[anchor] != "]":
-                anchor += 1
-                continue
-            if anchor + 1 >= len(inline_markdown) or inline_markdown[anchor + 1] != "(":
-                anchor += 1
-                continue
 
-            open_paren = anchor + 2
+            open_paren = link_start + 2
             while open_paren < len(inline_markdown) and inline_markdown[
                 open_paren
             ].isspace():
@@ -372,34 +469,55 @@ class MarkdownParserAdapter:
                 tail = close + 1
                 while tail < len(inline_markdown) and inline_markdown[tail].isspace():
                     tail += 1
-                if tail < len(inline_markdown) and inline_markdown[tail] == ")":
-                    return SourceSpan(start=start, end=end)
-                if destination == inline_markdown[start:end]:
+                if inline_markdown[tail : tail + 1] == ")":
+                    if _normalize_destination(inline_markdown[start:end]) == destination:
+                        return SourceSpan(start=start, end=end)
+                if _normalize_destination(inline_markdown[start:end]) == destination:
                     return SourceSpan(start=start, end=end)
             else:
                 start = open_paren
-                end = open_paren
-                while end < len(inline_markdown) and inline_markdown[end] not in (
-                    " ",
-                    "\t",
-                    ")",
-                    "\n",
-                    "\r",
-                ):
-                    end += 1
-                if destination == inline_markdown[start:end]:
-                    if end < len(inline_markdown) and inline_markdown[end] == " ":
-                        maybe = end
-                        while maybe < len(inline_markdown) and inline_markdown[
-                            maybe
-                        ].isspace():
-                            maybe += 1
-                        if maybe < len(inline_markdown) and inline_markdown[maybe] == ")":
-                            return SourceSpan(start=start, end=end)
-                    elif end < len(inline_markdown) and inline_markdown[end] == ")":
-                        return SourceSpan(start=start, end=end)
+                destination_end = MarkdownParserAdapter._scan_destination_end(
+                    inline_markdown,
+                    start,
+                )
+                if destination_end is None:
+                    anchor = link_start + 1
+                    continue
 
-            anchor += 1
+                raw_destination = inline_markdown[start:destination_end]
+                if _normalize_destination(raw_destination) == destination:
+                    return SourceSpan(start=start, end=destination_end)
+
+            anchor = link_start + 1
+
+        return None
+
+    @staticmethod
+    def _scan_destination_end(inline_markdown: str, start: int) -> int | None:
+        depth = 0
+        offset = start
+
+        while offset < len(inline_markdown):
+            char = inline_markdown[offset]
+            if char == "\\":
+                if offset + 1 < len(inline_markdown):
+                    offset += 2
+                    continue
+                return None
+
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    return offset
+                depth -= 1
+            elif char in ("\n", "\r"):
+                return None
+            elif depth == 0 and char.isspace():
+                return offset
+
+            offset += 1
+
         return None
 
     @staticmethod
@@ -437,10 +555,7 @@ class MarkdownParserAdapter:
                 current += 1
             blank_end = current
 
-            span = source_span_from_line_map(
-                [blank_start, blank_end],
-                line_offsets,
-            )
+            span = source_span_from_line_map([blank_start, blank_end], line_offsets)
             if span and span.start != span.end:
                 blanks.append(
                     MarkdownBlock(
@@ -482,3 +597,25 @@ class MarkdownParserAdapter:
                 MarkdownParserErrorCode.INVALID_MARKDOWN_INPUT,
                 "unclosed fenced code block",
             )
+
+
+def _normalize_destination(destination: str) -> str:
+    normalized: list[str] = []
+    cursor = 0
+    while cursor < len(destination):
+        char = destination[cursor]
+        if char == "\\" and cursor + 1 < len(destination):
+            cursor += 1
+            normalized.append(destination[cursor])
+            cursor += 1
+            continue
+
+        normalized.append(char)
+        cursor += 1
+    return "".join(normalized)
+
+
+def _normalize_code_body(body: str) -> str:
+    if len(body) >= 2 and body[0] == " " and body[-1] == " ":
+        return body[1:-1]
+    return body
