@@ -5,7 +5,7 @@ import os
 import stat
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +28,10 @@ def _has_link_component(path: Path) -> bool:
 
 class _StagingRootMissingError(Exception):
     """The configured staging root does not exist during cleanup."""
+
+
+class _WindowsReparseEntryRemovedError(Exception):
+    """A raced-in reparse entry was removed by its validated handle."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,19 +86,21 @@ class StagingLayout:
                 self._prepare_posix(root_fd)
 
     def _prepare_windows(self) -> None:
-        for directory in (self.root, self.input_dir, self.output_dir):
-            if _is_link_or_junction(directory):
-                raise ValueError("staging 任务目录不安全")
-            directory.mkdir(mode=0o700, parents=False, exist_ok=True)
-            if _is_link_or_junction(directory):
-                raise ValueError("staging 任务目录不安全")
-            try:
-                directory.chmod(0o700)
-            except OSError:
-                # Windows ACLs do not implement POSIX modes; containment remains enforced.
-                if os.name != "nt":
-                    raise
-        self._assert_safe()
+        with ExitStack() as handles:
+            for directory in (self.root, self.input_dir, self.output_dir):
+                directory.mkdir(mode=0o700, parents=False, exist_ok=True)
+                try:
+                    handle = self._open_windows_descendant_handle(directory)
+                except _WindowsReparseEntryRemovedError:
+                    raise ValueError("staging 任务目录不安全") from None
+                handles.callback(self._close_windows_handle, handle)
+                try:
+                    directory.chmod(0o700)
+                except OSError:
+                    # Windows ACLs do not implement POSIX modes; containment remains enforced.
+                    if os.name != "nt":
+                        raise
+            self._assert_safe()
 
     def _prepare_posix(self, root_fd: int) -> None:
         task_fd = self._open_or_create_directory(root_fd, str(self.task_id))
@@ -142,19 +148,40 @@ class StagingLayout:
 
     def _cleanup_windows(self) -> None:
         task_root = self.staging_root / str(self.task_id)
-        if _is_link_or_junction(task_root):
-            raise ValueError("staging 任务目录不安全")
-        if not task_root.exists():
+        if not os.path.lexists(task_root):
             return
         quarantine = self.staging_root / (f".cleanup-{self.task_id}-{uuid.uuid4().hex}")
         try:
             os.replace(task_root, quarantine)
         except FileNotFoundError:
             return
-        if _is_link_or_junction(quarantine):
-            self._unlink_reparse_entry(quarantine)
+        try:
+            quarantine_handle = self._open_windows_descendant_handle(quarantine)
+        except _WindowsReparseEntryRemovedError:
             raise ValueError("staging 任务目录在清理时被替换")
-        self._remove_tree_no_follow(quarantine)
+        self._remove_windows_tree_guarded(quarantine, quarantine_handle)
+
+    def _remove_windows_tree_guarded(self, root: Path, handle: int) -> None:
+        handle_open = True
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    child = Path(entry.path)
+                    if entry.is_symlink() or _is_link_or_junction(child):
+                        self._unlink_reparse_entry(child)
+                    elif entry.is_dir(follow_symlinks=False):
+                        try:
+                            child_handle = self._open_windows_descendant_handle(child)
+                        except _WindowsReparseEntryRemovedError:
+                            continue
+                        self._remove_windows_tree_guarded(child, child_handle)
+                    else:
+                        child.unlink()
+            handle_open = False
+            self._delete_windows_open_handle(handle)
+        finally:
+            if handle_open:
+                self._close_windows_handle(handle)
 
     def _cleanup_posix(self, root_fd: int) -> None:
         task_name = str(self.task_id)
@@ -216,22 +243,6 @@ class StagingLayout:
         finally:
             os.close(directory_fd)
         os.rmdir(name, dir_fd=parent_fd)
-
-    @classmethod
-    def _remove_tree_no_follow(cls, root: Path) -> None:
-        if _is_link_or_junction(root):
-            cls._unlink_reparse_entry(root)
-            return
-        with os.scandir(root) as entries:
-            for entry in entries:
-                child = Path(entry.path)
-                if entry.is_symlink() or _is_link_or_junction(child):
-                    cls._unlink_reparse_entry(child)
-                elif entry.is_dir(follow_symlinks=False):
-                    cls._remove_tree_no_follow(child)
-                else:
-                    child.unlink()
-        root.rmdir()
 
     @staticmethod
     def _unlink_reparse_entry(path: Path) -> None:
@@ -307,11 +318,28 @@ class StagingLayout:
             raise ValueError("staging 根目录不安全")
 
     def _open_windows_root_handle(self) -> int:
+        try:
+            return self._create_windows_directory_handle(
+                self.staging_root,
+                delete_access=False,
+            )
+        except OSError as exc:
+            if exc.winerror in {2, 3}:
+                raise _StagingRootMissingError from None
+            raise
+
+    @staticmethod
+    def _create_windows_directory_handle(
+        path: Path,
+        *,
+        delete_access: bool,
+    ) -> int:
         import ctypes
         from ctypes import wintypes
 
         file_list_directory = 0x0001
         file_read_attributes = 0x0080
+        delete = 0x00010000
         file_share_read = 0x00000001
         file_share_write = 0x00000002
         open_existing = 3
@@ -330,8 +358,10 @@ class StagingLayout:
         )
         create_file.restype = wintypes.HANDLE
         handle = create_file(
-            str(self.staging_root),
-            file_list_directory | file_read_attributes,
+            str(path),
+            file_list_directory
+            | file_read_attributes
+            | (delete if delete_access else 0),
             file_share_read
             | file_share_write,  # Deliberately excludes FILE_SHARE_DELETE.
             None,
@@ -342,12 +372,39 @@ class StagingLayout:
         invalid_handle = wintypes.HANDLE(-1).value
         if handle == invalid_handle:
             error_code = ctypes.get_last_error()
-            if error_code in {2, 3}:
-                raise _StagingRootMissingError
             raise ctypes.WinError(error_code)
         return int(handle)
 
     def _validate_windows_root_handle(self, handle: int) -> None:
+        try:
+            self._validate_windows_directory_handle(
+                handle,
+                self.staging_root,
+            )
+        except _WindowsReparseEntryRemovedError:
+            raise ValueError("staging 根目录不安全") from None
+
+    @classmethod
+    def _open_windows_descendant_handle(cls, path: Path) -> int:
+        try:
+            handle = cls._create_windows_directory_handle(
+                path,
+                delete_access=True,
+            )
+        except OSError:
+            raise ValueError("staging 任务目录不安全") from None
+        try:
+            cls._validate_windows_directory_handle(handle, path)
+        except _WindowsReparseEntryRemovedError:
+            cls._delete_windows_open_handle(handle)
+            raise
+        except Exception:
+            cls._close_windows_handle(handle)
+            raise
+        return handle
+
+    @staticmethod
+    def _validate_windows_directory_handle(handle: int, expected_path: Path) -> None:
         import ctypes
         from ctypes import wintypes
 
@@ -378,9 +435,9 @@ class StagingLayout:
             ctypes.sizeof(info),
         ):
             raise ctypes.WinError(ctypes.get_last_error())
-        if not info.FileAttributes & file_attribute_directory or info.FileAttributes & (
-            file_attribute_reparse_point
-        ):
+        if info.FileAttributes & file_attribute_reparse_point:
+            raise _WindowsReparseEntryRemovedError
+        if not info.FileAttributes & file_attribute_directory:
             raise ValueError("staging 根目录不安全")
 
         get_final_path = kernel32.GetFinalPathNameByHandleW
@@ -397,10 +454,45 @@ class StagingLayout:
         buffer = ctypes.create_unicode_buffer(required + 1)
         if get_final_path(handle, buffer, len(buffer), 0) == 0:
             raise ctypes.WinError(ctypes.get_last_error())
-        final_path = self._normalize_windows_handle_path(buffer.value)
-        expected_path = self.staging_root.resolve(strict=True)
-        if os.path.normcase(str(final_path)) != os.path.normcase(str(expected_path)):
+        final_path = StagingLayout._normalize_windows_handle_path(buffer.value)
+        resolved_expected_path = expected_path.resolve(strict=True)
+        if os.path.normcase(str(final_path)) != os.path.normcase(
+            str(resolved_expected_path)
+        ):
             raise ValueError("staging 根目录不安全")
+
+    @classmethod
+    def _delete_windows_open_handle(cls, handle: int) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        file_disposition_info = 4
+
+        class FileDispositionInfo(ctypes.Structure):
+            _fields_ = (("DeleteFile", wintypes.BOOLEAN),)
+
+        set_file_info = ctypes.WinDLL(
+            "kernel32",
+            use_last_error=True,
+        ).SetFileInformationByHandle
+        set_file_info.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        )
+        set_file_info.restype = wintypes.BOOL
+        delete_info = FileDispositionInfo(True)
+        try:
+            if not set_file_info(
+                handle,
+                file_disposition_info,
+                ctypes.byref(delete_info),
+                ctypes.sizeof(delete_info),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            cls._close_windows_handle(handle)
 
     @staticmethod
     def _normalize_windows_handle_path(raw_path: str) -> Path:

@@ -1,6 +1,7 @@
 import os
 import stat
 import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from app.features.markdown_cleaning.staging import StagingLayout
 
 TASK_ID = uuid.UUID("018f0000-0000-7000-8000-000000000002")
+WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows handle 语义测试")
 
 
 def test_layout_is_derived_only_from_staging_root_and_task_id(tmp_path: Path) -> None:
@@ -140,6 +142,148 @@ def test_prepare_root_swap_cannot_create_task_under_external_target(
         monkeypatch.undo()
         layout.staging_root.rename(displaced_root)
         assert displaced_root.is_dir()
+
+
+@WINDOWS_ONLY
+@pytest.mark.parametrize("swap_name", [str(TASK_ID), "input"])
+def test_prepare_removes_descendant_junction_swapped_immediately_after_mkdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    swap_name: str,
+) -> None:
+    staging_root = tmp_path / "staging"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    layout = StagingLayout.for_task(staging_root, TASK_ID)
+    original_mkdir = os.mkdir
+    original_rename = os.rename
+    swapped = False
+
+    def mkdir_then_swap_to_junction(
+        path: os.PathLike[str] | str,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal swapped
+        if dir_fd is None:
+            original_mkdir(path, mode)
+        else:
+            original_mkdir(path, mode, dir_fd=dir_fd)
+        candidate = Path(path)
+        if not swapped and candidate.name == swap_name:
+            displaced = candidate.with_name(f"{candidate.name}-displaced")
+            original_rename(candidate, displaced)
+            os.symlink(outside, candidate, target_is_directory=True)
+            swapped = True
+
+    monkeypatch.setattr(os, "mkdir", mkdir_then_swap_to_junction)
+
+    with pytest.raises(ValueError, match="staging"):
+        layout.prepare()
+
+    assert swapped
+    swapped_entry = layout.root if swap_name == str(TASK_ID) else layout.input_dir
+    assert not swapped_entry.exists()
+    assert not swapped_entry.is_symlink()
+    assert list(outside.iterdir()) == []
+
+    monkeypatch.undo()
+    released_root = tmp_path / "staging-released"
+    staging_root.rename(released_root)
+    assert released_root.is_dir()
+
+
+@WINDOWS_ONLY
+def test_prepare_holds_task_handle_during_child_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = StagingLayout.for_task(tmp_path / "staging", TASK_ID)
+    original_mkdir = os.mkdir
+    original_rename = os.rename
+    rename_attempted = False
+    rename_blocked = False
+
+    def mkdir_with_task_rename_attempt(
+        path: os.PathLike[str] | str,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal rename_attempted, rename_blocked
+        candidate = Path(path)
+        if not rename_attempted and candidate.name == "input":
+            rename_attempted = True
+            try:
+                original_rename(layout.root, layout.root.with_name("task-displaced"))
+            except OSError:
+                rename_blocked = True
+        if dir_fd is None:
+            original_mkdir(path, mode)
+        else:
+            original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", mkdir_with_task_rename_attempt)
+
+    layout.prepare()
+
+    assert rename_attempted
+    assert rename_blocked
+    assert layout.input_dir.is_dir()
+    assert layout.output_dir.is_dir()
+
+    monkeypatch.undo()
+    released_task = layout.root.with_name("task-released")
+    layout.root.rename(released_task)
+    assert released_task.is_dir()
+
+
+@WINDOWS_ONLY
+def test_prepare_holds_input_handle_until_prepare_finishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = StagingLayout.for_task(tmp_path / "staging", TASK_ID)
+    original_mkdir = os.mkdir
+    original_rename = os.rename
+    rename_attempted = False
+    rename_blocked = False
+
+    def mkdir_with_input_rename_attempt(
+        path: os.PathLike[str] | str,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal rename_attempted, rename_blocked
+        candidate = Path(path)
+        if not rename_attempted and candidate.name == "output":
+            rename_attempted = True
+            try:
+                original_rename(
+                    layout.input_dir,
+                    layout.input_dir.with_name("input-displaced"),
+                )
+            except OSError:
+                rename_blocked = True
+        if dir_fd is None:
+            original_mkdir(path, mode)
+        else:
+            original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "mkdir", mkdir_with_input_rename_attempt)
+
+    layout.prepare()
+
+    assert rename_attempted
+    assert rename_blocked
+    assert layout.input_dir.is_dir()
+
+    monkeypatch.undo()
+    released_input = layout.input_dir.with_name("input-released")
+    layout.input_dir.rename(released_input)
+    assert released_input.is_dir()
 
 
 def test_cleanup_recomputes_task_root_and_removes_only_that_task(
@@ -376,6 +520,121 @@ def test_cleanup_root_swap_cannot_delete_external_task(
         monkeypatch.undo()
         staging_root.rename(displaced_root)
         assert displaced_root.is_dir()
+
+
+@WINDOWS_ONLY
+def test_cleanup_removes_quarantine_junction_swapped_immediately_after_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = StagingLayout.for_task(tmp_path / "staging", TASK_ID)
+    layout.prepare()
+    layout.original_source.write_text("owned", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker.txt"
+    marker.write_text("keep", encoding="utf-8")
+    original_replace = os.replace
+    original_rename = os.rename
+    swapped_entry: Path | None = None
+
+    def replace_then_swap_to_junction(
+        source: os.PathLike[str] | str,
+        destination: os.PathLike[str] | str,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
+        nonlocal swapped_entry
+        original_replace(
+            source,
+            destination,
+            src_dir_fd=src_dir_fd,
+            dst_dir_fd=dst_dir_fd,
+        )
+        quarantine = Path(destination)
+        displaced = quarantine.with_name(f"{quarantine.name}-displaced")
+        original_rename(quarantine, displaced)
+        os.symlink(outside, quarantine, target_is_directory=True)
+        swapped_entry = quarantine
+
+    monkeypatch.setattr(os, "replace", replace_then_swap_to_junction)
+
+    with pytest.raises(ValueError, match="staging"):
+        layout.cleanup()
+
+    assert swapped_entry is not None
+    assert not swapped_entry.exists()
+    assert not swapped_entry.is_symlink()
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+    monkeypatch.undo()
+    released_root = tmp_path / "staging-released"
+    layout.staging_root.rename(released_root)
+    assert released_root.is_dir()
+
+
+@WINDOWS_ONLY
+@pytest.mark.parametrize("attack_level", ["quarantine", "child"])
+def test_cleanup_holds_descendant_handle_during_scandir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    attack_level: str,
+) -> None:
+    layout = StagingLayout.for_task(tmp_path / "staging", TASK_ID)
+    layout.prepare()
+    child = layout.input_dir / "child"
+    child.mkdir()
+    (child / "owned.txt").write_text("owned", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker.txt"
+    marker.write_text("keep", encoding="utf-8")
+    original_scandir = os.scandir
+    original_rename = os.rename
+    attack_attempted = False
+    attack_blocked = False
+
+    def scandir_with_descendant_swap(
+        path: os.PathLike[str] | str | int,
+    ) -> Iterator[os.DirEntry[str]]:
+        nonlocal attack_attempted, attack_blocked
+        candidate = Path(path) if not isinstance(path, int) else None
+        should_attack = (
+            candidate is not None
+            and not attack_attempted
+            and (
+                (
+                    attack_level == "quarantine"
+                    and candidate.name.startswith(".cleanup-")
+                )
+                or (attack_level == "child" and candidate.name == "child")
+            )
+        )
+        if should_attack and candidate is not None:
+            attack_attempted = True
+            try:
+                original_rename(
+                    candidate, candidate.with_name(f"{candidate.name}-displaced")
+                )
+                os.symlink(outside, candidate, target_is_directory=True)
+            except OSError:
+                attack_blocked = True
+        return original_scandir(path)
+
+    monkeypatch.setattr(os, "scandir", scandir_with_descendant_swap)
+
+    layout.cleanup()
+
+    assert attack_attempted
+    assert attack_blocked
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert not layout.root.exists()
+
+    monkeypatch.undo()
+    released_root = tmp_path / "staging-released"
+    layout.staging_root.rename(released_root)
+    assert released_root.is_dir()
 
 
 def test_task_id_must_be_uuid(tmp_path: Path) -> None:
