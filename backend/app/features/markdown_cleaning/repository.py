@@ -104,41 +104,40 @@ class MarkdownCleaningTaskRepository:
         selected_input_type: str,
         target_path: str,
     ) -> tuple[MarkdownCleaningTask, bool]:
-        with self.idempotency_lock(caller_id, session_id, file_id):
-            fingerprint = request_fingerprint(
-                file_storage_path=file_storage_path,
-                file_oss_url=file_oss_url,
-                selected_input_type=selected_input_type,
-                target_path=target_path,
-            )
-            existing = self.get_by_key(caller_id, session_id, file_id)
-            if existing is not None:
-                self._ensure_same_request(existing, fingerprint)
-                return existing, False
+        fingerprint = request_fingerprint(
+            file_storage_path=file_storage_path,
+            file_oss_url=file_oss_url,
+            selected_input_type=selected_input_type,
+            target_path=target_path,
+        )
+        existing = self.get_by_key(caller_id, session_id, file_id)
+        if existing is not None:
+            self._ensure_same_request(existing, fingerprint)
+            return existing, False
 
-            task = MarkdownCleaningTask(
-                caller_id=caller_id,
-                session_id=session_id,
-                file_id=file_id,
-                request_fingerprint=fingerprint,
-                file_storage_path=file_storage_path,
-                file_oss_url=file_oss_url,
-                selected_input_type=selected_input_type,
-                target_path=target_path,
-                status=MarkdownCleaningTaskStatus.PENDING,
-            )
-            self._session.add(task)
-            try:
-                self._session.commit()
-            except IntegrityError:
-                self._session.rollback()
-                existing = self.get_by_key(caller_id, session_id, file_id)
-                if existing is None:
-                    raise
-                self._ensure_same_request(existing, fingerprint)
-                return existing, False
-            self._session.refresh(task)
-            return task, True
+        task = MarkdownCleaningTask(
+            caller_id=caller_id,
+            session_id=session_id,
+            file_id=file_id,
+            request_fingerprint=fingerprint,
+            file_storage_path=file_storage_path,
+            file_oss_url=file_oss_url,
+            selected_input_type=selected_input_type,
+            target_path=target_path,
+            status=MarkdownCleaningTaskStatus.PENDING,
+        )
+        self._session.add(task)
+        try:
+            self._session.commit()
+        except IntegrityError:
+            self._session.rollback()
+            existing = self.get_by_key(caller_id, session_id, file_id)
+            if existing is None:
+                raise
+            self._ensure_same_request(existing, fingerprint)
+            return existing, False
+        self._session.refresh(task)
+        return task, True
 
     def get_by_key(
         self,

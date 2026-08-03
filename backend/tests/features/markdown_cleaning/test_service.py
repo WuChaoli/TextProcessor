@@ -1,5 +1,7 @@
+import threading
 import uuid
 from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -7,6 +9,8 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
+from app import crud
+from app.core.db import engine
 from app.features.markdown_cleaning.api_errors import (
     MarkdownCleaningApiErrorCode,
     MarkdownCleaningDomainError,
@@ -22,7 +26,7 @@ from app.features.markdown_cleaning.service import MarkdownCleaningTaskService
 from app.features.markdown_cleaning.state_machine import (
     MarkdownCleaningTaskStatus,
 )
-from app.models import User  # noqa: F401
+from app.models import UserCreate
 
 
 @dataclass
@@ -82,6 +86,38 @@ def build_service(
     )
 
 
+def _create_test_user() -> uuid.UUID:
+    email = f"task4-test-{uuid.uuid7()}@example.com"
+    with Session(engine) as db:
+        SQLModel.metadata.create_all(db.get_bind())
+        user = crud.create_user(
+            session=db,
+            user_create=UserCreate(email=email, password="complexPass123"),
+        )
+        return user.id
+
+
+@dataclass
+class BlockingDispatcher:
+    blocked_event: threading.Event = field(default_factory=threading.Event)
+    release_event: threading.Event = field(default_factory=threading.Event)
+    task_ids: list[uuid.UUID] = field(default_factory=list)
+    fail_first: bool = True
+    _first_seen: bool = field(default=False, init=False)
+
+    def enqueue_execute(self, task_id: uuid.UUID) -> None:
+        self.task_ids.append(task_id)
+        if not self._first_seen:
+            self._first_seen = True
+            self.blocked_event.set()
+            assert self.release_event.wait(timeout=8.0)
+            if self.fail_first:
+                raise RuntimeError("redis-secret: broker blocked")
+
+        else:
+            return
+
+
 def test_create_is_idempotent_and_dispatches_once(
     session: Session,
     tmp_path: Path,
@@ -99,7 +135,7 @@ def test_create_is_idempotent_and_dispatches_once(
 
     assert first.id == repeated.id
     assert first.status is MarkdownCleaningTaskStatus.QUEUED
-    saved = service._repository.get(first.id)  # type: ignore[attr-defined]
+    saved = service._repository.get(first.id)
     assert saved is not None
     assert saved.last_dispatched_at is not None
     assert saved.queued_at is not None
@@ -187,3 +223,64 @@ def test_queue_failure_replay_returns_same_safe_503_and_preserves_error(
     assert replayed.value.safe_message == first.value.safe_message
     assert "redis-secret" not in replayed.value.safe_message
     assert dispatcher.task_ids == []
+
+
+def test_concurrent_replay_waits_for_lock_and_returns_safe_503(
+    tmp_path: Path,
+) -> None:
+    if engine.dialect.name != "postgresql":
+        pytest.skip("PostgreSQL is required for advisory-lock concurrency test")
+
+    caller_id = _create_test_user()
+    dispatcher = BlockingDispatcher()
+
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    input_root.mkdir(exist_ok=True)
+    output_root.mkdir(exist_ok=True)
+    source = input_root / "source.md"
+    source.write_text("raw", encoding="utf-8")
+    target = output_root / "result.md"
+    markdown_request = MarkdownCleaningTaskCreate(
+        sessionId="session-1",
+        fileId="11",
+        fileStoragePath=str(source),
+        targetPath=str(target),
+    )
+    policy = MarkdownCleaningRequestPolicy(
+        input_roots=(input_root,),
+        output_roots=(output_root,),
+        allowed_http_hosts=(),
+        allowed_http_cidrs=(),
+    )
+
+    def create_once() -> MarkdownCleaningDomainError | None:
+        with Session(engine) as pg_session:
+            service = MarkdownCleaningTaskService(
+                MarkdownCleaningTaskRepository(pg_session),
+                policy,
+                dispatcher,
+            )
+            try:
+                service.create_task(caller_id, markdown_request)
+                return None
+            except MarkdownCleaningDomainError as error:
+                return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(create_once)
+        assert dispatcher.blocked_event.wait(timeout=5.0)
+        second_future = executor.submit(create_once)
+
+        dispatcher.release_event.set()
+        first_result = first_future.result(timeout=10.0)
+        second_result = second_future.result(timeout=10.0)
+
+    assert isinstance(first_result, MarkdownCleaningDomainError)
+    assert first_result.code is MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED
+    assert first_result.http_status == 503
+    assert isinstance(second_result, MarkdownCleaningDomainError)
+    assert second_result.code is MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED
+    assert second_result.http_status == 503
+    assert "redis-secret" not in second_result.safe_message
+    assert len(dispatcher.task_ids) == 1
