@@ -11,6 +11,7 @@ from app.features.markdown_cleaning.processors import (
     MarkdownCleaningProcessor,
     MarkdownCleaningProcessorError,
     SourceSpan,
+    map_processing_exception,
 )
 from app.features.markdown_cleaning.processors.models import (
     MarkdownCleaningSummary,
@@ -72,12 +73,39 @@ def test_result_and_span_models_are_immutable_and_have_all_summary_fields() -> N
 
     result = ProcessorResult(
         output_path=Path("/tmp/output.md"),
-        input_sha256="input",
-        output_sha256="output",
+        input_sha256="00" * 32,
+        output_sha256="ff" * 32,
         contract_version="markdown_cleaning_v1",
         summary=summary,
     )
     assert result.contract_version == "markdown_cleaning_v1"
+    with pytest.raises(ValueError):
+        MarkdownCleaningSummary(
+            duplicate_paragraphs_removed=-1,
+            phone_redactions=0,
+            id_card_redactions=0,
+            bank_card_redactions=0,
+            email_redactions=0,
+            ipv4_redactions=0,
+            formatting_changes=0,
+        )
+    with pytest.raises(ValueError):
+        ProcessorResult(
+            output_path=Path("/tmp/output.md"),
+            input_sha256="bad",
+            output_sha256="ff" * 32,
+            contract_version="markdown_cleaning_v1",
+            summary=summary,
+        )
+    with pytest.raises(ValueError):
+        ProcessorResult(
+            output_path=Path("/tmp/output.md"),
+            input_sha256="00" * 32,
+            output_sha256="ff" * 32,
+            contract_version="markdown_cleaning_v1",
+            summary=summary,
+            input_bytes=-1,
+        )
 
 
 def test_stable_error_codes_and_exception_mapping() -> None:
@@ -99,3 +127,31 @@ def test_stable_error_codes_and_exception_mapping() -> None:
     )
     assert error.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
     assert error.safe_message == "输入不合法"
+    assert "输入不合法" in str(error)
+
+
+def test_map_processing_exception_exposes_stage_code_without_leaking_exception_message() -> None:
+    secret_exception = ValueError("user_secret=abc123")
+    for code in (
+        MarkdownCleaningErrorCode.MARKDOWN_PARSE_FAILED,
+        MarkdownCleaningErrorCode.PARAGRAPH_DEDUPLICATION_FAILED,
+        MarkdownCleaningErrorCode.SENSITIVE_DATA_REDACTION_FAILED,
+        MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
+    ):
+        mapped = map_processing_exception(secret_exception, code)
+        assert mapped.code is code
+        assert "abc123" not in mapped.safe_message
+        assert "user_secret" not in mapped.safe_message
+        assert mapped.safe_message != ""
+
+    timeout_error = map_processing_exception(TimeoutError("timeout"))
+    assert timeout_error.code is MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
+    assert "timeout" not in timeout_error.safe_message
+
+    io_error = map_processing_exception(OSError("disk secret"))
+    assert io_error.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "disk secret" not in io_error.safe_message
+
+    unknown = map_processing_exception(RuntimeError("x"))
+    assert unknown.code is MarkdownCleaningErrorCode.INTERNAL_ERROR
+    assert "x" not in unknown.safe_message
