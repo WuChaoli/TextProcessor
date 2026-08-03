@@ -4,10 +4,10 @@ import threading
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Engine, func, update
+from sqlalchemy import Engine, func, or_, update
 from sqlalchemy import select as sa_select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -24,6 +24,9 @@ from app.features.markdown_cleaning.state_machine import (
 from app.features.markdown_cleaning.task_models import (
     MarkdownCleaningTask,
     get_datetime_utc,
+)
+from app.features.markdown_cleaning.worker_models import (
+    MarkdownCleaningProcessingPhase,
 )
 
 
@@ -88,6 +91,7 @@ class MarkdownCleaningTaskRepository:
                 finally:
                     connection.execute(sa_select(func.pg_advisory_unlock(key)))
             return
+
         with _local_lock_guard:
             lock = _local_locks.setdefault(key, threading.Lock())
         with lock:
@@ -178,15 +182,231 @@ class MarkdownCleaningTaskRepository:
             .where(
                 col(MarkdownCleaningTask.id) == task_id,
                 col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.QUEUED,
+                col(MarkdownCleaningTask.last_dispatched_at).is_(None),
             )
             .values(last_dispatched_at=dispatched_at, updated_at=dispatched_at)
         )
-        result = self._session.exec(statement)
-        if not isinstance(result, CursorResult) or result.rowcount != 1:
-            self._session.rollback()
-            return False
-        self._session.commit()
-        return True
+        return self._execute_update(statement)
+
+    def acquire_queued(
+        self,
+        task_id: uuid.UUID,
+        *,
+        now: datetime,
+        lease_seconds: int,
+    ) -> MarkdownCleaningTask | None:
+        token = str(uuid.uuid7())
+        statement = (
+            update(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.id) == task_id,
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.QUEUED,
+                col(MarkdownCleaningTask.attempt_count)
+                < col(MarkdownCleaningTask.max_attempts),
+            )
+            .values(
+                status=MarkdownCleaningTaskStatus.RUNNING,
+                attempt_count=col(MarkdownCleaningTask.attempt_count) + 1,
+                started_at=func.coalesce(col(MarkdownCleaningTask.started_at), now),
+                lease_token=token,
+                lease_expires_at=now + timedelta(seconds=lease_seconds),
+                processing_phase=MarkdownCleaningProcessingPhase.CLAIMING_TASK,
+                progress_percent=10,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if not self._execute_update(statement):
+            return None
+        task = self.get(task_id)
+        if task is None:
+            return None
+        task.lease_token = token
+        return task
+
+    def renew_lease(
+        self,
+        task_id: uuid.UUID,
+        *,
+        lease_token: str,
+        now: datetime,
+        lease_seconds: int,
+    ) -> bool:
+        statement = (
+            update(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.id) == task_id,
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+                col(MarkdownCleaningTask.lease_token) == lease_token,
+                col(MarkdownCleaningTask.lease_expires_at).is_not(None),
+                col(MarkdownCleaningTask.lease_expires_at) > now,
+            )
+            .values(
+                lease_expires_at=now + timedelta(seconds=lease_seconds),
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return self._execute_update(statement)
+
+    def update_progress(
+        self,
+        task_id: uuid.UUID,
+        *,
+        lease_token: str,
+        progress_percent: int,
+        processing_phase: str | None = None,
+    ) -> bool:
+        values: dict[str, Any] = {"progress_percent": progress_percent}
+        if processing_phase is not None:
+            values["processing_phase"] = processing_phase
+        return self._update_for_running_lease(task_id, lease_token, **values)
+
+    def save_prepared(
+        self,
+        task_id: uuid.UUID,
+        *,
+        lease_token: str,
+        staging_path: str,
+        input_sha256: str,
+        progress_percent: int = 30,
+        now: datetime | None = None,
+    ) -> bool:
+        return self._update_for_running_lease(
+            task_id,
+            lease_token,
+            staging_path=staging_path,
+            input_sha256=input_sha256,
+            progress_percent=progress_percent,
+            processing_phase=MarkdownCleaningProcessingPhase.SAVING_PREPARED,
+            updated_at=now or get_datetime_utc(),
+            now=now,
+        )
+
+    def mark_succeeded(
+        self,
+        task_id: uuid.UUID,
+        *,
+        lease_token: str,
+        now: datetime,
+        output_sha256: str | None = None,
+        prepared_output_sha256: str | None = None,
+        duplicate_paragraphs_removed: int | None = None,
+        phone_redaction_count: int | None = None,
+        id_card_redaction_count: int | None = None,
+        bank_card_redaction_count: int | None = None,
+        email_redaction_count: int | None = None,
+        ipv4_redaction_count: int | None = None,
+        formatting_change_count: int | None = None,
+    ) -> bool:
+        return self._update_for_running_lease(
+            task_id,
+            lease_token,
+            status=MarkdownCleaningTaskStatus.SUCCEEDED,
+            processing_phase=MarkdownCleaningProcessingPhase.SUCCEEDED,
+            progress_percent=100,
+            output_sha256=output_sha256,
+            prepared_output_sha256=prepared_output_sha256,
+            duplicate_paragraphs_removed=duplicate_paragraphs_removed,
+            phone_redaction_count=phone_redaction_count,
+            id_card_redaction_count=id_card_redaction_count,
+            bank_card_redaction_count=bank_card_redaction_count,
+            email_redaction_count=email_redaction_count,
+            ipv4_redaction_count=ipv4_redaction_count,
+            formatting_change_count=formatting_change_count,
+            finished_at=now,
+            published_at=now,
+            error_code=None,
+            error_message=None,
+            updated_at=now,
+            now=now,
+            clear_lease_token=True,
+        )
+
+    def mark_failed(
+        self,
+        task_id: uuid.UUID,
+        *,
+        lease_token: str,
+        now: datetime,
+        error_code: str,
+        error_message: str,
+        processing_phase: str = MarkdownCleaningProcessingPhase.FAILED,
+    ) -> bool:
+        return self._update_for_running_lease(
+            task_id,
+            lease_token,
+            status=MarkdownCleaningTaskStatus.FAILED,
+            processing_phase=processing_phase,
+            error_code=error_code,
+            error_message=error_message,
+            finished_at=now,
+            updated_at=now,
+            now=now,
+            clear_lease_token=True,
+        )
+
+    def list_recoverable_queued(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[MarkdownCleaningTask]:
+        statement = (
+            select(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.QUEUED,
+                col(MarkdownCleaningTask.attempt_count)
+                < col(MarkdownCleaningTask.max_attempts),
+                or_(
+                    col(MarkdownCleaningTask.lease_token).is_(None),
+                    col(MarkdownCleaningTask.lease_expires_at).is_(None),
+                    col(MarkdownCleaningTask.lease_expires_at) <= now,
+                ),
+            )
+            .order_by(col(MarkdownCleaningTask.queued_at), col(MarkdownCleaningTask.id))
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def list_recoverable_running(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[MarkdownCleaningTask]:
+        statement = (
+            select(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+                col(MarkdownCleaningTask.lease_token).is_not(None),
+                or_(
+                    col(MarkdownCleaningTask.lease_expires_at).is_(None),
+                    col(MarkdownCleaningTask.lease_expires_at) <= now,
+                ),
+            )
+            .order_by(
+                col(MarkdownCleaningTask.lease_expires_at),
+                col(MarkdownCleaningTask.id),
+            )
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def count_active_running(self, *, now: datetime) -> int:
+        statement = (
+            select(func.count())
+            .select_from(MarkdownCleaningTask)
+            .where(
+            col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+            col(MarkdownCleaningTask.lease_token).is_not(None),
+            or_(
+                col(MarkdownCleaningTask.lease_expires_at).is_(None),
+                col(MarkdownCleaningTask.lease_expires_at) > now,
+            ),
+        )
+        )
+        return int(self._session.exec(statement).one())
 
     def transition(
         self,
@@ -209,17 +429,54 @@ class MarkdownCleaningTaskRepository:
             )
             .values(**values)
         )
-        result = self._session.exec(statement)
-        if not isinstance(result, CursorResult) or result.rowcount != 1:
-            self._session.rollback()
+        if not self._execute_update(statement):
             raise ConditionalMarkdownCleaningUpdateFailed(
                 f"任务 {task_id} 当前状态不是 {expected}"
             )
-        self._session.commit()
         task = self._session.get(MarkdownCleaningTask, task_id)
         if task is None:
             raise ConditionalMarkdownCleaningUpdateFailed(f"任务 {task_id} 不存在")
         return task
+
+    def _update_for_running_lease(
+        self,
+        task_id: uuid.UUID,
+        lease_token: str,
+        *,
+        status: MarkdownCleaningTaskStatus | None = None,
+        clear_lease_token: bool = False,
+        now: datetime | None = None,
+        **values: Any,
+    ) -> bool:
+        if status is not None:
+            values["status"] = status
+        if clear_lease_token:
+            values["lease_token"] = None
+            values["lease_expires_at"] = None
+        now = now or get_datetime_utc()
+        values.setdefault("updated_at", now)
+        statement = (
+            update(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.id) == task_id,
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+                col(MarkdownCleaningTask.lease_token) == lease_token,
+                col(MarkdownCleaningTask.lease_expires_at).is_not(None),
+                col(MarkdownCleaningTask.lease_expires_at) > now,
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        return self._execute_update(statement)
+
+    def _execute_update(self, statement: Any) -> bool:
+        result = self._session.exec(statement)
+        assert isinstance(result, CursorResult)
+        if result.rowcount != 1:
+            self._session.rollback()
+            return False
+        self._session.commit()
+        return True
 
     @staticmethod
     def _ensure_same_request(
