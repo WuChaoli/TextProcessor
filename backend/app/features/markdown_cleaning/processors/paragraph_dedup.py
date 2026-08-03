@@ -9,13 +9,19 @@ from app.features.markdown_cleaning.processors.markdown_parser import (
     MarkdownBlockType,
     MarkdownParserAdapter,
 )
+from app.features.markdown_cleaning.processors.models import SourceSpan
 
 _SOFTBREAK_PATTERN = re.compile(r"\r\n|\r|\n")
 _WHITESPACE_PATTERN = re.compile(r"[ \t]+")
+_CONTAINER_BLOCK_TYPES = {
+    MarkdownBlockType.LIST_ITEM,
+    MarkdownBlockType.BLOCKQUOTE,
+    MarkdownBlockType.TABLE,
+}
 
 
 class ParagraphDeduplicator:
-    """Keep first occurrence of each normal paragraph and remove later duplicates."""
+    """Deduplicate only top-level paragraph blocks while preserving document order."""
 
     def __init__(self, parser: MarkdownParserAdapter | None = None) -> None:
         self._parser = parser or MarkdownParserAdapter()
@@ -25,105 +31,81 @@ class ParagraphDeduplicator:
         blocks = parsed.blocks
 
         seen_keys: set[str] = set()
-        removed: set[int] = set()
         duplicate_count = 0
+        delete_spans: list[SourceSpan] = []
 
         for index, block in enumerate(blocks):
             if block.block_type != MarkdownBlockType.PARAGRAPH:
                 continue
 
+            if not self._is_top_level_paragraph(block, blocks):
+                continue
+
             paragraph = markdown[block.source_span.start : block.source_span.end]
             key = self._normalize_for_key(paragraph)
+
             if key in seen_keys:
-                removed.add(index)
                 duplicate_count += 1
+                delete_spans.append(
+                    self._build_duplicate_delete_span(blocks=blocks, index=index, block=block)
+                )
                 continue
+
             seen_keys.add(key)
 
-        selected_blocks = self._filter_blocks_with_controlled_blanks(blocks, removed)
-        selected_blocks.sort(key=lambda block: (block.source_span.start, block.source_span.end))
-        if not selected_blocks:
-            return "", duplicate_count
+        if not delete_spans:
+            return markdown, duplicate_count
 
-        return "".join(
-            markdown[block.source_span.start : block.source_span.end]
-            for block in selected_blocks
-        ), duplicate_count
+        return self._delete_spans(markdown, self._assert_disjoint(delete_spans)), duplicate_count
 
     @staticmethod
     def _normalize_for_key(markdown: str) -> str:
-        normalized = _SOFTBREAK_PATTERN.sub(" ", markdown.strip())
+        normalized = _SOFTBREAK_PATTERN.sub(" ", markdown)
         normalized = _WHITESPACE_PATTERN.sub(" ", normalized)
         return normalized.strip()
 
     @staticmethod
-    def _filter_blocks_with_controlled_blanks(
+    def _is_top_level_paragraph(
+        block: MarkdownBlock,
         blocks: tuple[MarkdownBlock, ...],
-        removed: set[int],
-    ) -> list[MarkdownBlock]:
-        if not removed:
-            return list(blocks)
-
-        paragraph_indexes = {
-            index for index in removed if blocks[index].block_type == MarkdownBlockType.PARAGRAPH
-        }
-        if not paragraph_indexes:
-            return list(blocks)
-
-        kept_indices = [
-            index
-            for index, block in enumerate(blocks)
-            if index not in removed
-            and block.block_type != MarkdownBlockType.BLANK
-        ]
-
-        if not kept_indices:
-            # keep only non-removed non-blank? there is no such block
-            return []
-
-        filtered: list[MarkdownBlock] = []
-        for idx, block in enumerate(blocks):
-            if idx in removed:
-                continue
-            if block.block_type != MarkdownBlockType.BLANK:
-                filtered.append(block)
-                continue
-
-            has_removed_paragraph_between = ParagraphDeduplicator._has_removed_paragraph_between(
-                idx,
-                blocks,
-                paragraph_indexes,
-                kept_indices,
-            )
-            if not has_removed_paragraph_between:
-                filtered.append(block)
-                continue
-
-            if not ParagraphDeduplicator._blank_already_kept(filtered):
-                filtered.append(block)
-
-        return filtered
-
-    @staticmethod
-    def _has_removed_paragraph_between(
-        blank_index: int,
-        blocks: tuple[MarkdownBlock, ...],
-        removed_paragraph_indexes: set[int],
-        kept_indices: list[int],
     ) -> bool:
-        previous_kept = max((index for index in kept_indices if index < blank_index), default=None)
-        next_kept = min((index for index in kept_indices if index > blank_index), default=None)
-
-        if previous_kept is None or next_kept is None:
-            return False
-
-        for index in range(previous_kept + 1, next_kept):
-            if index in removed_paragraph_indexes:
-                return True
-        return False
+        for container in blocks:
+            if container.block_type not in _CONTAINER_BLOCK_TYPES:
+                continue
+            if container is block:
+                continue
+            if (
+                container.source_span.start <= block.source_span.start
+                and container.source_span.end >= block.source_span.end
+            ):
+                return False
+        return True
 
     @staticmethod
-    def _blank_already_kept(filtered: list[MarkdownBlock]) -> bool:
-        if not filtered:
-            return False
-        return filtered[-1].block_type == MarkdownBlockType.BLANK
+    def _build_duplicate_delete_span(
+        blocks: tuple[MarkdownBlock, ...],
+        index: int,
+        block: MarkdownBlock,
+    ) -> SourceSpan:
+        start = block.source_span.start
+        end = block.source_span.end
+
+        if index + 1 < len(blocks) and blocks[index + 1].block_type == MarkdownBlockType.BLANK:
+            end = blocks[index + 1].source_span.end
+
+        return SourceSpan(start=start, end=end)
+
+    @staticmethod
+    def _assert_disjoint(delete_spans: list[SourceSpan]) -> list[SourceSpan]:
+        ordered = sorted(delete_spans, key=lambda span: span.start)
+        for previous, current in zip(ordered, ordered[1:], strict=False):
+            if current.start < previous.end:
+                raise ValueError("duplicate paragraph delete spans overlap")
+        return ordered
+
+    @staticmethod
+    def _delete_spans(text: str, spans: list[SourceSpan]) -> str:
+        deduplicated = text
+        for span in reversed(spans):
+            deduplicated = deduplicated[:span.start] + deduplicated[span.end :]
+        return deduplicated
