@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -783,3 +784,35 @@ def test_pipeline_rejects_oversized_runtime_protocol_response(tmp_path: Path) ->
 
     assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
     assert not destination.exists()
+
+
+def test_pipeline_kills_continuous_oversized_runtime_output_early(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "output.md"
+    marker = tmp_path / "child-finished.txt"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    script = (
+        "import pathlib,sys,time; sys.stdin.buffer.read(); chunk=b'x'*65536; "
+        "[(sys.stdout.buffer.write(chunk),sys.stdout.buffer.flush()) for _ in range(32)]; "
+        "time.sleep(3); pathlib.Path(sys.argv[1]).write_text('finished')"
+    )
+    pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
+        limits=MarkdownCleaningPipelineLimits(max_output_bytes=1024),
+        _runtime_command=(sys.executable, "-c", script, str(marker)),
+    )
+    started = time.perf_counter()
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        pipeline.process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert time.perf_counter() - started < 2
+    assert not marker.exists()
+    assert not destination.exists()
+    assert not any(
+        thread.name.startswith("markdown-cleaning-runtime-")
+        for thread in threading.enumerate()
+    )

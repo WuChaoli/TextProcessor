@@ -9,7 +9,7 @@ class MarkdownCleaningTaskDispatcher(Protocol):
 
 
 class MarkdownCleaningCeleryClient(Protocol):
-    def send_task(self, name: str, *, kwargs: dict[str, Any]) -> None: ...
+    def send_task(self, name: str, *, kwargs: dict[str, Any], queue: str) -> None: ...
 
 
 class CeleryMarkdownCleaningTaskDispatcher:
@@ -29,4 +29,5 @@ class CeleryMarkdownCleaningTaskDispatcher:
         self._app.send_task(
             "markdown_cleaning.execute",
             kwargs=payload,
+            queue="markdown_cleaning",
         )

@@ -15,6 +15,8 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from queue import Empty, Full, Queue
+from threading import Event, Thread
 from typing import Final
 
 from markdown_it import MarkdownIt
@@ -319,41 +321,26 @@ class MarkdownCleaningPipeline:
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
-        protocol_limit = self._limits.max_output_bytes + 64 * 1024
-        with tempfile.TemporaryFile(mode="w+b") as response_spool:
-            try:
-                process = subprocess.Popen(
-                    runtime_command,
-                    cwd=Path(__file__).resolve().parents[4],
-                    stdin=subprocess.PIPE,
-                    stdout=response_spool,
-                    stderr=subprocess.DEVNULL,
-                    env=self._runtime_environment(),
-                )
-            except OSError as exc:
-                raise map_processing_exception(
-                    exc,
-                    MarkdownCleaningErrorCode.INTERNAL_ERROR,
-                ) from exc
-
-            try:
-                process.communicate(
-                    input=request,
-                    timeout=deadline.remaining_seconds(),
-                )
-            except subprocess.TimeoutExpired as exc:
-                self._terminate_runtime(process)
-                raise map_processing_exception(
-                    TimeoutError("isolated transform timeout"),
-                    MarkdownCleaningErrorCode.PROCESSING_TIMEOUT,
-                ) from exc
-            response_spool.seek(0)
-            stdout = response_spool.read(protocol_limit + 1)
-            if len(stdout) > protocol_limit:
-                raise map_processing_exception(
-                    ValueError("isolated runtime protocol response exceeds limit"),
-                    MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
-                )
+        try:
+            process = subprocess.Popen(
+                runtime_command,
+                cwd=Path(__file__).resolve().parents[4],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=self._runtime_environment(),
+            )
+        except OSError as exc:
+            raise map_processing_exception(
+                exc,
+                MarkdownCleaningErrorCode.INTERNAL_ERROR,
+            ) from exc
+        stdout = self._communicate_bounded(
+            process,
+            request,
+            deadline,
+            protocol_limit=self._limits.max_output_bytes + 64 * 1024,
+        )
 
         deadline.check()
         if process.returncode != 0:
@@ -405,6 +392,93 @@ class MarkdownCleaningPipeline:
                 process.stdin.close()
             if process.stdout is not None:
                 process.stdout.close()
+
+    def _communicate_bounded(
+        self,
+        process: subprocess.Popen[bytes],
+        request: bytes,
+        deadline: _ProcessingDeadline,
+        *,
+        protocol_limit: int,
+    ) -> bytes:
+        chunks: Queue[bytes | BaseException | None] = Queue(maxsize=2)
+        stop = Event()
+
+        def write_request() -> None:
+            try:
+                if process.stdin is not None:
+                    process.stdin.write(request)
+                    process.stdin.close()
+            except BrokenPipeError, OSError:
+                pass
+
+        def read_response() -> None:
+            try:
+                assert process.stdout is not None
+                while not stop.is_set():
+                    chunk = process.stdout.read(64 * 1024)
+                    if not chunk:
+                        break
+                    while not stop.is_set():
+                        try:
+                            chunks.put(chunk, timeout=0.05)
+                            break
+                        except Full:
+                            continue
+            except BaseException as exc:
+                if not stop.is_set():
+                    chunks.put(exc)
+            finally:
+                if not stop.is_set():
+                    chunks.put(None)
+
+        writer = Thread(
+            target=write_request, daemon=True, name="markdown-cleaning-runtime-writer"
+        )
+        reader = Thread(
+            target=read_response, daemon=True, name="markdown-cleaning-runtime-reader"
+        )
+        writer.start()
+        reader.start()
+        response = bytearray()
+        try:
+            while True:
+                remaining = deadline.remaining_seconds()
+                if remaining <= 0:
+                    raise TimeoutError("isolated transform timeout")
+                try:
+                    item = chunks.get(timeout=min(remaining, 0.1))
+                except Empty:
+                    if process.poll() is not None and not reader.is_alive():
+                        break
+                    continue
+                if item is None:
+                    break
+                if isinstance(item, BaseException):
+                    raise item
+                response.extend(item)
+                if len(response) > protocol_limit:
+                    raise ValueError("isolated runtime protocol response exceeds limit")
+            process.wait(timeout=max(0.01, deadline.remaining_seconds()))
+            return bytes(response)
+        except TimeoutError as exc:
+            raise map_processing_exception(
+                exc, MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
+            ) from exc
+        except ValueError as exc:
+            raise map_processing_exception(
+                exc, MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+            ) from exc
+        finally:
+            stop.set()
+            if process.poll() is None:
+                self._terminate_runtime(process)
+            if process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
+            if process.stdout is not None and not process.stdout.closed:
+                process.stdout.close()
+            writer.join(timeout=1)
+            reader.join(timeout=1)
 
     @staticmethod
     def _runtime_environment() -> dict[str, str]:

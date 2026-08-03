@@ -12,6 +12,9 @@ from app.features.markdown_cleaning.celery_tasks import (
     handle_execute_task,
     handle_recover_task,
 )
+from app.features.markdown_cleaning.dispatcher import (
+    CeleryMarkdownCleaningTaskDispatcher,
+)
 from app.features.markdown_cleaning.messages import InvalidMarkdownCleaningMessage
 from app.features.markdown_cleaning.orchestration import RetryableWorkerError
 
@@ -150,3 +153,18 @@ def test_factory_injects_processing_timeout_and_heartbeat_uses_fresh_session(
         repository.renew_lease.call_args.kwargs["lease_seconds"]
         == configured.queue_lease_seconds
     )
+
+
+def test_dispatcher_routes_initial_and_recovery_execute_to_markdown_queue() -> None:
+    client = Mock()
+    dispatcher = CeleryMarkdownCleaningTaskDispatcher(client)
+    task_id = uuid.uuid7()
+
+    dispatcher.enqueue_execute(task_id)
+    dispatcher.enqueue_execute(task_id)
+
+    assert client.send_task.call_count == 2
+    for call in client.send_task.call_args_list:
+        assert call.args == ("markdown_cleaning.execute",)
+        assert call.kwargs["kwargs"] == message(task_id)
+        assert call.kwargs["queue"] == "markdown_cleaning"

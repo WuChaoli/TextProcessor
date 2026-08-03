@@ -7,7 +7,7 @@
 - 真实装配包含 Repository、InputResolver、MarkdownInputValidator、MarkdownCleaningPipeline、MarkdownCleaningOutputValidator、Publisher、staging/settings；Processor 与 orchestration 的 timeout 均注入 `processing_soft_timeout_seconds`。
 - execute 显式启用 `acks_late`、`reject_on_worker_lost`、soft/hard time limit 和 `markdown_cleaning` queue；仅 `RetryableWorkerError` 触发最多 `max_attempts - 1` 次 Celery retry。
 - Celery include、beat 恢复周期与队列已接线；恢复沿用 Task 4 的逐项异常隔离，并经现有 dispatcher 发严格 envelope。
-- Processor child stdout 改为 `TemporaryFile` 受控 spool；父进程仅读取 `max_output_bytes + 64 KiB + 1`，超限映射 `INVALID_PROCESSOR_OUTPUT` 且不发布，消除 `communicate()` 将异常响应无界保存在内存的问题。
+- Processor child stdout 改为有背压的 `PIPE` 流式读取：reader queue 最多保留两个 64 KiB chunk，父进程累计最多 `max_output_bytes + 64 KiB`；一旦超限立即 kill/reap child，超限映射 `INVALID_PROCESSOR_OUTPUT` 且不发布。writer/reader 均在 finally 停止并 join，避免 pipe deadlock、线程泄漏与 zombie。
 
 ## RED 证据
 
@@ -16,7 +16,7 @@
 
 ## GREEN 与门禁
 
-- Celery/部署/完整 pipeline 目标：`59 passed`。
+- Celery/部署/完整 pipeline 目标：首次交付 `59 passed`；review fix round 1 后 `61 passed`。
 - pipeline 全量：`50 passed`；Celery/部署：`9 passed`。
 - task registry：精确得到 `['markdown_cleaning.execute', 'markdown_cleaning.recover']`。
 - Ruff check 与 format check：通过。
@@ -24,6 +24,12 @@
 - Pyright：`0 errors, 0 warnings`。
 - ty：通过。
 - `git diff --check`：通过。
+
+## Review fix round 1
+
+- `CeleryMarkdownCleaningTaskDispatcher.send_task` 显式携带 `queue="markdown_cleaning"`；同一 dispatcher 覆盖 API 首次投递及 recovery 重投，测试逐次核验 task、严格 envelope 与 queue。
+- RED：首次/恢复 dispatcher 调用均缺少 queue；持续输出 child 的 spool 版本等待 child 结束，早杀断言超过 3 秒失败。
+- GREEN：持续输出超过协议上限后立即终止，测试确认两秒内返回、child 完成 marker 不存在、目标文件不存在，且不存在命名为 `markdown-cleaning-runtime-*` 的残留线程；原有 deadline/timeout 与完整 pipeline 回归继续通过。
 
 测试仍显示项目既有 4 个 warning：Starlette/httpx deprecation 与 3 个默认开发凭据配置 warning。
 
