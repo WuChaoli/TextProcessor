@@ -77,9 +77,9 @@ execute 消息只携带：
 2. 从 PostgreSQL 读取完整任务参数。
 3. 从 `queued` 原子转为 `running`，记录 attempt、租约和 `validating_input`。
 4. 创建 job 专属 staging 目录。
-5. 按输入优先级将选定输入流式复制到 staging，计算 SHA-256 和字节数。
-6. 验证文件后缀、UTF-8、大小、控制字符和 Markdown 围栏完整性。
-7. 更新阶段为 `cleaning`，调用 `MarkdownCleaningProcessor.process()`。
+5. 按输入优先级将选定输入原始字节流式复制到 staging `source.original.md`，计算外部输入 SHA-256 和字节数。
+6. 验证文件后缀、UTF-8、大小、控制字符和 Markdown 围栏完整性；允许且仅允许文件起始 UTF-8 BOM，并原子生成无 BOM 的 `source.md` Processor 输入。
+7. 更新阶段为 `cleaning`，将任务 UTC deadline 显式传给 `MarkdownCleaningProcessor.process()`。
 8. processor 在 staging 内写出 `result.md` 和内存中的安全统计对象。
 9. Worker 校验输出摘要、编码、结构和统计 schema。
 10. 保存 prepared SHA-256、临时路径和统计，更新阶段为 `publishing`。
@@ -94,7 +94,8 @@ Worker 进程内同步调用 processor。由于该工作属于 CPU 与文件 I/O
 ```text
 {markdownCleaningStagingRoot}/{taskId}/
 ├── input/
-│   └── source.md
+│   ├── source.original.md  # 外部输入原始字节，允许起始 UTF-8 BOM
+│   └── source.md           # Processor 输入，严格 UTF-8 无 BOM
 └── output/
     ├── result.md
     └── publish.md.part
@@ -103,7 +104,9 @@ Worker 进程内同步调用 processor。由于该工作属于 CPU 与文件 I/O
 - staging 根由服务端配置，请求不能指定。
 - 所有真实路径必须仍属于 task 目录，拒绝 `..`、符号链接和 junction 逃逸。
 - 远程输入由 InputResolver 下载，processor 不访问网络。
-- 重试可复用数据库已记录且 SHA-256 一致的 staging 输入。
+- `source.original.md` 的摘要/大小是外部输入与下载复用的权威记录；`source.md` 有独立摘要/大小，只能由 validator 从已验证原件生成。
+- validator 只移除文件起始的单个 UTF-8 BOM，不重排 Markdown、不改换行或其他正文；无 BOM 时仍生成独立 `source.md`，禁止让 Processor 直接读取原件。
+- 重试只有在两份 staging 文件各自与数据库记录的 SHA-256 和大小一致时才可复用；任一不一致即重新生成或安全失败。
 - processor 不直接写最终 `targetPath`。
 - 清理只删除当前任务目录，不删除业务输入或最终输出。
 
@@ -114,7 +117,8 @@ Worker 进程内同步调用 processor。由于该工作属于 CPU 与文件 I/O
 - 选定输入可读且为普通文件；
 - 扩展名为 `.md` 或 `.markdown`；
 - 文件非空且不超过配置上限；
-- 严格 UTF-8；允许输入 BOM，但输出必须移除；
+- 外部 `source.original.md` 必须为严格 UTF-8，可允许文件起始的单个 UTF-8 BOM；其他位置的 BOM 不作为编码标记处理；
+- validator 必须原子写出严格 UTF-8、无 BOM 的 `source.md`，随后 Processor 继续执行 strict no-BOM 校验；
 - 不含 NUL 或被禁止控制字符；
 - 围栏代码块闭合，避免正文错误进入保护区；
 - 输入和 `targetPath` 解析后不是同一文件；
@@ -151,7 +155,7 @@ class MarkdownCleaningProcessor(Protocol):
         source: Path,
         destination: Path,
         *,
-        deadline: datetime,
+        deadline: datetime | None = None,
     ) -> MarkdownCleaningResult: ...
 ```
 
@@ -163,6 +167,7 @@ class MarkdownCleaningProcessor(Protocol):
 - 不记录正文、敏感原值或匹配上下文；
 - 相同输入字节必须产生相同输出字节与统计；
 - 任一步骤失败时不返回部分成功结果。
+- `deadline` 仅为公共接口兼容而可选；生产 Worker 必须传任务记录中的 timezone-aware UTC deadline。有效 deadline 取任务 deadline 与 Processor 内部最大处理秒数中较早者，已过期立即 `PROCESSING_TIMEOUT`，子进程 timeout 使用剩余时间。
 
 ## 8. 第三方依赖边界
 
@@ -271,6 +276,8 @@ MARKDOWN_CLEANING_INPUT_MAX_BYTES
 MARKDOWN_CLEANING_OUTPUT_MAX_BYTES
 MARKDOWN_CLEANING_DOWNLOAD_TIMEOUT_SECONDS
 MARKDOWN_CLEANING_TASK_TIMEOUT_SECONDS
+MARKDOWN_CLEANING_PROCESSOR_MAX_SECONDS
+MARKDOWN_CLEANING_CELERY_HARD_TIME_LIMIT_SECONDS
 MARKDOWN_CLEANING_MAX_ATTEMPTS
 MARKDOWN_CLEANING_LEASE_SECONDS
 MARKDOWN_CLEANING_RECOVERY_INTERVAL_SECONDS
@@ -279,6 +286,8 @@ MARKDOWN_CLEANING_WORKER_CONCURRENCY
 ```
 
 单文档内容需要 token/source-map 与 Presidio interval，worker concurrency 必须按输入上限和内存 smoke 结果设置，不能直接继承轻量 API worker 并发。默认快速测试不下载 NLP 模型。
+
+任务 deadline 由 Worker 从权威任务记录传入 Processor；Celery hard time limit 必须大于配置的整体 task timeout 与子进程终止宽限之和，仅用于父进程或操作系统级终止异常的第二道兜底。
 
 ## 14. 可观察性与安全
 
@@ -292,7 +301,7 @@ MARKDOWN_CLEANING_WORKER_CONCURRENCY
 
 - 消息 schema、租约、状态机和终态幂等。
 - 本地/远程输入优先级、流式限制和不降级。
-- UTF-8、BOM、NUL、空文件、大小和未闭合 fence。
+- UTF-8、起始 BOM、内部 BOM、NUL、空文件、大小和未闭合 fence；断言保留 `source.original.md` 且生成独立无 BOM `source.md`。
 - staging 路径、符号链接和任务隔离。
 - parser token/source-map 与代码保护。
 - Presidio allowlist、自定义中国 recognizer、重叠和计数。

@@ -15,7 +15,8 @@
 - 本地输入失败不能切换 OSS；请求选择的输入源不可在 Worker 自动改变。
 - staging 根必须由 `task_id` 派生并做 containment 校验；清理不得信任数据库中的任意路径。
 - Worker 必须把服务端 staging root 与 processor limits 显式注入 `MarkdownCleaningPipeline`；不得把数据库 `targetPath` 传给 Processor。
-- Processor 的纯文本变换运行在可终止子进程中，子进程无 destination 访问权；pipeline deadline 到期先终止子进程。Celery `time_limit` 作为第二道硬上限，必须大于 pipeline timeout 与终止宽限之和，防止父进程或操作系统级终止异常长期占用 worker。
+- Worker 必须保留外部原始 `source.original.md`，再由 validator 原子生成独立 strict UTF-8/no-BOM `source.md` 供 Processor 使用；即使原件无 BOM 也禁止两者共用同一文件。
+- Worker 必须把任务记录中的 timezone-aware UTC deadline 显式传给 Processor；Processor 与内部 max seconds 取较早者。纯文本变换运行在可终止子进程中，子进程无 destination 访问权且 timeout 使用剩余时间；Celery `time_limit` 作为第二道硬上限，必须大于 pipeline timeout 与终止宽限之和，防止父进程或操作系统级终止异常长期占用 worker。
 - 目标已存在必须失败，不能覆盖；发布需要跨进程安全的 `O_EXCL`/hard-link 或等价原子原语，不能只用进程内锁。
 - 每次续租、进度、成功或失败落库均校验 lease token，旧 Worker 不得覆盖新 Worker。
 - 真实验收必须启动 API、Worker、beat、PostgreSQL、Redis，使用真实 Processor 和固定中文输入逐字节验证。
@@ -44,8 +45,9 @@
 
 **Steps:**
 - [ ] RED：覆盖本地 allowlist/path escape/symlink、HTTP credentials/redirect SSRF/host CIDR/timeout/size、选定源失败不 fallback、`.part` 清理、hash 复用。
-- [ ] RED：覆盖空文件、BOM、非 UTF-8、NUL、超限和未闭合 fence。
+- [ ] RED：覆盖空文件、起始 BOM、内部 BOM、非 UTF-8、NUL、超限和未闭合 fence；断言保留带 BOM 原始字节与摘要，并另行原子生成无 BOM Processor source 与独立摘要。
 - [ ] 复用结构化提取中已验证的算法模式，但建立 markdown_cleaning 自有类型；流式复制并计算 SHA-256，完成后原子进入 staging。
+- [ ] staging 固定包含 `input/source.original.md` 与 `input/source.md`：前者是外部输入/复用真相，后者只由 validator 移除起始单个 UTF-8 BOM 后生成；不得做换行、正文或 Markdown 结构归一化。
 - [ ] task staging 权限收紧，所有删除路径由配置 root + task_id 重新计算并验证 containment。
 - [ ] GREEN：运行三个目标测试。
 - [ ] Commit: `功能：实现Markdown清洗安全输入暂存`
@@ -71,7 +73,7 @@
 
 **Steps:**
 - [ ] RED：覆盖完整成功流、确定性输入/Processor/冲突失败、临时系统错误有限重试、每阶段进度、worker 中断、租约过期被新 worker 接管、旧 worker 收尾被拒绝。
-- [ ] 编排严格执行 claim → stage → validate → process → validate output → prepare → publish → terminal update → safe cleanup。
+- [ ] 编排严格执行 claim → stage original → validate/normalize processor source → `process(..., deadline=task.processing_deadline)` → validate output → prepare → publish → terminal update → safe cleanup；已过期任务不得访问 Processor source 或发布 destination。
 - [ ] 若发布成功后数据库更新失败，恢复逻辑仅在目标 hash 等于 prepared hash 时收口成功；不匹配则输出冲突。
 - [ ] queued/expired running/recoverable prepared 批量恢复互相隔离，单任务异常不阻断本批次。
 - [ ] GREEN：运行目标测试。
@@ -86,7 +88,7 @@
 
 **Steps:**
 - [ ] RED：验证 task 名 `markdown_cleaning.execute`/`markdown_cleaning.recover`、严格 envelope、每次 task 独立 DB session、acks-late/reject-on-worker-lost、显式 soft/hard time limit、include 与 beat schedule。
-- [ ] execute task 的 hard time limit 必须来自服务端配置且覆盖 pipeline timeout + 子进程终止宽限；超时后不得发布 destination，Worker 中断按现有租约恢复。
+- [ ] execute task 的 hard time limit 必须来自服务端配置且大于配置的整体 task timeout + 子进程终止宽限；它是 Processor deadline 之后的第二道兜底，超时后不得发布 destination，Worker 中断按现有租约恢复。
 - [ ] 低风险跟踪：当前可信 Processor child 的业务输出受 `max_output_bytes` 约束，但父进程 `communicate()` 尚无独立 stdout 协议硬上限；Worker 上线前须补充有界流式读取/受控 spool，或配置容器/作业级内存硬限与受控并发，避免异常 child 以超大协议响应占满 Worker 内存。
 - [ ] Celery entrypoint 只做 message validation、依赖组装、调用 orchestration 和安全日志；不得实现文件/SQL/Processor 细节。
 - [ ] recover task 使用 Repository 列表与现有 dispatcher 重投 envelope，逐项记录失败但不中断。
@@ -101,6 +103,7 @@
 **Steps:**
 - [ ] 使用真实 PostgreSQL 和 Redis；通过 API POST 创建任务并捕获真实 broker envelope，Worker 从 DB 读取路径而非消息。
 - [ ] 运行固定中文输入，覆盖段落去重、五类脱敏、格式化、保护区、最终 DB 统计与目标文件逐字节一致。
+- [ ] 以 UTF-8 BOM 原件覆盖 `source.original.md` 摘要、无 BOM `source.md` 摘要、Processor strict no-BOM 与任务 deadline 传播；Celery hard limit 仅作为第二道兜底。
 - [ ] 断言 POST/GET 始终返回业务 `targetPath`，响应、错误、日志均无 `staging_path`/宿主机内部路径。
 - [ ] 覆盖重复消息、入队失败、worker 中断、租约接管、路径逃逸、输出冲突和发布后 DB 失败恢复。
 - [ ] 运行 `uv run --project backend pytest backend/tests/integration/markdown_cleaning -q`。

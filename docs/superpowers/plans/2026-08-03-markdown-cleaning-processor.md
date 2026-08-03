@@ -55,7 +55,7 @@ backend/tests/fixtures/markdown_cleaning/v1/
 - Create: `backend/tests/features/markdown_cleaning/processors/{conftest.py,test_protocol.py,test_dependency_compatibility.py}`
 
 **Steps:**
-- [ ] RED：测试 `MarkdownCleaningProcessor.process(source_path, destination_path) -> ProcessorResult`、六项统计、稳定 error code，以及第三方依赖在 Python 3.14 下可导入。
+- [ ] RED：测试 `MarkdownCleaningProcessor.process(source_path, destination_path, *, deadline: datetime | None = None) -> ProcessorResult`、六项统计、稳定 error code，以及第三方依赖在 Python 3.14 下可导入。
 - [ ] 运行 `uv run --project backend pytest backend/tests/features/markdown_cleaning/processors/test_protocol.py backend/tests/features/markdown_cleaning/processors/test_dependency_compatibility.py -q`，确认因接口/依赖缺失失败。
 - [ ] 直接固定 `markdown-it-py>=4.2,<5`、`presidio-analyzer>=2.2.363,<3`、`mdformat>=1,<2`、`mdformat-gfm>=1,<2`；不安装 `presidio` meta-package，不引入模型下载。
 - [ ] 实现第三方无关的 Protocol、不可变 result/summary/span 模型和异常映射。
@@ -71,7 +71,7 @@ backend/tests/fixtures/markdown_cleaning/v1/
 **Steps:**
 - [ ] RED：覆盖普通段落、heading、list、blockquote、table、fence、inline code、HTML、重复文本位置、CRLF/Unicode、未闭合 fence 和区间重叠。
 - [ ] 使用 `MarkdownIt("commonmark").enable("table")` 得到 block line map；项目内 mapper 将叶节点文本映射为绝对字符区间，禁止用模糊 `str.find` 对齐。
-- [ ] 对 fenced code、inline code、HTML、Markdown markup/link destination 建立保护区；所有 edit 校验边界与互不重叠后倒序应用。
+- [ ] 对 fenced code、inline code、HTML、Markdown markup/link destination 建立保护区；destination 覆盖 inline/image、autolink 与 reference definition，但不保护 link label/普通显示文本；所有 edit 校验边界与互不重叠后倒序应用。
 - [ ] 将不可映射输入映射为 `INVALID_MARKDOWN_INPUT` 或 `MARKDOWN_PARSE_FAILED`，消息不包含正文。
 - [ ] GREEN：运行 `uv run --project backend pytest backend/tests/features/markdown_cleaning/processors/test_markdown_parser.py -q`。
 - [ ] Commit: `功能：实现Markdown源码区间解析`
@@ -127,7 +127,7 @@ backend/tests/fixtures/markdown_cleaning/v1/
 
 **Steps:**
 - [ ] RED：固定包含重复段落、五类敏感信息、GFM 格式问题和全部保护区的中文 corpus；逐字节断言输出和完整统计；二次处理输出相同且全部变更计数为零。
-- [ ] 实现严格 UTF-8/no BOM/no NUL、输入/输出大小、block/span 数量和处理时限检查；destination 使用临时文件写入并原子替换，但只限 staging。
+- [ ] 实现严格 UTF-8/no BOM/no NUL、输入/输出大小、block/span 数量和处理时限检查；可选调用方 UTC deadline 与内部最大秒数取较早者，已过期立即 timeout，子进程使用剩余时间；destination 使用临时文件写入并原子替换，但只限 staging。
 - [ ] 串接固定流水线，任何阶段失败不得留下伪完整结果；返回 source/output hash、字节数和统计。
 - [ ] GREEN：运行 `uv run --project backend pytest backend/tests/features/markdown_cleaning/processors backend/tests/integration/markdown_cleaning/test_processor_corpus.py -q`。
 - [ ] 执行 `uv run --project backend ruff check ...`、`uv run --project backend mypy app/features/markdown_cleaning/processors`、项目既有 Pyright/ty 目标命令。
@@ -139,3 +139,10 @@ backend/tests/fixtures/markdown_cleaning/v1/
 - [ ] 对每项 finding 重新走 RED → GREEN，由 implementer 修复、原 reviewer 复核。
 - [ ] 重新运行 Processor 全测试及 Ruff、Mypy、Pyright、ty；记录真实命令、通过数和未覆盖边界。
 - [ ] Commit: `修复：收紧Markdown清洗Processor契约`
+
+#### Final review fix wave
+
+- [x] RED → GREEN：补齐 autolink/reference definition destination 的 parser、redactor、pipeline 与 golden 回归；link label/普通显示文本仍不进入保护区。
+- [x] RED → GREEN：Protocol/Pipeline 增加可选 UTC deadline；生产 Worker 必传任务 deadline，有效 deadline 与内部最大秒数取较早者，已过期立即 timeout。
+- [x] 对齐 Worker BOM 规范化边界：保留 `source.original.md`，validator 生成独立 strict no-BOM `source.md`；Processor 不放宽 BOM 契约。
+- [x] stdout 无界缓冲保持 Minor，继续作为 Worker 上线前硬门禁，本 wave 不扩大 I/O 实现。

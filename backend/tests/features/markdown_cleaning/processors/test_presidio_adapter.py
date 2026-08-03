@@ -6,6 +6,9 @@ import app.features.markdown_cleaning.processors.presidio_adapter as presidio_ad
 from app.features.markdown_cleaning.processors.errors import (
     MarkdownCleaningErrorCode,
 )
+from app.features.markdown_cleaning.processors.markdown_parser import (
+    MarkdownParserAdapter,
+)
 from app.features.markdown_cleaning.processors.models import SourceSpan
 from app.features.markdown_cleaning.processors.presidio_adapter import (
     MarkdownCleaningProcessorError,
@@ -132,6 +135,28 @@ def test_fallback_uses_only_valid_matches_and_respects_protected_and_tokens(
     assert result.summary == SensitiveRedactionSummary(
         phone=1, id_card=2, bank_card=1, email=1, ipv4=2
     )
+
+
+def test_redactor_preserves_link_destinations_but_redacts_visible_text() -> None:
+    markdown = (
+        "ordinary a@b.com and [label a@b.com][id]\n\n"
+        "<mailto:a@b.com> and <https://10.0.0.1/path>\n\n"
+        "[id]: https://a@b.com/foo(1)\n"
+    )
+    parsed = MarkdownParserAdapter().parse(markdown)
+
+    result = PresidioMarkdownRedactor(analyzer=None).redact(
+        markdown,
+        protected_spans=parsed.protected_spans,
+    )
+
+    assert "ordinary [EMAIL]" in result.text
+    assert "[label [EMAIL]][id]" in result.text
+    assert "<mailto:a@b.com>" in result.text
+    assert "<https://10.0.0.1/path>" in result.text
+    assert "[id]: https://a@b.com/foo(1)" in result.text
+    assert result.summary.email == 2
+    assert result.summary.ipv4 == 0
 
 
 def test_overlap_resolution_uses_supported_entity_order() -> None:

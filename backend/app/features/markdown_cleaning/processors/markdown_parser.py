@@ -106,7 +106,8 @@ class MarkdownParserAdapter:
         self._validate_fenced_code_blocks_closed(markdown)
 
         try:
-            tokens = self._markdown_it.parse(markdown)
+            environment: dict[str, object] = {}
+            tokens = self._markdown_it.parse(markdown, environment)
         except Exception as exc:
             raise MarkdownParserError(
                 MarkdownParserErrorCode.MARKDOWN_PARSE_FAILED,
@@ -245,9 +246,21 @@ class MarkdownParserAdapter:
                         )
                     )
 
+            inline_leaves.extend(
+                self._collect_reference_definition_leaves(
+                    markdown,
+                    line_offsets,
+                    environment.get("references"),
+                    protected,
+                )
+            )
+            inline_leaves.sort(
+                key=lambda leaf: (leaf.source_span.start, leaf.source_span.end)
+            )
+            protected.extend(leaf.source_span for leaf in inline_leaves)
+
             blocks.extend(self._blank_blocks(lines, line_offsets))
             blocks.sort(key=lambda block: (block.source_span.start, block.source_span.end))
-            protected.extend(leaf.source_span for leaf in inline_leaves)
             protected_sorted = merge_source_spans(protected)
         except MarkdownParserError:
             raise
@@ -553,10 +566,19 @@ class MarkdownParserAdapter:
             if child_type == "link_open":
                 destination = self._get_child_attribute(child, "href")
                 if destination:
-                    span = self._extract_destination_span(
-                        inline_markdown,
-                        cursor,
-                        destination,
+                    markup = getattr(child, "markup", "")
+                    span = (
+                        self._extract_autolink_destination_span(
+                            inline_markdown,
+                            cursor,
+                            destination,
+                        )
+                        if markup == "autolink"
+                        else self._extract_destination_span(
+                            inline_markdown,
+                            cursor,
+                            destination,
+                        )
                     )
                     if span is not None:
                         source_span = self._rebase_span(span, inline_offsets)
@@ -595,6 +617,141 @@ class MarkdownParserAdapter:
                 continue
 
         return leaves
+
+    @staticmethod
+    def _extract_autolink_destination_span(
+        inline_markdown: str,
+        cursor: int,
+        destination: str,
+    ) -> tuple[int, int] | None:
+        anchor = cursor
+        while anchor < len(inline_markdown):
+            start_marker = inline_markdown.find("<", anchor)
+            if start_marker < 0:
+                return None
+            end_marker = inline_markdown.find(">", start_marker + 1)
+            if end_marker < 0:
+                return None
+            start = start_marker + 1
+            raw_destination = inline_markdown[start:end_marker]
+            normalized = _normalize_destination(raw_destination)
+            if normalized == destination or f"mailto:{normalized}" == destination:
+                return (start, end_marker)
+            anchor = start_marker + 1
+        return None
+
+    @classmethod
+    def _collect_reference_definition_leaves(
+        cls,
+        markdown: str,
+        line_offsets: tuple[int, ...],
+        references: object,
+        existing_protected: Sequence[SourceSpan],
+    ) -> list[MarkdownInlineLeaf]:
+        if not isinstance(references, dict):
+            return []
+
+        leaves: list[MarkdownInlineLeaf] = []
+        seen: set[tuple[int, int]] = set()
+        for reference in references.values():
+            if not isinstance(reference, dict):
+                continue
+            href = reference.get("href")
+            line_map = reference.get("map")
+            if (
+                not isinstance(href, str)
+                or not isinstance(line_map, list)
+                or len(line_map) != 2
+                or not isinstance(line_map[0], int)
+                or not isinstance(line_map[1], int)
+            ):
+                continue
+            typed_line_map = [line_map[0], line_map[1]]
+            definition_span = source_span_from_line_map(
+                typed_line_map,
+                line_offsets,
+            )
+            if definition_span is None:
+                continue
+            definition = markdown[definition_span.start : definition_span.end]
+            span = cls._extract_reference_destination_span(definition, href)
+            if span is None:
+                continue
+            source_span = SourceSpan(
+                start=definition_span.start + span[0],
+                end=definition_span.start + span[1],
+            )
+            span_key = (source_span.start, source_span.end)
+            if span_key in seen or any(
+                protected.start <= source_span.start
+                and source_span.end <= protected.end
+                for protected in existing_protected
+            ):
+                continue
+            seen.add(span_key)
+            leaves.append(
+                MarkdownInlineLeaf(
+                    kind=MarkdownInlineLeafType.LINK_DESTINATION,
+                    parent_block_kind=MarkdownBlockType.PARAGRAPH,
+                    source_span=source_span,
+                )
+            )
+        return leaves
+
+    @classmethod
+    def _extract_reference_destination_span(
+        cls,
+        definition: str,
+        destination: str,
+    ) -> tuple[int, int] | None:
+        delimiter = definition.find("]:")
+        if delimiter < 0:
+            return None
+        start = delimiter + 2
+        while start < len(definition) and definition[start].isspace():
+            start += 1
+        if start >= len(definition):
+            return None
+
+        if definition[start] == "<":
+            end_marker = definition.find(">", start + 1)
+            if end_marker < 0:
+                return None
+            raw_destination = definition[start + 1 : end_marker]
+            if _normalize_destination(raw_destination) == destination:
+                return (start + 1, end_marker)
+            return None
+
+        end = cls._scan_reference_destination_end(definition, start)
+        if end is None:
+            return None
+        if _normalize_destination(definition[start:end]) != destination:
+            return None
+        return (start, end)
+
+    @staticmethod
+    def _scan_reference_destination_end(definition: str, start: int) -> int | None:
+        depth = 0
+        offset = start
+        while offset < len(definition):
+            char = definition[offset]
+            if char == "\\":
+                if offset + 1 >= len(definition):
+                    return None
+                offset += 2
+                continue
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif char.isspace() and depth == 0:
+                break
+            offset += 1
+        if depth != 0 or offset == start:
+            return None
+        return offset
 
     @staticmethod
     def _find_lexeme_span(

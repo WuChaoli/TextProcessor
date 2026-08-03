@@ -4,6 +4,7 @@ import hashlib
 import os
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,37 @@ def test_pipeline_second_run_is_idempotent_when_input_is_bytestable_output(tmp_p
         formatting_changes=0,
     )
     assert second.input_sha256 == hashlib.sha256(first_dest.read_bytes()).hexdigest()
+
+
+def test_pipeline_preserves_autolink_and_reference_destinations(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "links.md"
+    destination = tmp_path / "links-out.md"
+    source.write_text(
+        (
+            "ordinary a@b.com and 10.0.0.1\n\n"
+            "<mailto:a@b.com> and <https://10.0.0.1/path>\n\n"
+            "[safe label][id]\n\n"
+            "[id]: https://a@b.com/foo(1)\n"
+        ),
+        encoding="utf-8",
+        newline="",
+    )
+
+    result = MarkdownCleaningPipeline(staging_root=tmp_path).process(
+        source,
+        destination,
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+    )
+
+    output = destination.read_text(encoding="utf-8")
+    assert "ordinary [EMAIL] and [IPV4]" in output
+    assert "<mailto:a@b.com>" in output
+    assert "<https://10.0.0.1/path>" in output
+    assert "[id]: https://a@b.com/foo(1)" in output
+    assert result.summary.email_redactions == 1
+    assert result.summary.ipv4_redactions == 1
 
 
 @pytest.mark.parametrize(
@@ -301,7 +333,11 @@ def test_pipeline_terminates_long_transform_within_deadline_without_artifacts(
 
     started_at = time.perf_counter()
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
-        pipeline.process(source, destination)
+        pipeline.process(
+            source,
+            destination,
+            deadline=datetime.now(UTC) + timedelta(seconds=5),
+        )
     elapsed = time.perf_counter() - started_at
 
     assert exc.value.code is MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
@@ -310,6 +346,70 @@ def test_pipeline_terminates_long_transform_within_deadline_without_artifacts(
     assert not destination.exists()
     assert not runtime_marker.exists()
     assert list(tmp_path.glob("markdown-cleaning-*.tmp")) == []
+
+
+def test_pipeline_rejects_expired_caller_deadline_before_path_access(
+    tmp_path: Path,
+) -> None:
+    pipeline = MarkdownCleaningPipeline(staging_root=tmp_path)
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        pipeline.process(
+            tmp_path / "missing-source.md",
+            tmp_path / "missing-parent" / "output.md",
+            deadline=datetime.now(UTC) - timedelta(seconds=1),
+        )
+
+    assert exc.value.code is MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
+    assert not (tmp_path / "missing-parent").exists()
+
+
+def test_pipeline_uses_earlier_caller_deadline_for_subprocess_timeout(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "output.md"
+    runtime_marker = tmp_path / "runtime-finished"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    runtime_script = (
+        "import time;from pathlib import Path;time.sleep(1.0);"
+        f"Path({str(runtime_marker)!r}).write_text('finished', encoding='utf-8')"
+    )
+    pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
+        limits=MarkdownCleaningPipelineLimits(processing_timeout_seconds=5.0),
+        _runtime_command=(sys.executable, "-c", runtime_script),
+    )
+
+    started_at = time.perf_counter()
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        pipeline.process(
+            source,
+            destination,
+            deadline=datetime.now(UTC) + timedelta(seconds=0.2),
+        )
+    elapsed = time.perf_counter() - started_at
+
+    assert exc.value.code is MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
+    assert elapsed < 0.8
+    time.sleep(0.2)
+    assert not destination.exists()
+    assert not runtime_marker.exists()
+    assert list(tmp_path.glob("markdown-cleaning-*.tmp")) == []
+
+
+def test_pipeline_rejects_non_utc_deadline(tmp_path: Path) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(
+            source,
+            tmp_path / "output.md",
+            deadline=datetime.now(),
+        )
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
 
 
 def test_pipeline_rejects_silent_inline_execution_for_custom_stage(

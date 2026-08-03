@@ -107,6 +107,35 @@ def test_link_destination_supports_parenthesized_destination() -> None:
     ]
 
 
+def test_autolink_and_reference_definition_destinations_are_protected_only() -> None:
+    markdown = (
+        "ordinary a@b.com and [label a@b.com][id]\n\n"
+        "<mailto:a@b.com> and <https://10.0.0.1/path>\n\n"
+        "[id]: https://a@b.com/foo(1)\n"
+    )
+
+    result = MarkdownParserAdapter().parse(markdown)
+    destination_spans = [
+        leaf.source_span
+        for leaf in result.inline_leaves
+        if leaf.kind == MarkdownInlineLeafType.LINK_DESTINATION
+    ]
+
+    assert {
+        markdown[span.start : span.end] for span in destination_spans
+    } == {
+        "mailto:a@b.com",
+        "https://10.0.0.1/path",
+        "https://a@b.com/foo(1)",
+    }
+    ordinary_email_start = markdown.index("a@b.com")
+    label_email_start = markdown.index("a@b.com", ordinary_email_start + 1)
+    for visible_start in (ordinary_email_start, label_email_start):
+        assert not any(
+            span.start <= visible_start < span.end for span in destination_spans
+        )
+
+
 def test_inline_code_double_delimiter_is_protected() -> None:
     markdown = "prefix\n\n`` `a` `` and `` `b` ``\n"
     result = MarkdownParserAdapter().parse(markdown)

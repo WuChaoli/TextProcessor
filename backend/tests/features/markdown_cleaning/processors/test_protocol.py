@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import FrozenInstanceError
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,11 @@ def test_markdown_cleaning_processor_protocol_has_expected_signature() -> None:
         "self",
         "source_path",
         "destination_path",
+        "deadline",
     ]
+    assert params[-1].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params[-1].default is None
+    assert "datetime" in str(params[-1].annotation)
     assert str(signature.return_annotation).endswith("ProcessorResult")
 
     class _Dummy:
@@ -38,6 +43,8 @@ def test_markdown_cleaning_processor_protocol_has_expected_signature() -> None:
             self,
             source_path: Path,
             destination_path: Path,
+            *,
+            deadline: datetime | None = None,
         ) -> ProcessorResult:
             raise NotImplementedError
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from app.features.markdown_cleaning.processors import (
@@ -34,7 +35,11 @@ def test_processor_corpus_end_to_end_integration(tmp_path: Path) -> None:
         output = case_staging / "output.md"
         rerun_output = case_staging / "rerun-output.md"
 
-        first = pipeline.process(source, output)
+        first = pipeline.process(
+            source,
+            output,
+            deadline=datetime.now(UTC) + timedelta(seconds=30),
+        )
 
         assert output.read_bytes() == expected.read_bytes()
         assert asdict(first.summary) == expected_summary

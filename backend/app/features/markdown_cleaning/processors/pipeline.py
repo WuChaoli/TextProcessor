@@ -13,6 +13,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -113,7 +114,7 @@ class _ProcessingDeadline:
     time_fn: Callable[[], float]
 
     def check(self) -> None:
-        if self.time_fn() - self.started_at > self.timeout_seconds:
+        if self.time_fn() - self.started_at >= self.timeout_seconds:
             raise map_processing_exception(
                 TimeoutError("processing deadline exceeded"),
                 MarkdownCleaningErrorCode.PROCESSING_TIMEOUT,
@@ -182,28 +183,35 @@ class MarkdownCleaningPipeline:
                 "app.features.markdown_cleaning.processors.pipeline_runtime",
             )
 
-    def process(self, source_path: Path, destination_path: Path) -> ProcessorResult:
+    def process(
+        self,
+        source_path: Path,
+        destination_path: Path,
+        *,
+        deadline: datetime | None = None,
+    ) -> ProcessorResult:
         try:
+            effective_deadline = self._create_processing_deadline(deadline)
+            effective_deadline.check()
             source_path, destination_path = self._validate_staging_paths(
                 source_path,
                 destination_path,
             )
-            deadline = _ProcessingDeadline(
-                started_at=self._time_fn(),
-                timeout_seconds=self._limits.processing_timeout_seconds,
-                time_fn=self._time_fn,
-            )
-            raw_input = self._read_source(source_path, deadline)
+            raw_input = self._read_source(source_path, effective_deadline)
 
             source_text = self._decode_utf8_no_bom(raw_input)
             transformed = (
-                self._run_transform_isolated(source_text, deadline)
+                self._run_transform_isolated(source_text, effective_deadline)
                 if self._runtime_command is not None
-                else self._transform_text(source_text, deadline)
+                else self._transform_text(source_text, effective_deadline)
             )
 
             output_bytes = transformed.text.encode("utf-8")
-            self._enforce_output_invariants(transformed.text, output_bytes, deadline)
+            self._enforce_output_invariants(
+                transformed.text,
+                output_bytes,
+                effective_deadline,
+            )
             output_sha256 = self._sha256(output_bytes)
             input_sha256 = self._sha256(raw_input)
             summary = self._build_summary(
@@ -224,13 +232,34 @@ class MarkdownCleaningPipeline:
                 source_path,
                 destination_path,
                 output_bytes,
-                deadline,
+                effective_deadline,
             )
             return result
         except MarkdownCleaningProcessorError:
             raise
         except Exception as exc:
             raise map_processing_exception(exc) from exc
+
+    def _create_processing_deadline(
+        self,
+        caller_deadline: datetime | None,
+    ) -> _ProcessingDeadline:
+        started_at = self._time_fn()
+        timeout_seconds = self._limits.processing_timeout_seconds
+        if caller_deadline is not None:
+            if (
+                not isinstance(caller_deadline, datetime)
+                or caller_deadline.tzinfo is None
+                or caller_deadline.utcoffset() != timedelta(0)
+            ):
+                raise ValueError("deadline must be a timezone-aware UTC datetime")
+            caller_remaining = (caller_deadline - datetime.now(UTC)).total_seconds()
+            timeout_seconds = min(timeout_seconds, max(0.0, caller_remaining))
+        return _ProcessingDeadline(
+            started_at=started_at,
+            timeout_seconds=timeout_seconds,
+            time_fn=self._time_fn,
+        )
 
     def _transform_text(
         self,
