@@ -220,7 +220,12 @@ class MarkdownCleaningPipeline:
                 input_bytes=len(raw_input),
                 output_bytes=len(output_bytes),
             )
-            self._write_staging_atomic(destination_path, output_bytes, deadline)
+            self._write_staging_atomic(
+                source_path,
+                destination_path,
+                output_bytes,
+                deadline,
+            )
             return result
         except MarkdownCleaningProcessorError:
             raise
@@ -424,7 +429,25 @@ class MarkdownCleaningPipeline:
                 ValueError("source and destination must differ"),
                 MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
             )
+        self._reject_same_file_alias(resolved_source, resolved_destination)
         return resolved_source, resolved_destination
+
+    @staticmethod
+    def _reject_same_file_alias(source: Path, destination: Path) -> None:
+        try:
+            aliases_source = source.samefile(destination)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise map_processing_exception(
+                exc,
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+            ) from exc
+        if aliases_source:
+            raise map_processing_exception(
+                ValueError("source and destination must reference different files"),
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+            )
 
     @staticmethod
     def _is_link_or_junction(path: Path) -> bool:
@@ -630,6 +653,7 @@ class MarkdownCleaningPipeline:
 
     def _write_staging_atomic(
         self,
+        source: Path,
         destination: Path,
         content: bytes,
         deadline: _ProcessingDeadline,
@@ -653,6 +677,7 @@ class MarkdownCleaningPipeline:
                 handle.flush()
                 os.fsync(handle.fileno())
             deadline.check()
+            self._reject_same_file_alias(source, destination)
             os.replace(tmp_path, destination)
         except Exception as exc:
             if tmp_path is not None and tmp_path.exists():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 import time
 from pathlib import Path
@@ -573,6 +574,79 @@ def test_pipeline_rejects_source_as_destination_without_modifying_it(
 
     assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
     assert source.read_bytes() == original
+
+
+def test_pipeline_rejects_existing_hard_link_destination_alias(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "source-alias.md"
+    original = "正文\n".encode()
+    source.write_bytes(original)
+    os.link(source, destination)
+    assert source.samefile(destination)
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert source.read_bytes() == original
+    assert destination.read_bytes() == original
+
+
+def test_pipeline_rechecks_hard_link_alias_immediately_before_publish(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "late-alias.md"
+    original = "正文\n".encode()
+    source.write_bytes(original)
+    formatter = MarkdownFormatterAdapter()
+    original_format = formatter.format
+
+    def create_alias_before_publish(markdown: str) -> MarkdownFormatterResult:
+        result = original_format(markdown)
+        os.link(source, destination)
+        assert source.samefile(destination)
+        return result
+
+    monkeypatch.setattr(formatter, "format", create_alias_before_publish)
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(
+            staging_root=tmp_path,
+            formatter=formatter,
+            _run_inline=True,
+        ).process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert source.read_bytes() == original
+    assert destination.read_bytes() == original
+    assert list(tmp_path.glob("markdown-cleaning-*.tmp")) == []
+
+
+def test_pipeline_maps_samefile_os_error_without_publishing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "output.md"
+    original = "正文\n".encode()
+    source.write_bytes(original)
+
+    def fail_samefile(_self: Path, _other: Path) -> bool:
+        raise PermissionError("sensitive path detail")
+
+    monkeypatch.setattr(Path, "samefile", fail_samefile)
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "sensitive path detail" not in exc.value.safe_message
+    assert source.read_bytes() == original
+    assert not destination.exists()
 
 
 def test_pipeline_does_not_create_unowned_destination_directories(tmp_path: Path) -> None:

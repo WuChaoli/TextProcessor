@@ -87,6 +87,7 @@
 **Steps:**
 - [ ] RED：验证 task 名 `markdown_cleaning.execute`/`markdown_cleaning.recover`、严格 envelope、每次 task 独立 DB session、acks-late/reject-on-worker-lost、显式 soft/hard time limit、include 与 beat schedule。
 - [ ] execute task 的 hard time limit 必须来自服务端配置且覆盖 pipeline timeout + 子进程终止宽限；超时后不得发布 destination，Worker 中断按现有租约恢复。
+- [ ] 低风险跟踪：当前可信 Processor child 的业务输出受 `max_output_bytes` 约束，但父进程 `communicate()` 尚无独立 stdout 协议硬上限；Worker 上线前须补充有界流式读取/受控 spool，或配置容器/作业级内存硬限与受控并发，避免异常 child 以超大协议响应占满 Worker 内存。
 - [ ] Celery entrypoint 只做 message validation、依赖组装、调用 orchestration 和安全日志；不得实现文件/SQL/Processor 细节。
 - [ ] recover task 使用 Repository 列表与现有 dispatcher 重投 envelope，逐项记录失败但不中断。
 - [ ] GREEN：运行目标测试并启动 Celery app 检查 task registry。
