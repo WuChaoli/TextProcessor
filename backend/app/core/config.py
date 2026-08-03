@@ -210,6 +210,10 @@ class Settings(BaseSettings):
     GLOBAL_DEDUP_INPUT_ROOTS: list[Path] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS: list[str] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS: list[str] = []
+    MARKDOWN_CLEANING_INPUT_ROOTS: list[Path] = []
+    MARKDOWN_CLEANING_OUTPUT_ROOTS: list[Path] = []
+    MARKDOWN_CLEANING_HTTP_ALLOWED_HOSTS: list[str] = []
+    MARKDOWN_CLEANING_HTTP_ALLOWED_CIDRS: list[str] = []
     CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=3660, gt=0)
     EXTRACTION_WORKER: ExtractionWorkerSettings = Field(
         default_factory=ExtractionWorkerSettings
