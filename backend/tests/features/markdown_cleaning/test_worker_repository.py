@@ -299,6 +299,63 @@ def test_mark_publishing_requires_summary_counts(session: Session) -> None:
     )
 
 
+def test_mark_publishing_rejects_wrong_processing_phase(session: Session) -> None:
+    task = make_task()
+    session.add(task)
+    session.commit()
+    repository = MarkdownCleaningTaskRepository(session)
+    acquired = repository.acquire_queued(task.id, now=NOW, lease_seconds=20)
+    assert acquired is not None
+    assert acquired.lease_token is not None
+
+    assert repository.save_prepared(
+        task.id,
+        lease_token=acquired.lease_token,
+        staging_path="/staging/task.md",
+        input_sha256="1" * 64,
+        prepared_output_sha256="2" * 64,
+        duplicate_paragraphs_removed=1,
+        phone_redaction_count=2,
+        id_card_redaction_count=3,
+        bank_card_redaction_count=4,
+        email_redaction_count=5,
+        ipv4_redaction_count=6,
+        formatting_change_count=7,
+        now=NOW + timedelta(seconds=1),
+    )
+    assert repository.update_progress(
+        task.id,
+        lease_token=acquired.lease_token,
+        progress_percent=20,
+        processing_phase=MarkdownCleaningProcessingPhase.CLEANING,
+        now=NOW + timedelta(seconds=2),
+    )
+
+    assert (
+        repository.mark_publishing(
+            task.id,
+            lease_token=acquired.lease_token,
+            now=NOW + timedelta(seconds=2),
+        )
+        is False
+    )
+
+    unchanged = repository.get(task.id)
+    assert unchanged is not None
+    assert unchanged.processing_phase == MarkdownCleaningProcessingPhase.CLEANING
+    assert unchanged.lease_token == acquired.lease_token
+    assert unchanged.staging_path == "/staging/task.md"
+    assert unchanged.input_sha256 == "1" * 64
+    assert unchanged.prepared_output_sha256 == "2" * 64
+    assert unchanged.duplicate_paragraphs_removed == 1
+    assert unchanged.phone_redaction_count == 2
+    assert unchanged.id_card_redaction_count == 3
+    assert unchanged.bank_card_redaction_count == 4
+    assert unchanged.email_redaction_count == 5
+    assert unchanged.ipv4_redaction_count == 6
+    assert unchanged.formatting_change_count == 7
+
+
 def test_mark_succeeded_requires_mark_publishing(session: Session) -> None:
     task = make_task()
     session.add(task)
