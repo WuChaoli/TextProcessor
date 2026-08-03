@@ -16,6 +16,7 @@ from .markdown_parser import (
     MarkdownParseResult,
 )
 from .models import MarkdownCleaningSummary, ProcessorResult, SourceSpan
+from .paragraph_dedup import ParagraphDeduplicator
 from .protocol import MarkdownCleaningProcessor
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "MarkdownParserAdapter",
     "MarkdownParserError",
     "MarkdownParserErrorCode",
+    "ParagraphDeduplicator",
 ]
