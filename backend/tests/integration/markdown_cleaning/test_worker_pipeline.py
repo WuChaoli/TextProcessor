@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from pathlib import Path
 
+from celery import Celery
 from sqlmodel import Session
 
+from app.features.markdown_cleaning.dispatcher import (
+    CeleryMarkdownCleaningTaskDispatcher,
+)
 from app.features.markdown_cleaning.repository import MarkdownCleaningTaskRepository
 from app.features.markdown_cleaning.state_machine import MarkdownCleaningTaskStatus
 from tests.integration.markdown_cleaning.conftest import (
@@ -43,17 +48,31 @@ def test_real_postgres_processor_pipeline_preserves_bom_truth_and_statistics(
 
 
 def test_duplicate_broker_delivery_is_terminally_idempotent(
-    pg_session: Session, caller, pipeline_roots: dict[str, Path]
+    pg_session: Session, caller, markdown_cleaning_runtime
 ) -> None:
-    source = pipeline_roots["input"] / "once.md"
-    target = pipeline_roots["output"] / "once-result.md"
+    runtime = markdown_cleaning_runtime
+    source = runtime.source.parent / "once.md"
+    target = runtime.target.parent / "once-result.md"
     source.write_text("# Once\n", encoding="utf-8")
     task = persist_queued_task(pg_session, caller, source=source, target=target)
-    worker = build_real_orchestrator(pg_session, pipeline_roots)
-    worker.execute(task.id)
+    dispatcher = CeleryMarkdownCleaningTaskDispatcher(
+        Celery("duplicate-delivery", broker=runtime.redis_url)
+    )
+    dispatcher.enqueue_execute(task.id)
+    dispatcher.enqueue_execute(task.id)
+    assert runtime.redis.llen("markdown_cleaning") == 2
+    with runtime.worker():
+        deadline = time.monotonic() + 45
+        while True:
+            pg_session.expire_all()
+            saved = MarkdownCleaningTaskRepository(pg_session).get(task.id)
+            if saved.status is MarkdownCleaningTaskStatus.SUCCEEDED:
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.2)
     first = target.read_bytes()
-    worker.execute(task.id)
     assert target.read_bytes() == first
+    pg_session.expire_all()
     assert MarkdownCleaningTaskRepository(pg_session).get(task.id).attempt_count == 1
 
 

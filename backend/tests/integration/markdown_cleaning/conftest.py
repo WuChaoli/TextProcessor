@@ -82,12 +82,21 @@ class MarkdownCleaningRuntime:
         try:
             yield process
         finally:
-            process.terminate()
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                process.terminate()
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+            assert process.poll() is not None
 
 
 def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -209,6 +218,7 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             processing_hard_timeout_seconds=60,
         )
         monkeypatch.setattr(deps, "engine", engine)
+        celery_app.close()
         celery_app.conf.broker_url = redis_url
         caller = User(
             email=f"task6-{uuid.uuid4()}@example.com",
@@ -242,6 +252,12 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             pass
         if engine is not None:
             engine.dispose()
+        try:
+            from app.core.celery_app import celery_app
+
+            celery_app.close()
+        except ImportError:
+            pass
         subprocess.run(
             ["docker", "rm", "-f", container_name],
             cwd=backend_root,
@@ -283,7 +299,7 @@ def caller(pg_session: Session) -> User:
 def pipeline_roots(tmp_path: Path) -> dict[str, Path]:
     roots = {name: tmp_path / name for name in ("input", "output", "staging")}
     for root in roots.values():
-        root.mkdir()
+        root.mkdir(exist_ok=True)
     return roots
 
 

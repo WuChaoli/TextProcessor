@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from celery import Celery
 from sqlmodel import Session
 
 from app.features.markdown_cleaning.orchestration import MarkdownCleaningRecovery
@@ -22,33 +24,34 @@ class RecordingDispatcher:
 
 
 def test_expired_worker_lease_is_requeued_for_takeover(
-    pg_session: Session, caller, pipeline_roots: dict[str, Path]
+    pg_session: Session, caller, markdown_cleaning_runtime
 ) -> None:
-    source = pipeline_roots["input"] / "lease.md"
+    runtime = markdown_cleaning_runtime
+    source = runtime.source.parent / "lease.md"
     source.write_text("lease\n", encoding="utf-8")
     task = persist_queued_task(
-        pg_session, caller, source=source, target=pipeline_roots["output"] / "lease.md"
+        pg_session, caller, source=source, target=runtime.target.parent / "lease.md"
     )
     repository = MarkdownCleaningTaskRepository(pg_session)
-    old = datetime.now(UTC) - timedelta(minutes=5)
+    old = datetime.now(UTC) - timedelta(seconds=5)
     claimed = repository.acquire_queued(
         task.id, now=old, lease_seconds=1, processing_timeout_seconds=30
     )
     assert claimed is not None
-    dispatcher = RecordingDispatcher()
-    recovery = MarkdownCleaningRecovery(
-        repository=repository,
-        dispatcher=dispatcher,
-        publisher=MarkdownCleaningResultPublisher(
-            output_roots=(pipeline_roots["output"],), max_output_bytes=1024
-        ),
-        queue_recovery_interval_seconds=1,
-        batch_size=10,
-    )
-    recovery.recover_batch()
-    saved = repository.get(task.id)
-    assert saved.status is MarkdownCleaningTaskStatus.QUEUED
-    assert dispatcher.ids == [task.id]
+    worker = runtime.worker()
+    with worker:
+        Celery("recovery-test", broker=runtime.redis_url).send_task(
+            "markdown_cleaning.recover", queue="markdown_cleaning"
+        )
+        deadline = time.monotonic() + 45
+        while True:
+            pg_session.expire_all()
+            saved = repository.get(task.id)
+            if saved.status is MarkdownCleaningTaskStatus.SUCCEEDED:
+                break
+            assert time.monotonic() < deadline, saved.status
+            time.sleep(0.2)
+    assert saved.attempt_count == 2
 
 
 def test_published_file_is_reconciled_after_database_failure(

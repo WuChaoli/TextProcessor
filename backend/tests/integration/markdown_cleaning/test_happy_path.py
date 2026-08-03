@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -15,13 +16,15 @@ def test_api_and_real_worker_clean_markdown_end_to_end(
     markdown_cleaning_runtime,
 ) -> None:
     runtime = markdown_cleaning_runtime
-    source_bytes = (
-        b"\xef\xbb\xbf#\xe6\xa0\x87\xe9\xa2\x98\n\n"
-        b"\xe9\x87\x8d\xe5\xa4\x8d\xe6\xae\xb5\xe8\x90\xbd\n\n"
-        b"\xe9\x87\x8d\xe5\xa4\x8d\xe6\xae\xb5\xe8\x90\xbd\n\n"
-        b"\xe6\x89\x8b\xe6\x9c\xba 13800138000\xef\xbc\x8c\xe9\x82\xae\xe7\xae\xb1 a@example.com\xe3\x80\x82\n"
+    corpus = (
+        Path(__file__).parents[2]
+        / "fixtures"
+        / "markdown_cleaning"
+        / "v1"
+        / "case-duplicate-redact"
     )
-    expected = "#标题\n\n重复段落\n\n手机 [PHONE]，邮箱 [EMAIL]。\n".encode()
+    source_bytes = b"\xef\xbb\xbf" + (corpus / "input.md").read_bytes()
+    expected = (corpus / "expected.md").read_bytes()
     runtime.source.write_bytes(source_bytes)
 
     with TestClient(runtime.app) as client:
@@ -63,12 +66,12 @@ def test_api_and_real_worker_clean_markdown_end_to_end(
         "duplicateParagraphsRemoved": 1,
         "redactions": {
             "phone": 1,
-            "idCard": 0,
-            "bankCard": 0,
-            "email": 1,
-            "ipv4": 0,
+            "idCard": 1,
+            "bankCard": 1,
+            "email": 2,
+            "ipv4": 2,
         },
-        "formattingChanges": 0,
+        "formattingChanges": 2,
     }
     assert "staging" not in json.dumps(payload, ensure_ascii=False).lower()
     assert str(runtime.staging_root) not in json.dumps(payload, ensure_ascii=False)

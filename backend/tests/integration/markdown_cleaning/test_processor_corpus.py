@@ -11,7 +11,7 @@ from app.features.markdown_cleaning.processors import (
     MarkdownCleaningSummary,
 )
 
-_ROOT = Path("backend/tests/fixtures/markdown_cleaning/v1")
+_ROOT = Path(__file__).parents[2] / "fixtures" / "markdown_cleaning" / "v1"
 
 
 def test_processor_corpus_end_to_end_integration(tmp_path: Path) -> None:
@@ -19,7 +19,9 @@ def test_processor_corpus_end_to_end_integration(tmp_path: Path) -> None:
     assert cases, "golden corpus should contain at least one case"
     pipeline = MarkdownCleaningPipeline(
         staging_root=tmp_path,
-        limits=MarkdownCleaningPipelineLimits(max_input_bytes=10_485_760, max_output_bytes=10_485_760),
+        limits=MarkdownCleaningPipelineLimits(
+            max_input_bytes=10_485_760, max_output_bytes=10_485_760
+        ),
     )
 
     for case_dir in cases:
