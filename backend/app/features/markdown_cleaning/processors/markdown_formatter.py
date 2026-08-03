@@ -138,12 +138,14 @@ class MarkdownFormatterAdapter:
     def _normalize_semantic_text(
         markdown: str,
         table_spans: tuple[tuple[int, int], ...] = (),
+        table_base_offset: int = 0,
     ) -> str:
         normalized = markdown
         if table_spans:
             normalized = MarkdownFormatterAdapter._normalize_table_pipes(
                 normalized,
                 table_spans=table_spans,
+                base_offset=table_base_offset,
             )
 
         normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
@@ -183,6 +185,7 @@ class MarkdownFormatterAdapter:
     def _normalize_table_pipes(
         markdown: str,
         table_spans: tuple[tuple[int, int], ...],
+        base_offset: int = 0,
     ) -> str:
         if not markdown or not table_spans:
             return markdown
@@ -190,7 +193,8 @@ class MarkdownFormatterAdapter:
         output: list[str] = []
         table_index = 0
         table_count = len(table_spans)
-        for absolute_offset, char in enumerate(markdown):
+        for local_offset, char in enumerate(markdown):
+            absolute_offset = base_offset + local_offset
             while table_index < table_count and absolute_offset >= table_spans[table_index][1]:
                 table_index += 1
 
@@ -226,23 +230,23 @@ class MarkdownFormatterAdapter:
             for block in parsed.blocks
             if block.block_type is MarkdownBlockType.TABLE
         )
+
+        visible_segments = MarkdownFormatterAdapter._collect_visible_segments(markdown, parsed)
         if not parsed.protected_spans:
             return MarkdownFormatterAdapter._normalize_semantic_text(
                 markdown,
                 table_spans=table_spans,
             )
 
-        parts: list[str] = []
-        cursor = 0
-        for span in parsed.protected_spans:
-            parts.append(markdown[cursor : span.start])
-            cursor = span.end
-        parts.append(markdown[cursor:])
-
-        return MarkdownFormatterAdapter._normalize_semantic_text(
-            "".join(parts),
-            table_spans=table_spans,
-        )
+        normalized_parts = [
+            MarkdownFormatterAdapter._normalize_semantic_text(
+                segment_text,
+                table_spans=table_spans,
+                table_base_offset=segment_start,
+            )
+            for segment_text, segment_start, _segment_end in visible_segments
+        ]
+        return "".join(normalized_parts)
 
     @staticmethod
     def _collect_inline_leaf_signature(parsed: MarkdownParseResult) -> tuple[tuple[str, str], ...]:
@@ -318,20 +322,15 @@ class MarkdownFormatterAdapter:
             )
 
         protected_entries.sort(key=lambda item: item[0])
-
-        visible_segments: list[str] = []
-        cursor = 0
-        for span in parsed.protected_spans:
-            visible_segments.append(markdown[cursor : span.start])
-            cursor = span.end
-        visible_segments.append(markdown[cursor:])
+        visible_segments = MarkdownFormatterAdapter._collect_visible_segments(markdown, parsed)
 
         normalized_visible = [
             MarkdownFormatterAdapter._normalize_semantic_text(
-                segment,
+                segment_text,
                 table_spans=table_spans,
+                table_base_offset=segment_start,
             )
-            for segment in visible_segments
+            for segment_text, segment_start, _segment_end in visible_segments
         ]
 
         stream: list[tuple[str, ...]] = []
@@ -345,6 +344,19 @@ class MarkdownFormatterAdapter:
             stream.append(("v", normalized_visible[segment_index]))
 
         return tuple(stream)
+
+    @staticmethod
+    def _collect_visible_segments(
+        markdown: str,
+        parsed: MarkdownParseResult,
+    ) -> list[tuple[str, int, int]]:
+        visible_segments: list[tuple[str, int, int]] = []
+        cursor = 0
+        for span in parsed.protected_spans:
+            visible_segments.append((markdown[cursor:span.start], cursor, span.start))
+            cursor = span.end
+        visible_segments.append((markdown[cursor:], cursor, len(markdown)))
+        return visible_segments
 
     @staticmethod
     def _collect_link_targets(

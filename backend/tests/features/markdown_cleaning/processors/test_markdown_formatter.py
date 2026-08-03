@@ -146,6 +146,62 @@ def test_table_pipe_normalization_only_in_table(monkeypatch: pytest.MonkeyPatch)
     assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
 
 
+def test_table_pipe_normalization_with_link_prefix_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    markdown = "[link](https://example.com)\n|a|b|\n|---|---|\n|x|y|\n"
+
+    def _bad_format(*_args: object, **_kwargs: object) -> str:
+        return "[link](https://example.com)\n| a | b |\n| --- | --- |\n| x | y |\n"
+
+    monkeypatch.setattr(markdown_formatter.mdformat, "text", _bad_format)
+    result = MarkdownFormatterAdapter().format(markdown)
+
+    assert result.formatting_changes >= 1
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
+
+
+def test_table_pipe_change_with_code_prefix_requires_no_semantic_delta(monkeypatch: pytest.MonkeyPatch) -> None:
+    markdown = "`code`\n|a|b|\n|---|---|\n|x|y|\n"
+
+    def _bad_format(*_args: object, **_kwargs: object) -> str:
+        return "`code`\n| a | b |\n| --- | --- |\n| x | y |\n"
+
+    monkeypatch.setattr(markdown_formatter.mdformat, "text", _bad_format)
+    result = MarkdownFormatterAdapter().format(markdown)
+
+    assert result.formatting_changes >= 1
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
+
+
+@pytest.mark.parametrize(
+    ("markdown", "formatted"),
+    [
+        (
+            "[link](https://example.com)\n|a|b|\n|---|---|\n|x|y|\n",
+            "[link](https://example.com)\n| x | b |\n| --- | --- |\n| x | y |\n",
+        ),
+        (
+            "`code`\n|a|b|\n|---|---|\n|x|y|\n",
+            "`code`\n| a | b |\n| --- | --- |\n| z | y |\n",
+        ),
+    ],
+)
+def test_table_pipe_variation_and_semantic_change_is_rejected(
+    markdown: str,
+    formatted: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _bad_format(*_args: object, **_kwargs: object) -> str:
+        return formatted
+
+    monkeypatch.setattr(markdown_formatter.mdformat, "text", _bad_format)
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownFormatterAdapter().format(markdown)
+
+    assert (
+        exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
+    )
+
+
 def test_link_targets_are_rejected_when_changed(monkeypatch: pytest.MonkeyPatch) -> None:
     markdown = "## heading\n\n[link](https://example.com/a)\n"
 
