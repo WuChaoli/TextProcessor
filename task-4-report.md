@@ -33,3 +33,22 @@
 ## 备注与风险
 - 以上命令均在 `ENVIRONMENT=local` 且显式 PostgreSQL 环境变量下执行。
 - 任务4 当前轮次未再发现新的阻塞/死锁回归；遗留 `mypy` 报错位于 `test_api_contract.py`，与本轮逻辑修改不直接相关。
+
+## Task4 round 2 修复说明
+- 根因：`conftest.py` 的全局 `db` fixture 在本文件场景也会提前连接 `PostgreSQL`，导致 PostgreSQL 不可达/凭据错误时报错，而非按并发测试逻辑 `skip`。
+- 修复点：
+  - 在 `backend/tests/features/markdown_cleaning/test_service.py` 覆写会话级 autouse `db` fixture 为 noop，避免本文件的其它测试提前触发全局 DB 初始化失败。
+  - 新增 `_skip_if_postgres_unreachable()`：`engine.connect()` 探测返回 `OperationalError` 时 `pytest.skip`，并在并发测试中优先执行，防止逻辑误判。
+  - 保留并发等待/断言路径（`Event.wait` 与 `future.result(timeout=...)`）不变。
+
+## 对照验证（focused service）
+- 默认不可达配置（示例：`POSTGRES_PORT=5432`）：
+  - 命令：`uv run --project backend pytest backend/tests/features/markdown_cleaning/test_service.py -q --maxfail=1`
+  - 结果：`4 passed, 1 skipped`
+- 显式可达配置（`127.0.0.1:5433`）：
+  - 命令：`uv run --project backend pytest backend/tests/features/markdown_cleaning/test_service.py -q --maxfail=1`
+  - 结果：`5 passed`
+- 同步命令：
+  - `uv run --project backend ruff check backend/app/features/markdown_cleaning`
+  - `uv run --project backend mypy backend/app/features/markdown_cleaning`
+  - 结果：`All checks passed` / `Success: no issues found`

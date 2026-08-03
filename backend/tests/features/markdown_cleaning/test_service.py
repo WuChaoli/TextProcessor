@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
@@ -27,6 +28,11 @@ from app.features.markdown_cleaning.state_machine import (
     MarkdownCleaningTaskStatus,
 )
 from app.models import UserCreate
+
+
+@pytest.fixture(scope="session", autouse=True)
+def db() -> Generator[None, None, None]:
+    yield
 
 
 @dataclass
@@ -95,6 +101,14 @@ def _create_test_user() -> uuid.UUID:
             user_create=UserCreate(email=email, password="complexPass123"),
         )
         return user.id
+
+
+def _skip_if_postgres_unreachable() -> None:
+    try:
+        with engine.connect() as db:
+            db.exec_driver_sql("SELECT 1")
+    except OperationalError as error:
+        pytest.skip(f"PostgreSQL unavailable: {error}")
 
 
 @dataclass
@@ -230,6 +244,7 @@ def test_concurrent_replay_waits_for_lock_and_returns_safe_503(
 ) -> None:
     if engine.dialect.name != "postgresql":
         pytest.skip("PostgreSQL is required for advisory-lock concurrency test")
+    _skip_if_postgres_unreachable()
 
     caller_id = _create_test_user()
     dispatcher = BlockingDispatcher()
