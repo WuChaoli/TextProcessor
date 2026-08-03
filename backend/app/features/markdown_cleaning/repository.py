@@ -319,20 +319,34 @@ class MarkdownCleaningTaskRepository:
             now=now,
         )
 
+    def mark_publishing(
+        self,
+        task_id: uuid.UUID,
+        *,
+        lease_token: str,
+        now: datetime,
+    ) -> bool:
+        _require_aware_utc_datetime(now, field_name="now")
+        return self._update_for_running_lease(
+            task_id,
+            lease_token,
+            processing_phase=MarkdownCleaningProcessingPhase.PUBLISHING_RESULT,
+            progress_percent=90,
+            updated_at=now,
+            now=now,
+            clear_lease_token=False,
+            require_prepared_artifacts=True,
+            require_summary_counts=True,
+            require_processing_phase=MarkdownCleaningProcessingPhase.SAVING_PREPARED,
+        )
+
     def mark_succeeded(
         self,
         task_id: uuid.UUID,
         *,
         lease_token: str,
         now: datetime,
-        output_sha256: str | None = None,
-        duplicate_paragraphs_removed: int | None = None,
-        phone_redaction_count: int | None = None,
-        id_card_redaction_count: int | None = None,
-        bank_card_redaction_count: int | None = None,
-        email_redaction_count: int | None = None,
-        ipv4_redaction_count: int | None = None,
-        formatting_change_count: int | None = None,
+        output_sha256: str,
     ) -> bool:
         _require_aware_utc_datetime(now, field_name="now")
         return self._update_for_running_lease(
@@ -342,13 +356,6 @@ class MarkdownCleaningTaskRepository:
             processing_phase=MarkdownCleaningProcessingPhase.SUCCEEDED,
             progress_percent=100,
             output_sha256=output_sha256,
-            duplicate_paragraphs_removed=duplicate_paragraphs_removed,
-            phone_redaction_count=phone_redaction_count,
-            id_card_redaction_count=id_card_redaction_count,
-            bank_card_redaction_count=bank_card_redaction_count,
-            email_redaction_count=email_redaction_count,
-            ipv4_redaction_count=ipv4_redaction_count,
-            formatting_change_count=formatting_change_count,
             finished_at=now,
             published_at=now,
             error_code=None,
@@ -356,7 +363,10 @@ class MarkdownCleaningTaskRepository:
             updated_at=now,
             now=now,
             clear_lease_token=True,
+            require_summary_counts=True,
             require_prepared_artifacts=True,
+            require_matching_output_sha256=output_sha256,
+            require_processing_phase=MarkdownCleaningProcessingPhase.PUBLISHING_RESULT,
         )
 
     def mark_failed(
@@ -536,6 +546,9 @@ class MarkdownCleaningTaskRepository:
         clear_lease_token: bool = False,
         now: datetime | None = None,
         require_prepared_artifacts: bool = False,
+        require_summary_counts: bool = False,
+        require_processing_phase: str | None = None,
+        require_matching_output_sha256: str | None = None,
         **values: Any,
     ) -> bool:
         if status is not None:
@@ -546,23 +559,45 @@ class MarkdownCleaningTaskRepository:
         now = now or get_datetime_utc()
         _require_aware_utc_datetime(now, field_name="now")
         values.setdefault("updated_at", now)
+
+        conditions = [
+            col(MarkdownCleaningTask.id) == task_id,
+            col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+            col(MarkdownCleaningTask.lease_token) == lease_token,
+            col(MarkdownCleaningTask.lease_expires_at) > now,
+        ]
+        if require_prepared_artifacts:
+            conditions.extend(
+                (
+                    col(MarkdownCleaningTask.staging_path).is_not(None),
+                    col(MarkdownCleaningTask.input_sha256).is_not(None),
+                    col(MarkdownCleaningTask.prepared_output_sha256).is_not(None),
+                )
+            )
+        if require_summary_counts:
+            conditions.extend(
+                (
+                    col(MarkdownCleaningTask.duplicate_paragraphs_removed).is_not(None),
+                    col(MarkdownCleaningTask.phone_redaction_count).is_not(None),
+                    col(MarkdownCleaningTask.id_card_redaction_count).is_not(None),
+                    col(MarkdownCleaningTask.bank_card_redaction_count).is_not(None),
+                    col(MarkdownCleaningTask.email_redaction_count).is_not(None),
+                    col(MarkdownCleaningTask.ipv4_redaction_count).is_not(None),
+                    col(MarkdownCleaningTask.formatting_change_count).is_not(None),
+                )
+            )
+        if require_processing_phase is not None:
+            conditions.append(
+                col(MarkdownCleaningTask.processing_phase) == require_processing_phase
+            )
+        if require_matching_output_sha256 is not None:
+            conditions.append(
+                col(MarkdownCleaningTask.prepared_output_sha256)
+                == require_matching_output_sha256
+            )
         statement = (
             update(MarkdownCleaningTask)
-            .where(
-                col(MarkdownCleaningTask.id) == task_id,
-                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
-                col(MarkdownCleaningTask.lease_token) == lease_token,
-                col(MarkdownCleaningTask.lease_expires_at) > now,
-                *(
-                    (
-                        col(MarkdownCleaningTask.staging_path).is_not(None),
-                        col(MarkdownCleaningTask.input_sha256).is_not(None),
-                        col(MarkdownCleaningTask.prepared_output_sha256).is_not(None),
-                    )
-                    if require_prepared_artifacts
-                    else ()
-                ),
-            )
+            .where(*conditions)
             .values(**values)
             .execution_options(synchronize_session=False)
         )

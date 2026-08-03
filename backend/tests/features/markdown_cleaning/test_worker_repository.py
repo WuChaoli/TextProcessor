@@ -175,11 +175,17 @@ def test_save_prepared_and_mark_succeeded(session: Session) -> None:
     assert prepared.ipv4_redaction_count == 6
     assert prepared.formatting_change_count == 7
 
-    assert repository.mark_succeeded(
+    assert repository.mark_publishing(
         task.id,
         lease_token=acquired.lease_token,
         now=NOW + timedelta(seconds=2),
-        output_sha256="3" * 64,
+    )
+
+    assert repository.mark_succeeded(
+        task.id,
+        lease_token=acquired.lease_token,
+        now=NOW + timedelta(seconds=3),
+        output_sha256="2" * 64,
     )
     succeeded = repository.get(task.id)
     assert succeeded is not None
@@ -188,7 +194,15 @@ def test_save_prepared_and_mark_succeeded(session: Session) -> None:
     assert succeeded.lease_token is None
     assert succeeded.processing_phase == MarkdownCleaningProcessingPhase.SUCCEEDED
     assert succeeded.prepared_output_sha256 == "2" * 64
-    assert succeeded.output_sha256 == "3" * 64
+    assert succeeded.output_sha256 == "2" * 64
+    assert succeeded.published_at in (
+        NOW + timedelta(seconds=3),
+        NOW.replace(tzinfo=None) + timedelta(seconds=3),
+    )
+    assert succeeded.finished_at in (
+        NOW + timedelta(seconds=3),
+        NOW.replace(tzinfo=None) + timedelta(seconds=3),
+    )
 
 
 def test_mark_failed_while_publishing_keeps_recoverable_artifacts(session: Session) -> None:
@@ -206,13 +220,18 @@ def test_mark_failed_while_publishing_keeps_recoverable_artifacts(session: Sessi
         staging_path="/staging/task.md",
         input_sha256="1" * 64,
         prepared_output_sha256="2" * 64,
+        duplicate_paragraphs_removed=1,
+        phone_redaction_count=2,
+        id_card_redaction_count=3,
+        bank_card_redaction_count=4,
+        email_redaction_count=5,
+        ipv4_redaction_count=6,
+        formatting_change_count=7,
         now=NOW + timedelta(seconds=1),
     )
-    assert repository.update_progress(
+    assert repository.mark_publishing(
         task.id,
         lease_token=acquired.lease_token,
-        progress_percent=90,
-        processing_phase=MarkdownCleaningProcessingPhase.PUBLISHING_RESULT,
         now=NOW + timedelta(seconds=2),
     )
 
@@ -231,7 +250,93 @@ def test_mark_failed_while_publishing_keeps_recoverable_artifacts(session: Sessi
     assert failed.processing_phase == MarkdownCleaningProcessingPhase.PUBLISHING_RESULT
     assert failed.staging_path == "/staging/task.md"
     assert failed.input_sha256 == "1" * 64
+    assert failed.prepared_output_sha256 == "2" * 64
+    assert failed.duplicate_paragraphs_removed == 1
+    assert failed.phone_redaction_count == 2
+    assert failed.id_card_redaction_count == 3
+    assert failed.bank_card_redaction_count == 4
+    assert failed.email_redaction_count == 5
+    assert failed.ipv4_redaction_count == 6
+    assert failed.formatting_change_count == 7
     assert failed.lease_token is None
+    assert failed.finished_at in (
+        NOW + timedelta(seconds=2),
+        NOW.replace(tzinfo=None) + timedelta(seconds=2),
+    )
+
+
+def test_mark_publishing_requires_summary_counts(session: Session) -> None:
+    task = make_task()
+    session.add(task)
+    session.commit()
+    repository = MarkdownCleaningTaskRepository(session)
+    acquired = repository.acquire_queued(task.id, now=NOW, lease_seconds=20)
+    assert acquired is not None
+    assert acquired.lease_token is not None
+
+    assert repository.save_prepared(
+        task.id,
+        lease_token=acquired.lease_token,
+        staging_path="/staging/task.md",
+        input_sha256="1" * 64,
+        prepared_output_sha256="2" * 64,
+        duplicate_paragraphs_removed=1,
+        phone_redaction_count=2,
+        id_card_redaction_count=3,
+        bank_card_redaction_count=4,
+        email_redaction_count=5,
+        ipv4_redaction_count=6,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert (
+        repository.mark_publishing(
+            task.id,
+            lease_token=acquired.lease_token,
+            now=NOW + timedelta(seconds=2),
+        )
+        is False
+    )
+
+
+def test_mark_succeeded_requires_mark_publishing(session: Session) -> None:
+    task = make_task()
+    session.add(task)
+    session.commit()
+    repository = MarkdownCleaningTaskRepository(session)
+    acquired = repository.acquire_queued(task.id, now=NOW, lease_seconds=20)
+    assert acquired is not None
+    assert acquired.lease_token is not None
+
+    assert repository.save_prepared(
+        task.id,
+        lease_token=acquired.lease_token,
+        staging_path="/staging/task.md",
+        input_sha256="1" * 64,
+        prepared_output_sha256="2" * 64,
+        duplicate_paragraphs_removed=1,
+        phone_redaction_count=2,
+        id_card_redaction_count=3,
+        bank_card_redaction_count=4,
+        email_redaction_count=5,
+        ipv4_redaction_count=6,
+        formatting_change_count=7,
+        now=NOW + timedelta(seconds=1),
+    )
+
+    assert (
+        repository.mark_succeeded(
+            task.id,
+            lease_token=acquired.lease_token,
+            now=NOW + timedelta(seconds=2),
+            output_sha256="2" * 64,
+        )
+        is False
+    )
+
+    failed = repository.get(task.id)
+    assert failed is not None
+    assert failed.processing_phase == MarkdownCleaningProcessingPhase.SAVING_PREPARED
 
 
 def test_mark_succeeded_rejects_without_prepared_artifacts(session: Session) -> None:
@@ -254,6 +359,52 @@ def test_mark_succeeded_rejects_without_prepared_artifacts(session: Session) -> 
     assert failed is not None
     assert failed.status is MarkdownCleaningTaskStatus.RUNNING
     assert failed.lease_token == acquired.lease_token
+
+
+def test_mark_succeeded_rejects_output_digest_mismatch(session: Session) -> None:
+    task = make_task()
+    session.add(task)
+    session.commit()
+    repository = MarkdownCleaningTaskRepository(session)
+    acquired = repository.acquire_queued(task.id, now=NOW, lease_seconds=20)
+    assert acquired is not None
+    assert acquired.lease_token is not None
+
+    assert repository.save_prepared(
+        task.id,
+        lease_token=acquired.lease_token,
+        staging_path="/staging/task.md",
+        input_sha256="1" * 64,
+        prepared_output_sha256="2" * 64,
+        duplicate_paragraphs_removed=1,
+        phone_redaction_count=2,
+        id_card_redaction_count=3,
+        bank_card_redaction_count=4,
+        email_redaction_count=5,
+        ipv4_redaction_count=6,
+        formatting_change_count=7,
+        now=NOW + timedelta(seconds=1),
+    )
+    assert repository.mark_publishing(
+        task.id,
+        lease_token=acquired.lease_token,
+        now=NOW + timedelta(seconds=2),
+    )
+
+    assert (
+        repository.mark_succeeded(
+            task.id,
+            lease_token=acquired.lease_token,
+            now=NOW + timedelta(seconds=3),
+            output_sha256="3" * 64,
+        )
+        is False
+    )
+
+    failed = repository.get(task.id)
+    assert failed is not None
+    assert failed.status is MarkdownCleaningTaskStatus.RUNNING
+    assert failed.processing_phase == MarkdownCleaningProcessingPhase.PUBLISHING_RESULT
 
 
 def test_mark_recovery_dispatched_is_throttled(session: Session) -> None:
