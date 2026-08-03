@@ -67,20 +67,48 @@ def test_inline_code_and_link_destination_are_protected() -> None:
 
 
 def test_link_destination_supports_parenthesized_destination() -> None:
-    markdown = "[x](foo(bar)) and [y](foo\\)bar)"
+    markdown = (
+        "# Heading\n\n"
+        "> intro\n"
+        "[x](foo(bar)) and [y](foo\\)bar)\n"
+    )
+    prefix_len = len("# Heading\n\n> intro\n")
     result = MarkdownParserAdapter().parse(markdown)
     destinations = [
-        markdown[leaf.source_span.start : leaf.source_span.end]
+        leaf.source_span
         for leaf in result.inline_leaves
         if leaf.kind == MarkdownInlineLeafType.LINK_DESTINATION
     ]
 
-    assert "foo(bar)" in destinations
-    assert "foo\\)bar" in destinations
+    assert {
+        markdown[span.start : span.end] for span in destinations
+    } == {"foo(bar)", "foo\\)bar"}
+    assert any(
+        (
+            span.start == prefix_len + markdown[prefix_len:].index("foo(bar)")
+            and span.end == span.start + len("foo(bar)")
+        )
+        for span in destinations
+    )
+    assert any(
+        (
+            span.start == prefix_len + markdown[prefix_len:].index("foo\\)bar")
+            and span.end == span.start + len("foo\\)bar")
+        )
+        for span in destinations
+    )
+
+    # 同时验证平衡括号与转义右括号目标在绝对坐标内
+    assert (markdown.index("foo(bar)"), markdown.index("foo(bar)") + len("foo(bar)")) in [
+        (span.start, span.end) for span in destinations
+    ]
+    assert (markdown.index("foo\\)bar"), markdown.index("foo\\)bar") + len("foo\\)bar")) in [
+        (span.start, span.end) for span in destinations
+    ]
 
 
 def test_inline_code_double_delimiter_is_protected() -> None:
-    markdown = "`` `a` `` and `b`\n"
+    markdown = "prefix\n\n`` `a` `` and `` `b` ``\n"
     result = MarkdownParserAdapter().parse(markdown)
 
     code_leaf_spans = [
@@ -90,8 +118,8 @@ def test_inline_code_double_delimiter_is_protected() -> None:
     ]
 
     assert len(code_leaf_spans) >= 2
-    assert (0, len("`` `a` ``")) in code_leaf_spans
-    assert (markdown.index("`b`"), markdown.index("`b`") + 3) in code_leaf_spans
+    assert (markdown.index("`` `a` ``"), markdown.index("`` `a` ``") + len("`` `a` ``")) in code_leaf_spans
+    assert (markdown.index("`` `b` ``"), markdown.index("`` `b` ``") + len("`` `b` ``")) in code_leaf_spans
 
 
 def test_inline_leaf_records_include_parent_block_kind() -> None:
@@ -118,6 +146,19 @@ def test_html_inline_with_repeated_markup_stays_stable() -> None:
         (16, 19),
         (21, 25),
     ]
+    expected_text = {
+        "<b>",
+        "</b>",
+    }
+    html_text_map = {
+        markdown[leaf.source_span.start : leaf.source_span.end]: leaf.parent_block_kind
+        for leaf in result.inline_leaves
+        if leaf.kind == MarkdownInlineLeafType.HTML_INLINE
+    }
+
+    assert set(html_text_map.keys()) == expected_text
+    assert html_text_map["<b>"] == MarkdownBlockType.PARAGRAPH
+    assert html_text_map["</b>"] == MarkdownBlockType.PARAGRAPH
     assert html_spans == expected
     assert html_spans == sorted(html_spans)
 
@@ -168,6 +209,8 @@ def test_crlf_and_unicode_offsets_are_stable() -> None:
 
 def test_container_prefix_inline_leaves_use_absolute_spans() -> None:
     markdown = (
+        "prefix heading\n"
+        "\n"
         "> [x](foo(bar))\n"
         "- item [y](foo\\)bar)\n"
         "# Heading > <b>Hi</b>\n"
