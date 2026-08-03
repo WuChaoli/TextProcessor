@@ -76,9 +76,7 @@ def request_fingerprint(
 
 
 def _idempotency_lock_key(caller_id: uuid.UUID, session_id: str, file_id: str) -> int:
-    digest = hashlib.sha256(
-        f"{caller_id}\0{session_id}\0{file_id}".encode()
-    ).digest()
+    digest = hashlib.sha256(f"{caller_id}\0{session_id}\0{file_id}".encode()).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
@@ -481,6 +479,7 @@ class MarkdownCleaningTaskRepository:
             .where(
                 col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
                 col(MarkdownCleaningTask.lease_token).is_not(None),
+                col(MarkdownCleaningTask.prepared_output_sha256).is_(None),
                 or_(
                     col(MarkdownCleaningTask.lease_expires_at).is_(None),
                     col(MarkdownCleaningTask.lease_expires_at) <= now,
@@ -493,6 +492,112 @@ class MarkdownCleaningTaskRepository:
             .limit(limit)
         )
         return list(self._session.exec(statement).all())
+
+    def list_recoverable_prepared(
+        self,
+        *,
+        now: datetime,
+        limit: int,
+    ) -> list[MarkdownCleaningTask]:
+        _require_aware_utc_datetime(now, field_name="now")
+        statement = (
+            select(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+                col(MarkdownCleaningTask.lease_token).is_not(None),
+                col(MarkdownCleaningTask.lease_expires_at) <= now,
+                col(MarkdownCleaningTask.staging_path).is_not(None),
+                col(MarkdownCleaningTask.prepared_output_sha256).is_not(None),
+            )
+            .order_by(
+                col(MarkdownCleaningTask.lease_expires_at),
+                col(MarkdownCleaningTask.id),
+            )
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def recover_expired_running(
+        self,
+        task_id: uuid.UUID,
+        *,
+        expected_lease_token: str,
+        now: datetime,
+    ) -> bool:
+        _require_aware_utc_datetime(now, field_name="now")
+        statement = (
+            update(MarkdownCleaningTask)
+            .where(
+                col(MarkdownCleaningTask.id) == task_id,
+                col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+                col(MarkdownCleaningTask.lease_token) == expected_lease_token,
+                col(MarkdownCleaningTask.lease_expires_at) <= now,
+                col(MarkdownCleaningTask.prepared_output_sha256).is_(None),
+            )
+            .values(
+                status=MarkdownCleaningTaskStatus.QUEUED,
+                lease_token=None,
+                lease_expires_at=None,
+                processing_phase=None,
+                last_dispatched_at=None,
+                updated_at=now,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return self._execute_update(statement)
+
+    def reconcile_prepared(
+        self,
+        task_id: uuid.UUID,
+        *,
+        now: datetime,
+        outcome: str,
+        output_sha256: str | None = None,
+    ) -> bool:
+        _require_aware_utc_datetime(now, field_name="now")
+        if outcome not in {"succeeded", "output_conflict"}:
+            raise ValueError("不支持的 prepared 恢复结果")
+        conditions = [
+            col(MarkdownCleaningTask.id) == task_id,
+            col(MarkdownCleaningTask.status) == MarkdownCleaningTaskStatus.RUNNING,
+            col(MarkdownCleaningTask.lease_token).is_not(None),
+            col(MarkdownCleaningTask.lease_expires_at) <= now,
+            col(MarkdownCleaningTask.staging_path).is_not(None),
+            col(MarkdownCleaningTask.prepared_output_sha256).is_not(None),
+        ]
+        values: dict[str, Any]
+        if outcome == "succeeded":
+            if output_sha256 is None:
+                raise ValueError("成功恢复必须提供输出摘要")
+            conditions.append(
+                col(MarkdownCleaningTask.prepared_output_sha256) == output_sha256
+            )
+            values = {
+                "status": MarkdownCleaningTaskStatus.SUCCEEDED,
+                "processing_phase": MarkdownCleaningProcessingPhase.SUCCEEDED,
+                "progress_percent": 100,
+                "output_sha256": output_sha256,
+                "published_at": now,
+                "finished_at": now,
+                "error_code": None,
+                "error_message": None,
+            }
+        else:
+            values = {
+                "status": MarkdownCleaningTaskStatus.FAILED,
+                "processing_phase": MarkdownCleaningProcessingPhase.FAILED,
+                "error_code": "OUTPUT_CONFLICT",
+                "error_message": "输出目标冲突",
+                "finished_at": now,
+            }
+        values.update(lease_token=None, lease_expires_at=None, updated_at=now)
+        statement = (
+            update(MarkdownCleaningTask)
+            .where(*conditions)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        return self._execute_update(statement)
 
     def count_active_running(self, *, now: datetime) -> int:
         _require_aware_utc_datetime(now, field_name="now")
