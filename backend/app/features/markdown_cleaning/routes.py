@@ -1,5 +1,5 @@
 import uuid
-from typing import Annotated, NoReturn
+from typing import Annotated, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
@@ -17,6 +17,7 @@ from app.features.markdown_cleaning.request_policy import MarkdownCleaningReques
 from app.features.markdown_cleaning.schemas import (
     MarkdownCleaningDomainErrorResponse,
     MarkdownCleaningErrorPublic,
+    MarkdownCleaningProgressPublic,
     MarkdownCleaningRedactionsPublic,
     MarkdownCleaningResultPublic,
     MarkdownCleaningSummaryPublic,
@@ -112,6 +113,31 @@ def _safe_result(task: MarkdownCleaningTask) -> MarkdownCleaningResultPublic | N
     )
 
 
+def _public_progress(task: MarkdownCleaningTask) -> MarkdownCleaningProgressPublic:
+    if task.status is MarkdownCleaningTaskStatus.SUCCEEDED:
+        return MarkdownCleaningProgressPublic(phase="completed", percent=100)
+
+    percent = task.progress_percent
+    phase_by_internal: dict[
+        str, Literal["validating_input", "cleaning", "publishing"]
+    ] = {
+        "validating_input": "validating_input",
+        "claiming_task": "validating_input",
+        "cleaning": "cleaning",
+        "saving_prepared": "publishing",
+        "publishing_result": "publishing",
+    }
+    phase = phase_by_internal.get(task.processing_phase or "")
+    if phase is None:
+        if percent >= 90:
+            phase = "publishing"
+        elif percent >= 20:
+            phase = "cleaning"
+        else:
+            phase = "validating_input"
+    return MarkdownCleaningProgressPublic(phase=phase, percent=percent)
+
+
 def task_to_public(task: MarkdownCleaningTask) -> MarkdownCleaningTaskPublic:
     return MarkdownCleaningTaskPublic(
         taskId=task.id,
@@ -121,6 +147,7 @@ def task_to_public(task: MarkdownCleaningTask) -> MarkdownCleaningTaskPublic:
         createdAt=task.created_at,
         startedAt=task.started_at,
         finishedAt=task.finished_at,
+        progress=_public_progress(task),
         result=_safe_result(task),
         error=_safe_error(task),
     )
@@ -131,7 +158,7 @@ def task_to_public(task: MarkdownCleaningTask) -> MarkdownCleaningTaskPublic:
     response_model=MarkdownCleaningTaskAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses={
-        status.HTTP_400_BAD_REQUEST: {
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
             "model": MarkdownCleaningDomainErrorResponse,
             "description": "Input not allowed by request policy",
         },
@@ -153,7 +180,7 @@ def create_markdown_cleaning_task(
     request: MarkdownCleaningTaskCreate,
     current_user: CurrentUser,
     service: Annotated[MarkdownCleaningTaskService, Depends(_service)],
-    ) -> MarkdownCleaningTaskAccepted:
+) -> MarkdownCleaningTaskAccepted:
     try:
         task = service.create_task(current_user.id, request)
     except MarkdownCleaningDomainError as error:

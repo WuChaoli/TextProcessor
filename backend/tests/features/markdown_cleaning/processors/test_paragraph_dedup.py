@@ -6,12 +6,7 @@ from app.features.markdown_cleaning.processors import (
 
 
 def test_only_keeps_first_occurrence_of_duplicate_paragraphs() -> None:
-    markdown = (
-        "same paragraph\n\n"
-        "same paragraph\n\n"
-        "same paragraph\n\n"
-        "tail paragraph.\n"
-    )
+    markdown = "same paragraph\n\nsame paragraph\n\nsame paragraph\n\ntail paragraph.\n"
     deduplicator = ParagraphDeduplicator()
     output, removed = deduplicator.deduplicate(markdown)
 
@@ -22,15 +17,7 @@ def test_only_keeps_first_occurrence_of_duplicate_paragraphs() -> None:
 
 
 def test_top_level_paragraphs_only() -> None:
-    markdown = (
-        "> q\n"
-        "\n"
-        "> q\n"
-        "\n"
-        "plain\n"
-        "\n"
-        "plain\n"
-    )
+    markdown = "> q\n\n> q\n\nplain\n\nplain\n"
     deduplicator = ParagraphDeduplicator()
     output, removed = deduplicator.deduplicate(markdown)
 
@@ -40,13 +27,7 @@ def test_top_level_paragraphs_only() -> None:
 
 
 def test_softbreak_and_whitespace_normalization_for_key() -> None:
-    markdown = (
-        "hello world\n"
-        "next line\r\n"
-        "\n"
-        "hello    world\n"
-        "next   line\n"
-    )
+    markdown = "hello world\nnext line\r\n\nhello    world\nnext   line\n"
     deduplicator = ParagraphDeduplicator()
     output, removed = deduplicator.deduplicate(markdown)
 
@@ -98,14 +79,7 @@ def test_noop_for_nested_list_blockquote_and_table_paragraphs() -> None:
 
 def test_non_paragraph_blocks_are_not_deduplicated() -> None:
     markdown = (
-        "# heading\n\n"
-        "# heading\n\n"
-        "```text\n"
-        "same text\n"
-        "```\n"
-        "```text\n"
-        "same text\n"
-        "```\n"
+        "# heading\n\n# heading\n\n```text\nsame text\n```\n```text\nsame text\n```\n"
     )
     deduplicator = ParagraphDeduplicator()
     output, removed = deduplicator.deduplicate(markdown)
@@ -115,11 +89,7 @@ def test_non_paragraph_blocks_are_not_deduplicated() -> None:
 
 
 def test_second_run_keeps_no_more_duplicates() -> None:
-    markdown = (
-        "idempotent case.\n\n"
-        "idempotent case.\n\n"
-        "Stable text.\n"
-    )
+    markdown = "idempotent case.\n\nidempotent case.\n\nStable text.\n"
     deduplicator = ParagraphDeduplicator()
     first_output, first_removed = deduplicator.deduplicate(markdown)
     second_output, second_removed = deduplicator.deduplicate(first_output)
@@ -169,11 +139,7 @@ def test_byte_stable_when_no_dedup_candidates() -> None:
 
 
 def test_all_duplicates_at_end_keep_minimal_tail_newline() -> None:
-    markdown = (
-        "same\n\n"
-        "same\n\n"
-        "same\n"
-    )
+    markdown = "same\n\nsame\n\nsame\n"
     deduplicator = ParagraphDeduplicator()
     output, removed = deduplicator.deduplicate(markdown)
 
@@ -182,19 +148,16 @@ def test_all_duplicates_at_end_keep_minimal_tail_newline() -> None:
 
 
 def test_controlled_blank_lines_after_removal() -> None:
-    markdown = (
-        "first paragraph\n\n"
-        "dup paragraph\n\n"
-        "dup paragraph\n\n"
-        "last paragraph\n"
-    )
+    markdown = "first paragraph\n\ndup paragraph\n\ndup paragraph\n\nlast paragraph\n"
     deduplicator = ParagraphDeduplicator()
     output, removed = deduplicator.deduplicate(markdown)
     parser = MarkdownParserAdapter()
 
     original_blocks = parser.parse(output).blocks
     blank_runs = [
-        block for block in original_blocks if block.block_type == MarkdownBlockType.BLANK
+        block
+        for block in original_blocks
+        if block.block_type == MarkdownBlockType.BLANK
     ]
 
     assert removed == 1

@@ -195,12 +195,17 @@ class MarkdownFormatterAdapter:
         table_count = len(table_spans)
         for local_offset, char in enumerate(markdown):
             absolute_offset = base_offset + local_offset
-            while table_index < table_count and absolute_offset >= table_spans[table_index][1]:
+            while (
+                table_index < table_count
+                and absolute_offset >= table_spans[table_index][1]
+            ):
                 table_index += 1
 
             if (
                 table_index < table_count
-                and table_spans[table_index][0] <= absolute_offset < table_spans[table_index][1]
+                and table_spans[table_index][0]
+                <= absolute_offset
+                < table_spans[table_index][1]
                 and char == "|"
             ):
                 output.append(" ")
@@ -231,7 +236,9 @@ class MarkdownFormatterAdapter:
             if block.block_type is MarkdownBlockType.TABLE
         )
 
-        visible_segments = MarkdownFormatterAdapter._collect_visible_segments(markdown, parsed)
+        visible_segments = MarkdownFormatterAdapter._collect_visible_segments(
+            markdown, parsed
+        )
         if not parsed.protected_spans:
             return MarkdownFormatterAdapter._normalize_semantic_text(
                 markdown,
@@ -249,7 +256,9 @@ class MarkdownFormatterAdapter:
         return "".join(normalized_parts)
 
     @staticmethod
-    def _collect_inline_leaf_signature(parsed: MarkdownParseResult) -> tuple[tuple[str, str], ...]:
+    def _collect_inline_leaf_signature(
+        parsed: MarkdownParseResult,
+    ) -> tuple[tuple[str, str], ...]:
         return tuple(
             (leaf.kind.value, leaf.parent_block_kind.value)
             for leaf in parsed.inline_leaves
@@ -322,7 +331,9 @@ class MarkdownFormatterAdapter:
             )
 
         protected_entries.sort(key=lambda item: item[0])
-        visible_segments = MarkdownFormatterAdapter._collect_visible_segments(markdown, parsed)
+        visible_segments = MarkdownFormatterAdapter._collect_visible_segments(
+            markdown, parsed
+        )
 
         normalized_visible = [
             MarkdownFormatterAdapter._normalize_semantic_text(
@@ -353,7 +364,7 @@ class MarkdownFormatterAdapter:
         visible_segments: list[tuple[str, int, int]] = []
         cursor = 0
         for span in parsed.protected_spans:
-            visible_segments.append((markdown[cursor:span.start], cursor, span.start))
+            visible_segments.append((markdown[cursor : span.start], cursor, span.start))
             cursor = span.end
         visible_segments.append((markdown[cursor:], cursor, len(markdown)))
         return visible_segments
@@ -374,7 +385,9 @@ class MarkdownFormatterAdapter:
         )
 
     @staticmethod
-    def _block_type_signature(parsed: MarkdownParseResult) -> tuple[MarkdownBlockType, ...]:
+    def _block_type_signature(
+        parsed: MarkdownParseResult,
+    ) -> tuple[MarkdownBlockType, ...]:
         return tuple(
             block.block_type
             for block in parsed.blocks
@@ -396,15 +409,17 @@ class MarkdownFormatterAdapter:
                 MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
             )
 
-        if self._collect_inline_leaf_signature(parsed_input) != self._collect_inline_leaf_signature(
-            parsed_normalized
-        ):
+        if self._collect_inline_leaf_signature(
+            parsed_input
+        ) != self._collect_inline_leaf_signature(parsed_normalized):
             raise map_processing_exception(
                 ValueError("inline leaf structure changed"),
                 MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
             )
 
-        if self._collect_visible_semantic_signature(markdown, parsed_input) != self._collect_visible_semantic_signature(
+        if self._collect_visible_semantic_signature(
+            markdown, parsed_input
+        ) != self._collect_visible_semantic_signature(
             normalized,
             parsed_normalized,
         ):
@@ -413,7 +428,9 @@ class MarkdownFormatterAdapter:
                 MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
             )
 
-        if self._collect_protected_units(markdown, parsed_input) != self._collect_protected_units(
+        if self._collect_protected_units(
+            markdown, parsed_input
+        ) != self._collect_protected_units(
             normalized,
             parsed_normalized,
         ):
@@ -422,7 +439,9 @@ class MarkdownFormatterAdapter:
                 MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED,
             )
 
-        if self._collect_link_targets(markdown, parsed_input) != self._collect_link_targets(
+        if self._collect_link_targets(
+            markdown, parsed_input
+        ) != self._collect_link_targets(
             normalized,
             parsed_normalized,
         ):

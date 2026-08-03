@@ -36,11 +36,31 @@ def test_main_path_redacts_all_supported_entities_and_preserves_priority(
             markdown = kwargs["text"]
             assert isinstance(markdown, str)
             return [
-                _DummyResult("CN_ID_CARD", markdown.index("11010519491231002X"), markdown.index("11010519491231002X") + 18),
-                _DummyResult("CREDIT_CARD", markdown.index("4111111111110006"), markdown.index("4111111111110006") + 16),
-                _DummyResult("CN_MOBILE_PHONE", markdown.index("13800138000"), markdown.index("13800138000") + 11),
-                _DummyResult("EMAIL_ADDRESS", markdown.index("a@sample.org"), markdown.index("a@sample.org") + 12),
-                _DummyResult("IPV4_ADDRESS", markdown.index("10.0.0.1"), markdown.index("10.0.0.1") + 8),
+                _DummyResult(
+                    "CN_ID_CARD",
+                    markdown.index("11010519491231002X"),
+                    markdown.index("11010519491231002X") + 18,
+                ),
+                _DummyResult(
+                    "CREDIT_CARD",
+                    markdown.index("4111111111110006"),
+                    markdown.index("4111111111110006") + 16,
+                ),
+                _DummyResult(
+                    "CN_MOBILE_PHONE",
+                    markdown.index("13800138000"),
+                    markdown.index("13800138000") + 11,
+                ),
+                _DummyResult(
+                    "EMAIL_ADDRESS",
+                    markdown.index("a@sample.org"),
+                    markdown.index("a@sample.org") + 12,
+                ),
+                _DummyResult(
+                    "IPV4_ADDRESS",
+                    markdown.index("10.0.0.1"),
+                    markdown.index("10.0.0.1") + 8,
+                ),
             ]
 
     markdown = (
@@ -80,9 +100,7 @@ def test_redact_runtime_analyze_error_raises_processor_error() -> None:
 
 
 def test_main_path_filters_invalid_spans_and_keeps_valid_text_and_summary() -> None:
-    markdown = (
-        "bad@ a@sample.org 13800138000 11010519491231002X 10.0.0.1 256.1.1.1"
-    )
+    markdown = "bad@ a@sample.org 13800138000 11010519491231002X 10.0.0.1 256.1.1.1"
 
     email_start = markdown.index("a@sample.org")
     phone_start = markdown.index("13800138000")
@@ -93,7 +111,9 @@ def test_main_path_filters_invalid_spans_and_keeps_valid_text_and_summary() -> N
         def analyze(self, **_: object) -> list[_DummyResult]:
             return [
                 _DummyResult("EMAIL_ADDRESS", 0, 4),
-                _DummyResult("EMAIL_ADDRESS", email_start, email_start + len("a@sample.org")),
+                _DummyResult(
+                    "EMAIL_ADDRESS", email_start, email_start + len("a@sample.org")
+                ),
                 _DummyResult("CN_MOBILE_PHONE", phone_start + 1, phone_start + 10),
                 _DummyResult("CN_MOBILE_PHONE", phone_start, phone_start + 11),
                 _DummyResult("CN_ID_CARD", id_start, id_start + 18),
@@ -104,9 +124,7 @@ def test_main_path_filters_invalid_spans_and_keeps_valid_text_and_summary() -> N
 
     result = PresidioMarkdownRedactor(analyzer=_FakeAnalyzer()).redact(markdown)
     assert result.used_fallback is False
-    assert result.text == (
-        "bad@ [EMAIL] [PHONE] [ID_CARD] [IPV4] 256.1.1.1"
-    )
+    assert result.text == ("bad@ [EMAIL] [PHONE] [ID_CARD] [IPV4] 256.1.1.1")
     assert result.summary == SensitiveRedactionSummary(
         phone=1, id_card=1, bank_card=0, email=1, ipv4=1
     )
@@ -124,7 +142,9 @@ def test_fallback_uses_only_valid_matches_and_respects_protected_and_tokens(
     )
     phone_start = markdown.index("13800138000")
     protected = (SourceSpan(start=phone_start, end=phone_start + 11),)
-    result = PresidioMarkdownRedactor(analyzer=None).redact(markdown, protected_spans=protected)
+    result = PresidioMarkdownRedactor(analyzer=None).redact(
+        markdown, protected_spans=protected
+    )
 
     assert result.used_fallback is True
     assert result.fallback_error is None
@@ -167,10 +187,13 @@ def test_overlap_resolution_uses_supported_entity_order() -> None:
                 _DummyResult(entity_type="CREDIT_CARD", start=0, end=11),
             ]
 
-    result = PresidioMarkdownRedactor(analyzer=_OverlappingAnalyzer()).redact("13800138000")
+    result = PresidioMarkdownRedactor(analyzer=_OverlappingAnalyzer()).redact(
+        "13800138000"
+    )
     assert result.text == "[PHONE]"
     assert result.summary.phone == 1
     assert result.summary.bank_card == 0
+
 
 def test_presidio_main_path_uses_noop_nlp_and_allowlist_registry(
     monkeypatch: pytest.MonkeyPatch,
@@ -191,7 +214,9 @@ def test_presidio_main_path_uses_noop_nlp_and_allowlist_registry(
             self.names.append(type(recognizer).__name__)
 
     class _DummyAnalyzer:
-        def __init__(self, registry: _DummyRegistry, nlp_engine: _DummyNoOpNlpEngine) -> None:
+        def __init__(
+            self, registry: _DummyRegistry, nlp_engine: _DummyNoOpNlpEngine
+        ) -> None:
             self.registry = registry
             self.nlp_engine = nlp_engine
             self.calls: list[dict[str, object]] = []
@@ -218,7 +243,9 @@ def test_presidio_main_path_uses_noop_nlp_and_allowlist_registry(
     monkeypatch.setattr(presidio_adapter, "NoOpNlpEngine", _DummyNoOpNlpEngine)
     monkeypatch.setattr(presidio_adapter, "AnalyzerEngine", _create_analyzer)
     monkeypatch.setattr(presidio_adapter, "EmailRecognizer", _DummyEmailRecognizer)
-    monkeypatch.setattr(presidio_adapter, "CreditCardRecognizer", _DummyCreditCardRecognizer)
+    monkeypatch.setattr(
+        presidio_adapter, "CreditCardRecognizer", _DummyCreditCardRecognizer
+    )
 
     redactor = PresidioMarkdownRedactor(analyzer=None)
     analyzer = redactor._analyzer

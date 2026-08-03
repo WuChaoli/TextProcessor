@@ -71,9 +71,7 @@ class MarkdownCleaningRedactionsPublic(BaseModel):
 class MarkdownCleaningSummaryPublic(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    duplicate_paragraphs_removed: int = Field(
-        alias="duplicateParagraphsRemoved", ge=0
-    )
+    duplicate_paragraphs_removed: int = Field(alias="duplicateParagraphsRemoved", ge=0)
     redactions: MarkdownCleaningRedactionsPublic
     formatting_changes: int = Field(alias="formattingChanges", ge=0)
 
@@ -93,6 +91,11 @@ class MarkdownCleaningErrorPublic(BaseModel):
     message: str
 
 
+class MarkdownCleaningProgressPublic(BaseModel):
+    phase: Literal["validating_input", "cleaning", "publishing", "completed"]
+    percent: int = Field(ge=0, le=100)
+
+
 class MarkdownCleaningDomainErrorResponse(BaseModel):
     detail: MarkdownCleaningErrorPublic | str
 
@@ -107,6 +110,7 @@ class MarkdownCleaningTaskPublic(BaseModel):
     created_at: datetime = Field(alias="createdAt")
     started_at: datetime | None = Field(alias="startedAt")
     finished_at: datetime | None = Field(alias="finishedAt")
+    progress: MarkdownCleaningProgressPublic
     result: MarkdownCleaningResultPublic | None
     error: MarkdownCleaningErrorPublic | None
 
@@ -114,10 +118,7 @@ class MarkdownCleaningTaskPublic(BaseModel):
     def _result_and_error_match_status(self) -> Self:
         if self.result is not None and self.error is not None:
             raise ValueError("result 和 error 不能同时存在")
-        if (
-            self.status is MarkdownCleaningTaskStatus.SUCCEEDED
-            and self.result is None
-        ):
+        if self.status is MarkdownCleaningTaskStatus.SUCCEEDED and self.result is None:
             raise ValueError("成功任务必须包含 result")
         if (
             self.status is not MarkdownCleaningTaskStatus.SUCCEEDED

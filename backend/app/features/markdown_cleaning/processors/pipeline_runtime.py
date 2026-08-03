@@ -33,14 +33,10 @@ def _decode_request(raw_request: bytes) -> tuple[str, MarkdownCleaningPipelineLi
         max_input_bytes=int(cast(int, limits["max_input_bytes"])),
         max_output_bytes=int(cast(int, limits["max_output_bytes"])),
         max_block_count=int(cast(int, limits["max_block_count"])),
-        max_protected_span_count=int(
-            cast(int, limits["max_protected_span_count"])
-        ),
+        max_protected_span_count=int(cast(int, limits["max_protected_span_count"])),
         max_block_char_span=int(cast(int, limits["max_block_char_span"])),
         max_token_count=int(cast(int, limits["max_token_count"])),
-        max_pii_candidate_count=int(
-            cast(int, limits["max_pii_candidate_count"])
-        ),
+        max_pii_candidate_count=int(cast(int, limits["max_pii_candidate_count"])),
         processing_timeout_seconds=float(
             cast(float, limits["processing_timeout_seconds"])
         ),
@@ -93,9 +89,7 @@ def main() -> int:
             "safeMessage": mapped.safe_message,
         }
     sys.stdout.buffer.write(
-        json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     )
     return 0
 

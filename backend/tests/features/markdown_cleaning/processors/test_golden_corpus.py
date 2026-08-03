@@ -22,7 +22,9 @@ def test_markdown_cleaning_golden_corpus_bytes_summary_and_idempotency(
 
     pipeline = MarkdownCleaningPipeline(
         staging_root=tmp_path,
-        limits=MarkdownCleaningPipelineLimits(max_input_bytes=10_485_760, max_output_bytes=10_485_760)
+        limits=MarkdownCleaningPipelineLimits(
+            max_input_bytes=10_485_760, max_output_bytes=10_485_760
+        ),
     )
 
     for case_dir in cases:

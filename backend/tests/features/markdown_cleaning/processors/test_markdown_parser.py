@@ -11,13 +11,7 @@ from app.features.markdown_cleaning.processors.markdown_parser import (
 
 def test_parse_blocks_include_expected_types() -> None:
     markdown = (
-        "# Title\n\n"
-        "paragraph one.\n\n"
-        "```py\n"
-        "x = 1\n"
-        "```\n\n"
-        "> quote\n\n"
-        "- item one\n"
+        "# Title\n\nparagraph one.\n\n```py\nx = 1\n```\n\n> quote\n\n- item one\n"
     )
     result = MarkdownParserAdapter().parse(markdown)
     block_types = [block.block_type for block in result.blocks]
@@ -37,8 +31,16 @@ def test_fence_and_html_blocks_are_protected() -> None:
     result = MarkdownParserAdapter().parse(markdown + html_markdown)
     protected = result.protected_spans
 
-    fenced = next(block for block in result.blocks if block.block_type == MarkdownBlockType.FENCED_CODE)
-    html = next(block for block in result.blocks if block.block_type == MarkdownBlockType.HTML_BLOCK)
+    fenced = next(
+        block
+        for block in result.blocks
+        if block.block_type == MarkdownBlockType.FENCED_CODE
+    )
+    html = next(
+        block
+        for block in result.blocks
+        if block.block_type == MarkdownBlockType.HTML_BLOCK
+    )
 
     assert fenced.source_span in protected
     assert html.source_span in protected
@@ -53,9 +55,12 @@ def test_inline_code_and_link_destination_are_protected() -> None:
 
     spans = [(span.start, span.end) for span in result.protected_spans]
     assert (0, 0) not in spans
-    assert (markdown.index("`alpha`"), markdown.index("`alpha`") + len("`alpha`")) in spans
+    assert (
+        markdown.index("`alpha`"),
+        markdown.index("`alpha`") + len("`alpha`"),
+    ) in spans
     assert (markdown.index("`beta`"), markdown.index("`beta`") + len("`beta`")) in spans
-    assert ("https://example.com/a" in markdown)
+    assert "https://example.com/a" in markdown
     assert (
         markdown.index("https://example.com/a"),
         markdown.index("https://example.com/a") + len("https://example.com/a"),
@@ -67,11 +72,7 @@ def test_inline_code_and_link_destination_are_protected() -> None:
 
 
 def test_link_destination_supports_parenthesized_destination() -> None:
-    markdown = (
-        "# Heading\n\n"
-        "> intro\n"
-        "[x](foo(bar)) and [y](foo\\)bar)\n"
-    )
+    markdown = "# Heading\n\n> intro\n[x](foo(bar)) and [y](foo\\)bar)\n"
     prefix_len = len("# Heading\n\n> intro\n")
     result = MarkdownParserAdapter().parse(markdown)
     destinations = [
@@ -80,9 +81,10 @@ def test_link_destination_supports_parenthesized_destination() -> None:
         if leaf.kind == MarkdownInlineLeafType.LINK_DESTINATION
     ]
 
-    assert {
-        markdown[span.start : span.end] for span in destinations
-    } == {"foo(bar)", "foo\\)bar"}
+    assert {markdown[span.start : span.end] for span in destinations} == {
+        "foo(bar)",
+        "foo\\)bar",
+    }
     assert any(
         (
             span.start == prefix_len + markdown[prefix_len:].index("foo(bar)")
@@ -99,12 +101,14 @@ def test_link_destination_supports_parenthesized_destination() -> None:
     )
 
     # 同时验证平衡括号与转义右括号目标在绝对坐标内
-    assert (markdown.index("foo(bar)"), markdown.index("foo(bar)") + len("foo(bar)")) in [
-        (span.start, span.end) for span in destinations
-    ]
-    assert (markdown.index("foo\\)bar"), markdown.index("foo\\)bar") + len("foo\\)bar")) in [
-        (span.start, span.end) for span in destinations
-    ]
+    assert (
+        markdown.index("foo(bar)"),
+        markdown.index("foo(bar)") + len("foo(bar)"),
+    ) in [(span.start, span.end) for span in destinations]
+    assert (
+        markdown.index("foo\\)bar"),
+        markdown.index("foo\\)bar") + len("foo\\)bar"),
+    ) in [(span.start, span.end) for span in destinations]
 
 
 def test_autolink_and_reference_definition_destinations_are_protected_only() -> None:
@@ -121,9 +125,7 @@ def test_autolink_and_reference_definition_destinations_are_protected_only() -> 
         if leaf.kind == MarkdownInlineLeafType.LINK_DESTINATION
     ]
 
-    assert {
-        markdown[span.start : span.end] for span in destination_spans
-    } == {
+    assert {markdown[span.start : span.end] for span in destination_spans} == {
         "mailto:a@b.com",
         "https://10.0.0.1/path",
         "https://a@b.com/foo(1)",
@@ -147,15 +149,23 @@ def test_inline_code_double_delimiter_is_protected() -> None:
     ]
 
     assert len(code_leaf_spans) >= 2
-    assert (markdown.index("`` `a` ``"), markdown.index("`` `a` ``") + len("`` `a` ``")) in code_leaf_spans
-    assert (markdown.index("`` `b` ``"), markdown.index("`` `b` ``") + len("`` `b` ``")) in code_leaf_spans
+    assert (
+        markdown.index("`` `a` ``"),
+        markdown.index("`` `a` ``") + len("`` `a` ``"),
+    ) in code_leaf_spans
+    assert (
+        markdown.index("`` `b` ``"),
+        markdown.index("`` `b` ``") + len("`` `b` ``"),
+    ) in code_leaf_spans
 
 
 def test_inline_leaf_records_include_parent_block_kind() -> None:
     markdown = "[x](foo(bar)) <b>html</b> `` `a` ``\n"
     result = MarkdownParserAdapter().parse(markdown)
     blocks = {leaf.kind: leaf.parent_block_kind for leaf in result.inline_leaves}
-    assert blocks[MarkdownInlineLeafType.LINK_DESTINATION] == MarkdownBlockType.PARAGRAPH
+    assert (
+        blocks[MarkdownInlineLeafType.LINK_DESTINATION] == MarkdownBlockType.PARAGRAPH
+    )
     assert blocks[MarkdownInlineLeafType.HTML_INLINE] == MarkdownBlockType.PARAGRAPH
     assert blocks[MarkdownInlineLeafType.CODE_INLINE] == MarkdownBlockType.PARAGRAPH
 
@@ -227,7 +237,9 @@ def test_crlf_and_unicode_offsets_are_stable() -> None:
     markdown = "中文\n`a`\r\n> 引言\r\n- 项目\n"
     result = MarkdownParserAdapter().parse(markdown)
 
-    assert MarkdownBlockType.HEADING not in {block.block_type for block in result.blocks}
+    assert MarkdownBlockType.HEADING not in {
+        block.block_type for block in result.blocks
+    }
     assert MarkdownBlockType.BLOCKQUOTE in {block.block_type for block in result.blocks}
     assert MarkdownBlockType.LIST_ITEM in {block.block_type for block in result.blocks}
 
@@ -253,23 +265,24 @@ def test_container_prefix_inline_leaves_use_absolute_spans() -> None:
         for leaf in result.inline_leaves
         if leaf.kind == MarkdownInlineLeafType.LINK_DESTINATION
     ]
-    link_texts = {
-        markdown[span.start : span.end] for span in link_spans
-    }
+    link_texts = {markdown[span.start : span.end] for span in link_spans}
 
     assert link_texts == {"foo(bar)", "foo\\)bar"}
 
-    assert (markdown.index("foo(bar)"), markdown.index("foo(bar)") + len("foo(bar)")) in [
-        (span.start, span.end) for span in link_spans
-    ]
-    assert (markdown.index("foo\\)bar"), markdown.index("foo\\)bar") + len("foo\\)bar")) in [
-        (span.start, span.end) for span in link_spans
-    ]
+    assert (
+        markdown.index("foo(bar)"),
+        markdown.index("foo(bar)") + len("foo(bar)"),
+    ) in [(span.start, span.end) for span in link_spans]
+    assert (
+        markdown.index("foo\\)bar"),
+        markdown.index("foo\\)bar") + len("foo\\)bar"),
+    ) in [(span.start, span.end) for span in link_spans]
 
     parent_by_text = {
         markdown[leaf.source_span.start : leaf.source_span.end]: leaf.parent_block_kind
         for leaf in result.inline_leaves
-        if leaf.kind in {
+        if leaf.kind
+        in {
             MarkdownInlineLeafType.LINK_DESTINATION,
             MarkdownInlineLeafType.CODE_INLINE,
             MarkdownInlineLeafType.HTML_INLINE,
@@ -281,10 +294,7 @@ def test_container_prefix_inline_leaves_use_absolute_spans() -> None:
 
 
 def test_container_blockquote_and_list_code_inline_spans_are_absolute() -> None:
-    markdown = (
-        "- `` `a` ```\n"
-        "> `` `b` ```\n"
-    )
+    markdown = "- `` `a` ```\n> `` `b` ```\n"
     result = MarkdownParserAdapter().parse(markdown)
 
     code_spans = {

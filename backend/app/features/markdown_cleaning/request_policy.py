@@ -88,7 +88,7 @@ class MarkdownCleaningRequestPolicy:
         path = Path(raw_path)
         try:
             resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError):
+        except OSError, RuntimeError:
             raise self._input_path_error("输入文件不存在或不可访问") from None
         if (
             not path.is_absolute()
@@ -104,7 +104,7 @@ class MarkdownCleaningRequestPolicy:
             raise self._output_error("目标路径必须是允许目录内的绝对 Markdown 文件路径")
         try:
             resolved = path.resolve(strict=False)
-        except (OSError, RuntimeError):
+        except OSError, RuntimeError:
             raise self._output_error("目标路径不可用") from None
         if not self._is_under(resolved, self._output_roots):
             raise self._output_error("目标路径不在允许目录内")
@@ -138,7 +138,7 @@ class MarkdownCleaningRequestPolicy:
                 ipaddress.ip_address(value)
                 for value in self._resolver(hostname, expected_port)
             )
-        except (OSError, ValueError):
+        except OSError, ValueError:
             raise self._url_error("输入 URL host 无法安全解析") from None
         if not addresses or any(
             address.is_loopback
@@ -172,7 +172,7 @@ class MarkdownCleaningRequestPolicy:
         code: MarkdownCleaningApiErrorCode,
         message: str,
     ) -> MarkdownCleaningDomainError:
-        return MarkdownCleaningDomainError(code, message, http_status=400)
+        return MarkdownCleaningDomainError(code, message, http_status=422)
 
     @classmethod
     def _input_path_error(cls, message: str) -> MarkdownCleaningDomainError:

@@ -176,7 +176,9 @@ def test_publish_success_removes_temporary_entry(tmp_path: Path) -> None:
     output.mkdir()
     publisher = MarkdownCleaningResultPublisher(output_roots=(output,))
 
-    publisher.publish(publisher.prepare(source), output / "result.md", allow_recovery=False)
+    publisher.publish(
+        publisher.prepare(source), output / "result.md", allow_recovery=False
+    )
 
     assert [path.name for path in output.iterdir()] == ["result.md"]
 

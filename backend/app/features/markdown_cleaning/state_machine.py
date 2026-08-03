@@ -18,9 +18,7 @@ class InvalidMarkdownCleaningStateTransition(ValueError):
 ALLOWED_TRANSITIONS: Final[
     dict[MarkdownCleaningTaskStatus, frozenset[MarkdownCleaningTaskStatus]]
 ] = {
-    MarkdownCleaningTaskStatus.PENDING: frozenset(
-        {MarkdownCleaningTaskStatus.QUEUED}
-    ),
+    MarkdownCleaningTaskStatus.PENDING: frozenset({MarkdownCleaningTaskStatus.QUEUED}),
     MarkdownCleaningTaskStatus.QUEUED: frozenset(
         {MarkdownCleaningTaskStatus.RUNNING, MarkdownCleaningTaskStatus.FAILED}
     ),

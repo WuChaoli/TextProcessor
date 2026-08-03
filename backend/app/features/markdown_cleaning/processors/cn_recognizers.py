@@ -152,7 +152,11 @@ CNMobilePhoneRecognizer: type[Any]
 CNIDCardRecognizer: type[Any]
 IPv4AddressRecognizer: type[Any]
 
-if _HAS_PRESIDIO and _PRESIDIO_PATTERN_RECOGNIZER is not None and _PRESIDIO_PATTERN is not None:
+if (
+    _HAS_PRESIDIO
+    and _PRESIDIO_PATTERN_RECOGNIZER is not None
+    and _PRESIDIO_PATTERN is not None
+):
 
     class _PresidioCNMobilePhoneRecognizer(PatternRecognizerBase):  # type: ignore[misc]
         """Match China mobile phone numbers with controlled separator support."""
@@ -160,7 +164,11 @@ if _HAS_PRESIDIO and _PRESIDIO_PATTERN_RECOGNIZER is not None and _PRESIDIO_PATT
         def __init__(self) -> None:
             super().__init__(
                 supported_entity="CN_MOBILE_PHONE",
-                patterns=[_PRESIDIO_PATTERN("CN_MOBILE_PHONE", _MOBILE_PHONE_PATTERN.pattern, 0.5)],
+                patterns=[
+                    _PRESIDIO_PATTERN(
+                        "CN_MOBILE_PHONE", _MOBILE_PHONE_PATTERN.pattern, 0.5
+                    )
+                ],
             )
 
         def validate_result(self, pattern_text: str) -> bool:
@@ -172,7 +180,9 @@ if _HAS_PRESIDIO and _PRESIDIO_PATTERN_RECOGNIZER is not None and _PRESIDIO_PATT
         def __init__(self) -> None:
             super().__init__(
                 supported_entity="CN_ID_CARD",
-                patterns=[_PRESIDIO_PATTERN("CN_ID_CARD", _ID_CARD_PATTERN.pattern, 0.5)],
+                patterns=[
+                    _PRESIDIO_PATTERN("CN_ID_CARD", _ID_CARD_PATTERN.pattern, 0.5)
+                ],
             )
 
         def validate_result(self, pattern_text: str) -> bool:
@@ -184,7 +194,9 @@ if _HAS_PRESIDIO and _PRESIDIO_PATTERN_RECOGNIZER is not None and _PRESIDIO_PATT
         def __init__(self) -> None:
             super().__init__(
                 supported_entity="IPV4_ADDRESS",
-                patterns=[_PRESIDIO_PATTERN("IPV4_ADDRESS", _IPV4_PATTERN.pattern, 0.5)],
+                patterns=[
+                    _PRESIDIO_PATTERN("IPV4_ADDRESS", _IPV4_PATTERN.pattern, 0.5)
+                ],
             )
 
         def validate_result(self, pattern_text: str) -> bool:
@@ -214,4 +226,3 @@ else:
 CNMobilePhoneRecognizer.__name__ = "CNMobilePhoneRecognizer"
 CNIDCardRecognizer.__name__ = "CNIDCardRecognizer"
 IPv4AddressRecognizer.__name__ = "IPv4AddressRecognizer"
-

@@ -20,7 +20,9 @@ class MarkdownCleaningMessage(BaseModel):
         try:
             return cls.model_validate(payload)
         except ValidationError as error:
-            raise InvalidMarkdownCleaningMessage("INVALID_MARKDOWN_CLEANING_MESSAGE") from error
+            raise InvalidMarkdownCleaningMessage(
+                "INVALID_MARKDOWN_CLEANING_MESSAGE"
+            ) from error
 
     def as_payload(self) -> dict[str, str | int]:
         return {
@@ -28,4 +30,3 @@ class MarkdownCleaningMessage(BaseModel):
             "taskType": self.task_type,
             "schemaVersion": self.schema_version,
         }
-

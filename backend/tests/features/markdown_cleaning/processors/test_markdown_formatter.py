@@ -16,7 +16,9 @@ from app.features.markdown_cleaning.processors.markdown_parser import (
 
 def _collect_visible_signature(markdown: str) -> str:
     parsed = MarkdownParserAdapter().parse(markdown)
-    return MarkdownFormatterAdapter._collect_visible_semantic_signature(markdown, parsed)
+    return MarkdownFormatterAdapter._collect_visible_semantic_signature(
+        markdown, parsed
+    )
 
 
 def _collect_protected_units(markdown: str) -> tuple[tuple[str, ...], ...]:
@@ -36,8 +38,7 @@ def _collect_block_signature(markdown: str) -> tuple[MarkdownBlockType, ...]:
 def _collect_inline_signature(markdown: str) -> tuple[tuple[str, str], ...]:
     parsed = MarkdownParserAdapter().parse(markdown)
     return tuple(
-        (leaf.kind.value, leaf.parent_block_kind.value)
-        for leaf in parsed.inline_leaves
+        (leaf.kind.value, leaf.parent_block_kind.value) for leaf in parsed.inline_leaves
     )
 
 
@@ -71,9 +72,8 @@ def test_markdown_formatter_checks_ast_semantics_and_links_and_protection() -> N
     assert not result.text.endswith("\n\n")
     assert _collect_block_signature(markdown) == _collect_block_signature(result.text)
     assert _collect_inline_signature(markdown) == _collect_inline_signature(result.text)
-    assert (
-        _collect_visible_signature(markdown)
-        == _collect_visible_signature(result.text)
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(
+        result.text
     )
     assert _collect_protected_units(markdown) == _collect_protected_units(result.text)
 
@@ -88,7 +88,9 @@ def test_formatting_second_pass_is_byte_stable() -> None:
     assert second.formatting_changes == 0
 
 
-def test_non_protected_plaintext_change_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_non_protected_plaintext_change_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     markdown = "hello `x` world\n"
 
     def _bad_format(*_args: object, **_kwargs: object) -> str:
@@ -98,12 +100,12 @@ def test_non_protected_plaintext_change_is_rejected(monkeypatch: pytest.MonkeyPa
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         MarkdownFormatterAdapter().format(markdown)
 
-    assert (
-        exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
-    )
+    assert exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
 
 
-def test_protected_reorder_or_duplicate_violation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_protected_reorder_or_duplicate_violation_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     markdown = "a `x` b `x` c\n"
 
     def _bad_format(*_args: object, **_kwargs: object) -> str:
@@ -113,9 +115,7 @@ def test_protected_reorder_or_duplicate_violation_is_rejected(monkeypatch: pytes
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         MarkdownFormatterAdapter().format(markdown)
 
-    assert (
-        exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
-    )
+    assert exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
 
 
 def test_non_table_pipe_change_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -128,12 +128,12 @@ def test_non_table_pipe_change_is_rejected(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         MarkdownFormatterAdapter().format(markdown)
 
-    assert (
-        exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
-    )
+    assert exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
 
 
-def test_table_pipe_normalization_only_in_table(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_table_pipe_normalization_only_in_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     markdown = "|a|b|\n|---|---|\n|x|y|\n"
 
     def _bad_format(*_args: object, **_kwargs: object) -> str:
@@ -143,7 +143,9 @@ def test_table_pipe_normalization_only_in_table(monkeypatch: pytest.MonkeyPatch)
     result = MarkdownFormatterAdapter().format(markdown)
 
     assert result.formatting_changes >= 1
-    assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(
+        result.text
+    )
 
 
 @pytest.mark.parametrize(
@@ -168,11 +170,15 @@ def test_table_pipe_normalization_with_protected_prefix_is_accepted(
     result = MarkdownFormatterAdapter().format(markdown)
 
     assert result.formatting_changes >= 1
-    assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(
+        result.text
+    )
     assert _collect_protected_units(markdown) == _collect_protected_units(result.text)
 
 
-def test_table_pipe_change_with_code_prefix_requires_no_semantic_delta(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_table_pipe_change_with_code_prefix_requires_no_semantic_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     markdown = "`code`\n|a|b|\n|---|---|\n|x|y|\n"
 
     def _bad_format(*_args: object, **_kwargs: object) -> str:
@@ -182,7 +188,9 @@ def test_table_pipe_change_with_code_prefix_requires_no_semantic_delta(monkeypat
     result = MarkdownFormatterAdapter().format(markdown)
 
     assert result.formatting_changes >= 1
-    assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(
+        result.text
+    )
 
 
 @pytest.mark.parametrize(
@@ -218,12 +226,12 @@ def test_table_pipe_variation_and_semantic_change_is_rejected(
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         MarkdownFormatterAdapter().format(markdown)
 
-    assert (
-        exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
-    )
+    assert exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
 
 
-def test_link_targets_are_rejected_when_changed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_link_targets_are_rejected_when_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     markdown = "## heading\n\n[link](https://example.com/a)\n"
 
     def _bad_format(*_args: object, **_kwargs: object) -> str:
@@ -233,7 +241,10 @@ def test_link_targets_are_rejected_when_changed(monkeypatch: pytest.MonkeyPatch)
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         MarkdownFormatterAdapter().format(markdown)
 
-    assert getattr(exc.value, "code", None) == MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
+    assert (
+        getattr(exc.value, "code", None)
+        == MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
+    )
 
 
 @pytest.mark.parametrize(
@@ -252,18 +263,12 @@ def test_formatting_change_count_golden_vectors(
     changes: int,
 ) -> None:
     assert (
-        MarkdownFormatterAdapter._count_formatting_changes(source, formatted)
-        == changes
+        MarkdownFormatterAdapter._count_formatting_changes(source, formatted) == changes
     )
 
 
 def test_protected_fence_and_inline_code_contents_remain_exact() -> None:
-    markdown = (
-        "```\n"
-        "x = 'a'\n"
-        "```\n\n"
-        "before `https://example.com?q=1` after\n\n"
-    )
+    markdown = "```\nx = 'a'\n```\n\nbefore `https://example.com?q=1` after\n\n"
     result = MarkdownFormatterAdapter().format(markdown)
 
     assert _collect_protected_units(markdown) == _collect_protected_units(result.text)

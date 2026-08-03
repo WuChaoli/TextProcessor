@@ -9,10 +9,12 @@ from app.features.markdown_cleaning.messages import MarkdownCleaningMessage
 
 class FakeCelery:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[str, dict[str, Any], str | None]] = []
 
-    def send_task(self, name: str, *, kwargs: dict[str, Any]) -> None:
-        self.calls.append((name, kwargs))
+    def send_task(
+        self, name: str, *, kwargs: dict[str, Any], queue: str | None = None
+    ) -> None:
+        self.calls.append((name, kwargs, queue))
 
 
 def test_markdown_cleaning_message_serializes_minimal_identity() -> None:
@@ -54,5 +56,6 @@ def test_celery_dispatcher_sends_minimal_payload() -> None:
                 "taskType": "markdown_cleaning",
                 "schemaVersion": 1,
             },
+            "markdown_cleaning",
         )
     ]

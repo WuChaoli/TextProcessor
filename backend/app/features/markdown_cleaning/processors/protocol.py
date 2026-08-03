@@ -15,5 +15,4 @@ class MarkdownCleaningProcessor(Protocol):
         destination_path: Path,
         *,
         deadline: datetime | None = None,
-    ) -> ProcessorResult:
-        ...
+    ) -> ProcessorResult: ...

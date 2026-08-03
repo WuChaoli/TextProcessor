@@ -609,7 +609,7 @@ class InputResolver:
             raise self._access_error()
         except MarkdownInputError:
             raise
-        except httpx.HTTPError, OSError, ValueError:
+        except (httpx.HTTPError, OSError, ValueError):  # fmt: skip
             raise self._access_error() from None
 
     def _validate_http_url(self, raw_url: str) -> ValidatedHttpTarget:
@@ -641,7 +641,7 @@ class InputResolver:
                 ipaddress.ip_address(value)
                 for value in self._address_resolver(hostname, expected_port)
             )
-        except OSError, ValueError:
+        except (OSError, ValueError):  # fmt: skip
             raise self._access_error() from None
         if not addresses or any(
             address.is_loopback

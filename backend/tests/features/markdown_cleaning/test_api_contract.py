@@ -130,6 +130,7 @@ def test_task_public_requires_a_result_only_for_success_and_never_an_error() -> 
         "createdAt": datetime.now(UTC),
         "startedAt": datetime.now(UTC),
         "finishedAt": datetime.now(UTC),
+        "progress": {"phase": "completed", "percent": 100},
         "result": {
             "fileId": "11",
             "fileStoragePath": "C:/output/source.md",
@@ -220,9 +221,7 @@ def test_summary_exposes_exactly_five_camel_case_redaction_counts() -> None:
     }
 
 
-@pytest.mark.parametrize(
-    "field", ["phone", "idCard", "bankCard", "email", "ipv4"]
-)
+@pytest.mark.parametrize("field", ["phone", "idCard", "bankCard", "email", "ipv4"])
 def test_summary_rejects_negative_redaction_counts(field: str) -> None:
     redactions = {
         "phone": 1,
@@ -253,4 +252,3 @@ def test_domain_error_keeps_a_stable_code_and_safe_message() -> None:
     assert error.code is MarkdownCleaningApiErrorCode.TASK_NOT_FOUND
     assert error.safe_message == "任务不存在"
     assert error.http_status == 404
-

@@ -73,11 +73,9 @@ def test_acquire_queued_updates_status_and_lease(session: Session) -> None:
     assert acquired.attempt_count == 1
     assert acquired.lease_token is not None
     assert acquired.processing_phase == MarkdownCleaningProcessingPhase.CLAIMING_TASK
-    assert (
-        acquired.lease_expires_at
-        == (NOW + timedelta(seconds=30)).replace(tzinfo=None)
-        or acquired.lease_expires_at == NOW + timedelta(seconds=30)
-    )
+    assert acquired.lease_expires_at == (NOW + timedelta(seconds=30)).replace(
+        tzinfo=None
+    ) or acquired.lease_expires_at == NOW + timedelta(seconds=30)
 
 
 def test_acquire_queued_rejects_when_attempt_limit_reached(session: Session) -> None:
@@ -119,12 +117,15 @@ def test_renew_lease_rejects_stale_token(session: Session) -> None:
     assert acquired is not None
     assert acquired.lease_token is not None
 
-    assert repository.renew_lease(
-        task.id,
-        lease_token="invalid",
-        now=NOW + timedelta(seconds=1),
-        lease_seconds=10,
-    ) is False
+    assert (
+        repository.renew_lease(
+            task.id,
+            lease_token="invalid",
+            now=NOW + timedelta(seconds=1),
+            lease_seconds=10,
+        )
+        is False
+    )
 
     assert (
         repository.renew_lease(
@@ -205,7 +206,9 @@ def test_save_prepared_and_mark_succeeded(session: Session) -> None:
     )
 
 
-def test_mark_failed_while_publishing_keeps_recoverable_artifacts(session: Session) -> None:
+def test_mark_failed_while_publishing_keeps_recoverable_artifacts(
+    session: Session,
+) -> None:
     task = make_task()
     session.add(task)
     session.commit()
@@ -405,12 +408,15 @@ def test_mark_succeeded_rejects_without_prepared_artifacts(session: Session) -> 
     assert acquired is not None
     assert acquired.lease_token is not None
 
-    assert repository.mark_succeeded(
-        task.id,
-        lease_token=acquired.lease_token,
-        now=NOW + timedelta(seconds=2),
-        output_sha256="3" * 64,
-    ) is False
+    assert (
+        repository.mark_succeeded(
+            task.id,
+            lease_token=acquired.lease_token,
+            now=NOW + timedelta(seconds=2),
+            output_sha256="3" * 64,
+        )
+        is False
+    )
 
     failed = repository.get(task.id)
     assert failed is not None

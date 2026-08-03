@@ -182,7 +182,9 @@ def test_transition_requires_expected_status(session: Session) -> None:
         )
 
 
-def test_queue_failure_path_keeps_summary_fields_null_before_completion(session: Session) -> None:
+def test_queue_failure_path_keeps_summary_fields_null_before_completion(
+    session: Session,
+) -> None:
     repository = MarkdownCleaningTaskRepository(session)
     task, _ = repository.create_or_get(
         caller_id=uuid.uuid4(),
@@ -216,9 +218,9 @@ def test_queue_failure_path_keeps_summary_fields_null_before_completion(session:
 
 def test_task_columns_have_database_defaults() -> None:
     task_table = cast(Any, MarkdownCleaningTask).__table__
-    processor_contract_version_default = (
-        task_table.c["processor_contract_version"].server_default
-    )
+    processor_contract_version_default = task_table.c[
+        "processor_contract_version"
+    ].server_default
     max_attempts_default = task_table.c["max_attempts"].server_default
 
     assert processor_contract_version_default is not None
@@ -235,7 +237,7 @@ def test_task_columns_have_database_defaults() -> None:
     )
     content = migration_file.read_text(encoding="utf-8")
     assert 'server_default="markdown_cleaning_v1"' in content
-    assert "server_default=\"3\"" in content
+    assert 'server_default="3"' in content
 
 
 def test_mark_dispatched_updates_queued_task(session: Session) -> None:

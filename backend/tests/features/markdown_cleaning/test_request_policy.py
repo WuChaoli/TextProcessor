@@ -51,9 +51,7 @@ def test_local_markdown_input_and_target_are_normalized_under_roots(
 
     validated = build_policy(
         input_roots=(input_root,), output_roots=(output_root,)
-    ).validate_request(
-        build_request(storage_path=str(source), target_path=str(target))
-    )
+    ).validate_request(build_request(storage_path=str(source), target_path=str(target)))
 
     assert validated.session_id == "session-1"
     assert validated.file_id == "file-1"
@@ -217,7 +215,9 @@ def test_remote_input_normalizes_scheme_and_host(tmp_path: Path) -> None:
     output_root = tmp_path / "output"
     output_root.mkdir()
 
-    validated = build_policy(input_roots=(), output_roots=(output_root,)).validate_request(
+    validated = build_policy(
+        input_roots=(), output_roots=(output_root,)
+    ).validate_request(
         build_request(
             oss_url="HTTPS://FILES.INTERNAL./source.md",
             target_path=str(output_root / "result.md"),
@@ -240,9 +240,7 @@ def test_existing_target_is_accepted_by_api_policy(tmp_path: Path) -> None:
 
     validated = build_policy(
         input_roots=(input_root,), output_roots=(output_root,)
-    ).validate_request(
-        build_request(storage_path=str(source), target_path=str(target))
-    )
+    ).validate_request(build_request(storage_path=str(source), target_path=str(target)))
 
     assert validated.target_path == str(target.resolve())
 
@@ -313,7 +311,9 @@ def test_relative_paths_are_rejected_by_policy(tmp_path: Path) -> None:
     with pytest.raises(MarkdownCleaningDomainError) as output_error:
         build_policy(
             input_roots=(input_root,), output_roots=(output_root,)
-        ).validate_request(build_request(storage_path=str(source), target_path="relative.md"))
+        ).validate_request(
+            build_request(storage_path=str(source), target_path="relative.md")
+        )
 
     assert output_error.value.code == "OUTPUT_PATH_NOT_ALLOWED"
 

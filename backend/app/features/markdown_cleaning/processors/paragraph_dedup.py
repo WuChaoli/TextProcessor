@@ -47,7 +47,9 @@ class ParagraphDeduplicator:
             if key in seen_keys:
                 duplicate_count += 1
                 delete_spans.append(
-                    self._build_duplicate_delete_span(blocks=blocks, index=index, block=block)
+                    self._build_duplicate_delete_span(
+                        blocks=blocks, index=index, block=block
+                    )
                 )
                 continue
 
@@ -56,7 +58,9 @@ class ParagraphDeduplicator:
         if not delete_spans:
             return markdown, duplicate_count
 
-        return self._delete_spans(markdown, self._assert_disjoint(delete_spans)), duplicate_count
+        return self._delete_spans(
+            markdown, self._assert_disjoint(delete_spans)
+        ), duplicate_count
 
     @staticmethod
     def _normalize_for_key(markdown: str) -> str:
@@ -90,7 +94,10 @@ class ParagraphDeduplicator:
         start = block.source_span.start
         end = block.source_span.end
 
-        if index + 1 < len(blocks) and blocks[index + 1].block_type == MarkdownBlockType.BLANK:
+        if (
+            index + 1 < len(blocks)
+            and blocks[index + 1].block_type == MarkdownBlockType.BLANK
+        ):
             end = blocks[index + 1].source_span.end
 
         return SourceSpan(start=start, end=end)
@@ -107,5 +114,5 @@ class ParagraphDeduplicator:
     def _delete_spans(text: str, spans: list[SourceSpan]) -> str:
         deduplicated = text
         for span in reversed(spans):
-            deduplicated = deduplicated[:span.start] + deduplicated[span.end :]
+            deduplicated = deduplicated[: span.start] + deduplicated[span.end :]
         return deduplicated

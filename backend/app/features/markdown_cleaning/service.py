@@ -94,9 +94,7 @@ class MarkdownCleaningTaskService:
                     task.id,
                     expected=MarkdownCleaningTaskStatus.QUEUED,
                     target=MarkdownCleaningTaskStatus.FAILED,
-                    error_code=(
-                        MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED
-                    ),
+                    error_code=(MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED),
                     error_message="任务提交失败",
                     finished_at=failed_at,
                     processing_phase=None,

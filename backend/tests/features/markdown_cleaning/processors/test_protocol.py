@@ -154,9 +154,13 @@ def test_stable_error_codes_and_exception_mapping() -> None:
     assert "输入不合法" in str(error)
 
 
-def test_map_processing_exception_exposes_stage_code_without_leaking_exception_message() -> None:
+def test_map_processing_exception_exposes_stage_code_without_leaking_exception_message() -> (
+    None
+):
     default_invalid_input = map_processing_exception(ValueError("user_secret=abc123"))
-    assert default_invalid_input.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    assert (
+        default_invalid_input.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    )
     assert "abc123" not in default_invalid_input.safe_message
     assert "user_secret" not in default_invalid_input.safe_message
 

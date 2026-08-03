@@ -151,7 +151,9 @@ class PresidioMarkdownRedactor:
         allowed_entities: tuple[str, ...] = _SUPPORTED_ENTITIES,
     ) -> None:
         self._allowed_entities = allowed_entities
-        self._analyzer: Any = analyzer if analyzer is not None else self._build_analyzer()
+        self._analyzer: Any = (
+            analyzer if analyzer is not None else self._build_analyzer()
+        )
 
     @staticmethod
     def _build_noop_nlp_engine() -> Any:
@@ -261,7 +263,11 @@ class PresidioMarkdownRedactor:
         entity_type = getattr(result, "entity_type", None)
         start = getattr(result, "start", None)
         end = getattr(result, "end", None)
-        if not isinstance(entity_type, str) or not isinstance(start, int) or not isinstance(end, int):
+        if (
+            not isinstance(entity_type, str)
+            or not isinstance(start, int)
+            or not isinstance(end, int)
+        ):
             return False
         if start < 0 or end < start or end > len(markdown):
             return False
@@ -310,7 +316,7 @@ class PresidioMarkdownRedactor:
         output = markdown
         for match in sorted(matches, key=lambda item: item.start, reverse=True):
             output = (
-                output[:match.start]
+                output[: match.start]
                 + _ENTITY_TO_TOKEN[match.entity_type]
                 + output[match.end :]
             )
@@ -341,14 +347,18 @@ class PresidioMarkdownRedactor:
 
         for match in _EMAIL_PATTERN.finditer(markdown):
             if _is_unprotected(match.start(), match.end(), protected_spans):
-                results.append(_SensitiveMatch("EMAIL_ADDRESS", match.start(), match.end()))
+                results.append(
+                    _SensitiveMatch("EMAIL_ADDRESS", match.start(), match.end())
+                )
 
         for match in _CN_ID_CARD_PATTERN.finditer(markdown):
             value = match.group(0)
             if is_valid_cn_id_card(value) and _is_unprotected(
                 match.start(), match.end(), protected_spans
             ):
-                results.append(_SensitiveMatch("CN_ID_CARD", match.start(), match.end()))
+                results.append(
+                    _SensitiveMatch("CN_ID_CARD", match.start(), match.end())
+                )
 
         for match in _CN_MOBILE_PATTERN.finditer(markdown):
             value = match.group(0)
@@ -364,19 +374,25 @@ class PresidioMarkdownRedactor:
             if is_valid_credit_card(value) and _is_unprotected(
                 match.start(), match.end(), protected_spans
             ):
-                results.append(_SensitiveMatch("CREDIT_CARD", match.start(), match.end()))
+                results.append(
+                    _SensitiveMatch("CREDIT_CARD", match.start(), match.end())
+                )
 
         for match in _IPV4_PATTERN.finditer(markdown):
             value = match.group(0)
             if is_valid_ipv4_address(value) and _is_unprotected(
                 match.start(), match.end(), protected_spans
             ):
-                results.append(_SensitiveMatch("IPV4_ADDRESS", match.start(), match.end()))
+                results.append(
+                    _SensitiveMatch("IPV4_ADDRESS", match.start(), match.end())
+                )
 
         return tuple(results)
 
 
-def _is_unprotected(start: int, end: int, protected_spans: Sequence[SourceSpan]) -> bool:
+def _is_unprotected(
+    start: int, end: int, protected_spans: Sequence[SourceSpan]
+) -> bool:
     for protected in protected_spans:
         if protected.start < end and protected.end > start:
             return False
@@ -388,4 +404,3 @@ def _has_overlap(match: _SensitiveMatch, selected: Sequence[_SensitiveMatch]) ->
         if match.start < selected_match.end and match.end > selected_match.start:
             return True
     return False
-

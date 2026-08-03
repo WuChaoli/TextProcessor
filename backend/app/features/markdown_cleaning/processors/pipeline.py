@@ -409,7 +409,7 @@ class MarkdownCleaningPipeline:
                 if process.stdin is not None:
                     process.stdin.write(request)
                     process.stdin.close()
-            except BrokenPipeError, OSError:
+            except (BrokenPipeError, OSError):  # fmt: skip
                 pass
 
         def read_response() -> None:

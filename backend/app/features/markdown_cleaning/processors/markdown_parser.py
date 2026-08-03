@@ -227,12 +227,14 @@ class MarkdownParserAdapter:
                             "inline token line map is invalid",
                         ) from exc
 
-                    inline_content, inline_offsets = self._build_inline_source_projection(
-                        markdown=markdown,
-                        line_offsets=line_offsets,
-                        inline_map=[line_start, line_end],
-                        open_stack=open_stack,
-                        expected_content=token.content,
+                    inline_content, inline_offsets = (
+                        self._build_inline_source_projection(
+                            markdown=markdown,
+                            line_offsets=line_offsets,
+                            inline_map=[line_start, line_end],
+                            open_stack=open_stack,
+                            expected_content=token.content,
+                        )
                     )
                     if not inline_content:
                         continue
@@ -260,7 +262,9 @@ class MarkdownParserAdapter:
             protected.extend(leaf.source_span for leaf in inline_leaves)
 
             blocks.extend(self._blank_blocks(lines, line_offsets))
-            blocks.sort(key=lambda block: (block.source_span.start, block.source_span.end))
+            blocks.sort(
+                key=lambda block: (block.source_span.start, block.source_span.end)
+            )
             protected_sorted = merge_source_spans(protected)
         except MarkdownParserError:
             raise
@@ -308,7 +312,7 @@ class MarkdownParserAdapter:
         try:
             raw_start = line_offsets[line_start]
             raw_end = line_offsets[line_end]
-        except (TypeError, IndexError):
+        except TypeError, IndexError:
             return "", ()
 
         raw_block = markdown[raw_start:raw_end]
@@ -365,9 +369,11 @@ class MarkdownParserAdapter:
                 if line_index == 0:
                     temp_cursor = cursor
                     for _ in range(list_depth):
-                        temp_cursor, consumed = MarkdownParserAdapter._consume_list_prefix(
-                            line,
-                            temp_cursor,
+                        temp_cursor, consumed = (
+                            MarkdownParserAdapter._consume_list_prefix(
+                                line,
+                                temp_cursor,
+                            )
                         )
                         if consumed == 0:
                             break
@@ -403,7 +409,11 @@ class MarkdownParserAdapter:
 
         if mapped != expected:
             trailing_chars = mapped[len(expected) :]
-            if mapped.startswith(expected) and trailing_chars and trailing_chars.strip("\n") == "":
+            if (
+                mapped.startswith(expected)
+                and trailing_chars
+                and trailing_chars.strip("\n") == ""
+            ):
                 mapped = expected
                 offset_map = offset_map[: len(expected)]
             else:
@@ -849,9 +859,10 @@ class MarkdownParserAdapter:
                 return None
 
             open_paren = link_start + 2
-            while open_paren < len(inline_markdown) and inline_markdown[
-                open_paren
-            ].isspace():
+            while (
+                open_paren < len(inline_markdown)
+                and inline_markdown[open_paren].isspace()
+            ):
                 open_paren += 1
 
             if open_paren >= len(inline_markdown):
@@ -867,7 +878,10 @@ class MarkdownParserAdapter:
                 while tail < len(inline_markdown) and inline_markdown[tail].isspace():
                     tail += 1
                 if inline_markdown[tail : tail + 1] == ")":
-                    if _normalize_destination(inline_markdown[start:end]) == destination:
+                    if (
+                        _normalize_destination(inline_markdown[start:end])
+                        == destination
+                    ):
                         return (start, end)
                 if _normalize_destination(inline_markdown[start:end]) == destination:
                     return (start, end)
