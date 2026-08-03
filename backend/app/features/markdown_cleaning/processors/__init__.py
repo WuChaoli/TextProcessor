@@ -18,6 +18,16 @@ from .markdown_parser import (
 from .models import MarkdownCleaningSummary, ProcessorResult, SourceSpan
 from .paragraph_dedup import ParagraphDeduplicator
 from .protocol import MarkdownCleaningProcessor
+from .cn_recognizers import (
+    CNIDCardRecognizer,
+    CNMobilePhoneRecognizer,
+    IPv4AddressRecognizer,
+    is_valid_cn_id_card,
+    is_valid_cn_mobile_phone,
+    is_valid_credit_card,
+    is_valid_ipv4_address,
+)
+from .presidio_adapter import PresidioMarkdownRedactor, SensitiveRedactionResult, SensitiveRedactionSummary
 
 __all__ = [
     "MarkdownCleaningErrorCode",
@@ -36,4 +46,14 @@ __all__ = [
     "MarkdownParserError",
     "MarkdownParserErrorCode",
     "ParagraphDeduplicator",
+    "CNIDCardRecognizer",
+    "CNMobilePhoneRecognizer",
+    "IPv4AddressRecognizer",
+    "is_valid_cn_id_card",
+    "is_valid_cn_mobile_phone",
+    "is_valid_credit_card",
+    "is_valid_ipv4_address",
+    "PresidioMarkdownRedactor",
+    "SensitiveRedactionResult",
+    "SensitiveRedactionSummary",
 ]
