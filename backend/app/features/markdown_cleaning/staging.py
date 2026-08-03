@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,8 +92,40 @@ class StagingLayout:
         task_root = self.staging_root / str(self.task_id)
         if _is_link_or_junction(task_root):
             raise ValueError("staging 任务目录不安全")
-        if task_root.exists():
-            shutil.rmtree(task_root)
+        if not task_root.exists():
+            return
+        quarantine = self.staging_root / (f".cleanup-{self.task_id}-{uuid.uuid4().hex}")
+        try:
+            os.replace(task_root, quarantine)
+        except FileNotFoundError:
+            return
+        if _is_link_or_junction(quarantine):
+            self._unlink_reparse_entry(quarantine)
+            raise ValueError("staging 任务目录在清理时被替换")
+        self._remove_tree_no_follow(quarantine)
+
+    @classmethod
+    def _remove_tree_no_follow(cls, root: Path) -> None:
+        if _is_link_or_junction(root):
+            cls._unlink_reparse_entry(root)
+            return
+        with os.scandir(root) as entries:
+            for entry in entries:
+                child = Path(entry.path)
+                if entry.is_symlink() or _is_link_or_junction(child):
+                    cls._unlink_reparse_entry(child)
+                elif entry.is_dir(follow_symlinks=False):
+                    cls._remove_tree_no_follow(child)
+                else:
+                    child.unlink()
+        root.rmdir()
+
+    @staticmethod
+    def _unlink_reparse_entry(path: Path) -> None:
+        if hasattr(os.path, "isjunction") and os.path.isjunction(path):
+            os.rmdir(path)
+        else:
+            path.unlink()
 
     def assert_safe_path(self, path: Path, *, must_exist: bool = False) -> Path:
         self._assert_safe()

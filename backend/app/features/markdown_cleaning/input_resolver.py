@@ -4,13 +4,16 @@ import hashlib
 import ipaddress
 import os
 import socket
-from collections.abc import Callable, Iterable, Sequence
+import ssl
+import stat
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, Protocol, cast
 from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 
-import fsspec  # type: ignore[import-untyped]
+import httpcore
 import httpx
 
 from app.features.markdown_cleaning.input_validator import (
@@ -20,6 +23,7 @@ from app.features.markdown_cleaning.input_validator import (
 from app.features.markdown_cleaning.staging import StagingLayout
 
 AddressResolver = Callable[[str, int], Iterable[str]]
+PinnedTransportFactory = Callable[[str, str], httpx.BaseTransport]
 
 
 def _system_resolver(host: str, port: int) -> tuple[str, ...]:
@@ -48,6 +52,160 @@ class ResolvedMarkdownInput:
     source_suffix: str
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedHttpTarget:
+    url: str
+    hostname: str
+    port: int
+    pinned_ip: str
+
+
+class PinnedNetworkBackend(httpcore.NetworkBackend):
+    """Connect to one validated IP while preserving the logical origin host."""
+
+    def __init__(
+        self,
+        *,
+        expected_hostname: str,
+        pinned_ip: str,
+        backend: httpcore.NetworkBackend | None = None,
+    ) -> None:
+        self._expected_hostname = expected_hostname.rstrip(".").lower()
+        self._pinned_ip = pinned_ip
+        self._backend = backend or httpcore.SyncBackend()
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        if host.rstrip(".").lower() != self._expected_hostname:
+            raise httpcore.ConnectError("连接目标与已验证 host 不一致")
+        return self._backend.connect_tcp(
+            self._pinned_ip,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        del path, timeout, socket_options
+        raise httpcore.ConnectError("不允许 Unix socket")
+
+    def sleep(self, seconds: float) -> None:
+        self._backend.sleep(seconds)
+
+
+class _PinnedResponseStream(httpx.SyncByteStream):
+    def __init__(self, stream: Iterable[bytes], request: httpx.Request) -> None:
+        self._stream = stream
+        self._request = request
+
+    def __iter__(self) -> Iterator[bytes]:
+        try:
+            yield from self._stream
+        except (
+            httpcore.TimeoutException,
+            httpcore.NetworkError,
+            httpcore.ProtocolError,
+        ) as exc:
+            raise httpx.TransportError(
+                "HTTP 响应读取失败",
+                request=self._request,
+            ) from exc
+
+    def close(self) -> None:
+        close = getattr(self._stream, "close", None)
+        if close is not None:
+            close()
+
+
+class PinnedTransport(httpx.BaseTransport):
+    """HTTP transport whose TCP destination cannot be changed by a DNS rebind."""
+
+    def __init__(
+        self,
+        *,
+        expected_hostname: str,
+        pinned_ip: str,
+        network_backend: httpcore.NetworkBackend | None = None,
+        ssl_context: ssl.SSLContext | None = None,
+    ) -> None:
+        self._expected_hostname = expected_hostname.rstrip(".").lower()
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=ssl_context or ssl.create_default_context(),
+            max_connections=1,
+            max_keepalive_connections=0,
+            network_backend=PinnedNetworkBackend(
+                expected_hostname=self._expected_hostname,
+                pinned_ip=pinned_ip,
+                backend=network_backend,
+            ),
+        )
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        hostname = (request.url.host or "").rstrip(".").lower()
+        if hostname != self._expected_hostname:
+            raise httpx.ConnectError(
+                "请求 host 与已验证 host 不一致",
+                request=request,
+            )
+        try:
+            response = self._pool.handle_request(
+                httpcore.Request(
+                    method=request.method,
+                    url=httpcore.URL(
+                        scheme=request.url.raw_scheme,
+                        host=request.url.raw_host,
+                        port=request.url.port,
+                        target=request.url.raw_path,
+                    ),
+                    headers=request.headers.raw,
+                    content=request.stream,
+                    extensions=request.extensions,
+                )
+            )
+        except (
+            httpcore.TimeoutException,
+            httpcore.NetworkError,
+            httpcore.ProtocolError,
+        ) as exc:
+            raise httpx.TransportError(
+                "HTTP 连接失败",
+                request=request,
+            ) from exc
+        if not isinstance(response.stream, Iterable):
+            raise httpx.ProtocolError("HTTP 响应流类型无效", request=request)
+        return httpx.Response(
+            status_code=response.status,
+            headers=response.headers,
+            stream=_PinnedResponseStream(
+                cast(Iterable[bytes], response.stream),  # type: ignore[redundant-cast]
+                request,
+            ),
+            extensions=response.extensions,
+        )
+
+    def close(self) -> None:
+        self._pool.close()
+
+
+def _default_pinned_transport(
+    hostname: str,
+    pinned_ip: str,
+) -> httpx.BaseTransport:
+    return PinnedTransport(expected_hostname=hostname, pinned_ip=pinned_ip)
+
+
 class InputResolver:
     def __init__(
         self,
@@ -61,7 +219,7 @@ class InputResolver:
         read_timeout_seconds: float = 60,
         max_http_redirects: int = 3,
         address_resolver: AddressResolver = _system_resolver,
-        http_client: httpx.Client | None = None,
+        transport_factory: PinnedTransportFactory = _default_pinned_transport,
     ) -> None:
         if max_input_bytes <= 0 or copy_chunk_bytes <= 0:
             raise ValueError("输入限制必须是正整数")
@@ -84,7 +242,7 @@ class InputResolver:
         self._copy_chunk_bytes = copy_chunk_bytes
         self._max_http_redirects = max_http_redirects
         self._address_resolver = address_resolver
-        self._http_client = http_client or httpx.Client(follow_redirects=False)
+        self._transport_factory = transport_factory
         self._http_timeout = httpx.Timeout(
             read_timeout_seconds,
             connect=connect_timeout_seconds,
@@ -99,7 +257,9 @@ class InputResolver:
     ) -> ResolvedMarkdownInput:
         selected = self._selected_value(task)
         suffix = self._source_suffix(selected, task.selected_input_type)
-        self._validate_selected_policy(selected, task.selected_input_type)
+        validated_http = self._validate_selected_policy(
+            selected, task.selected_input_type
+        )
         reused = self._reuse_existing(task, layout, suffix)
         if reused is not None:
             return reused
@@ -111,18 +271,21 @@ class InputResolver:
                 )
             return self._resolve_local(Path(task.file_storage_path), suffix, layout)
         if task.selected_input_type == "remote":
-            if not task.file_oss_url:
+            if not task.file_oss_url or validated_http is None:
                 raise self._access_error()
-            return self._resolve_http(task.file_oss_url, layout)
+            return self._resolve_http(validated_http, layout)
         raise self._access_error()
 
-    def _validate_selected_policy(self, selected: str, selected_type: str) -> None:
+    def _validate_selected_policy(
+        self,
+        selected: str,
+        selected_type: str,
+    ) -> ValidatedHttpTarget | None:
         if selected_type == "local":
             self._validate_local_path(Path(selected), require_exists=False)
-            return
+            return None
         if selected_type == "remote":
-            self._validate_http_url(selected)
-            return
+            return self._validate_http_url(selected)
         raise self._access_error()
 
     @staticmethod
@@ -201,15 +364,176 @@ class InputResolver:
         suffix: str,
         layout: StagingLayout,
     ) -> ResolvedMarkdownInput:
-        normalized = self._validate_local_path(source_path, require_exists=True)
-        filesystem = fsspec.filesystem("file")
         try:
-            with filesystem.open(str(normalized), "rb") as source:
+            with self._open_local_source(source_path) as source:
                 return self._copy(source, suffix, layout)
         except MarkdownInputError:
             raise
         except OSError:
             raise self._access_error() from None
+
+    @contextmanager
+    def _open_local_source(self, source_path: Path) -> Iterator[BinaryIO]:
+        if not source_path.is_absolute():
+            raise self._access_error()
+        lexical = Path(os.path.abspath(source_path))
+        if self._has_link_component(lexical):
+            raise self._access_error()
+        descriptor: int | None = None
+        stream: BinaryIO | None = None
+        try:
+            if os.name == "nt":
+                descriptor, final_path = self._open_windows_no_reparse(lexical)
+            else:
+                descriptor, final_path = self._open_posix_no_follow(lexical)
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or not self._is_under(
+                final_path, self._input_roots
+            ):
+                raise self._access_error()
+            stream = os.fdopen(descriptor, "rb")
+            descriptor = None
+            yield stream
+        except FileNotFoundError:
+            raise self._error(
+                MarkdownInputErrorCode.INPUT_NOT_FOUND,
+                "输入文件不存在",
+            ) from None
+        except MarkdownInputError:
+            raise
+        except OSError:
+            raise self._access_error() from None
+        finally:
+            if stream is not None:
+                stream.close()
+            if descriptor is not None:
+                os.close(descriptor)
+
+    @staticmethod
+    def _open_posix_no_follow(path: Path) -> tuple[int, Path]:
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        try:
+            fd_link = Path(f"/proc/self/fd/{descriptor}")
+            if fd_link.exists():
+                final_path = Path(os.path.realpath(fd_link))
+            else:
+                final_path = path.resolve(strict=True)
+                path_metadata = path.stat(follow_symlinks=False)
+                descriptor_metadata = os.fstat(descriptor)
+                if (
+                    path_metadata.st_dev != descriptor_metadata.st_dev
+                    or path_metadata.st_ino != descriptor_metadata.st_ino
+                ):
+                    raise OSError("opened file identity changed")
+            return descriptor, final_path
+        except Exception:
+            os.close(descriptor)
+            raise
+
+    @staticmethod
+    def _open_windows_no_reparse(path: Path) -> tuple[int, Path]:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        generic_read = 0x80000000
+        share_read_write_delete = 0x00000001 | 0x00000002 | 0x00000004
+        open_existing = 3
+        file_attribute_normal = 0x00000080
+        file_attribute_directory = 0x00000010
+        file_attribute_reparse_point = 0x00000400
+        file_flag_open_reparse_point = 0x00200000
+        file_attribute_tag_info = 9
+
+        create_file = ctypes.WinDLL("kernel32", use_last_error=True).CreateFileW
+        create_file.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        )
+        create_file.restype = wintypes.HANDLE
+        handle = create_file(
+            str(path),
+            generic_read,
+            share_read_write_delete,
+            None,
+            open_existing,
+            file_attribute_normal | file_flag_open_reparse_point,
+            None,
+        )
+        invalid_handle = wintypes.HANDLE(-1).value
+        if handle == invalid_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        class FileAttributeTagInfo(ctypes.Structure):
+            _fields_ = (
+                ("FileAttributes", wintypes.DWORD),
+                ("ReparseTag", wintypes.DWORD),
+            )
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+        info = FileAttributeTagInfo()
+        try:
+            get_info = kernel32.GetFileInformationByHandleEx
+            get_info.argtypes = (
+                wintypes.HANDLE,
+                ctypes.c_int,
+                wintypes.LPVOID,
+                wintypes.DWORD,
+            )
+            get_info.restype = wintypes.BOOL
+            if not get_info(
+                handle,
+                file_attribute_tag_info,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            ):
+                raise ctypes.WinError(ctypes.get_last_error())
+            if info.FileAttributes & (
+                file_attribute_directory | file_attribute_reparse_point
+            ):
+                raise OSError("local input is a directory or reparse point")
+            get_final_path = kernel32.GetFinalPathNameByHandleW
+            get_final_path.argtypes = (
+                wintypes.HANDLE,
+                wintypes.LPWSTR,
+                wintypes.DWORD,
+                wintypes.DWORD,
+            )
+            get_final_path.restype = wintypes.DWORD
+            required = get_final_path(handle, None, 0, 0)
+            if required == 0:
+                raise ctypes.WinError(ctypes.get_last_error())
+            buffer = ctypes.create_unicode_buffer(required + 1)
+            if get_final_path(handle, buffer, len(buffer), 0) == 0:
+                raise ctypes.WinError(ctypes.get_last_error())
+            final_path = InputResolver._normalize_windows_handle_path(buffer.value)
+            descriptor = msvcrt.open_osfhandle(
+                int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0)
+            )
+            handle = invalid_handle
+            return descriptor, final_path
+        finally:
+            if handle != invalid_handle:
+                close_handle(handle)
+
+    @staticmethod
+    def _normalize_windows_handle_path(raw_path: str) -> Path:
+        if raw_path.startswith("\\\\?\\UNC\\"):
+            raw_path = "\\\\" + raw_path[8:]
+        elif raw_path.startswith("\\\\?\\"):
+            raw_path = raw_path[4:]
+        return Path(raw_path).resolve(strict=False)
 
     def _validate_local_path(
         self,
@@ -239,49 +563,56 @@ class InputResolver:
 
     def _resolve_http(
         self,
-        source_url: str,
+        initial_target: ValidatedHttpTarget,
         layout: StagingLayout,
     ) -> ResolvedMarkdownInput:
-        current_url = source_url
+        target = initial_target
         try:
             for redirect_count in range(self._max_http_redirects + 1):
-                current_url = self._validate_http_url(current_url)
-                request = self._http_client.build_request(
-                    "GET", current_url, timeout=self._http_timeout
-                )
-                response = self._http_client.send(request, stream=True)
-                if response.is_redirect:
-                    location = response.headers.get("location")
-                    response.close()
-                    if not location or redirect_count == self._max_http_redirects:
-                        raise self._access_error()
-                    current_url = urljoin(current_url, location)
-                    continue
-                response.raise_for_status()
-                content_length = response.headers.get("content-length")
-                if content_length is not None:
-                    try:
-                        if int(content_length) > self._max_input_bytes:
-                            raise self._error(
-                                MarkdownInputErrorCode.INPUT_TOO_LARGE,
-                                "输入文件超过大小限制",
-                            )
-                    except ValueError:
-                        raise self._access_error() from None
-                try:
-                    suffix = self._source_suffix(current_url, "remote")
-                    return self._copy_chunks(
-                        response.iter_bytes(self._copy_chunk_bytes), suffix, layout
+                transport = self._transport_factory(target.hostname, target.pinned_ip)
+                with httpx.Client(
+                    transport=transport,
+                    follow_redirects=False,
+                    trust_env=False,
+                ) as client:
+                    request = client.build_request(
+                        "GET", target.url, timeout=self._http_timeout
                     )
-                finally:
-                    response.close()
+                    response = client.send(request, stream=True)
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        response.close()
+                        if not location or redirect_count == self._max_http_redirects:
+                            raise self._access_error()
+                        target = self._validate_http_url(urljoin(target.url, location))
+                        continue
+                    response.raise_for_status()
+                    content_length = response.headers.get("content-length")
+                    if content_length is not None:
+                        try:
+                            if int(content_length) > self._max_input_bytes:
+                                raise self._error(
+                                    MarkdownInputErrorCode.INPUT_TOO_LARGE,
+                                    "输入文件超过大小限制",
+                                )
+                        except ValueError:
+                            raise self._access_error() from None
+                    try:
+                        suffix = self._source_suffix(target.url, "remote")
+                        return self._copy_chunks(
+                            response.iter_bytes(self._copy_chunk_bytes),
+                            suffix,
+                            layout,
+                        )
+                    finally:
+                        response.close()
             raise self._access_error()
         except MarkdownInputError:
             raise
         except httpx.HTTPError, OSError, ValueError:
             raise self._access_error() from None
 
-    def _validate_http_url(self, raw_url: str) -> str:
+    def _validate_http_url(self, raw_url: str) -> ValidatedHttpTarget:
         try:
             parsed = urlsplit(raw_url)
             port = parsed.port
@@ -322,7 +653,7 @@ class InputResolver:
             for address in addresses
         ):
             raise self._access_error()
-        return urlunsplit(
+        normalized_url = urlunsplit(
             SplitResult(
                 scheme,
                 hostname if port is None else f"{hostname}:{port}",
@@ -330,6 +661,12 @@ class InputResolver:
                 "",
                 "",
             )
+        )
+        return ValidatedHttpTarget(
+            url=normalized_url,
+            hostname=hostname,
+            port=expected_port,
+            pinned_ip=str(addresses[0]),
         )
 
     def _copy(

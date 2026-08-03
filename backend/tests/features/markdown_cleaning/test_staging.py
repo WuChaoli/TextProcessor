@@ -52,6 +52,25 @@ def test_prepare_rejects_symlinked_task_directory(tmp_path: Path) -> None:
     assert not (outside / "input").exists()
 
 
+def test_prepare_rejects_symlinked_input_directory(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    task_root = staging_root / str(TASK_ID)
+    task_root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker.txt"
+    marker.write_text("keep", encoding="utf-8")
+    try:
+        (task_root / "input").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("当前环境不允许创建目录符号链接")
+
+    with pytest.raises(ValueError, match="staging"):
+        StagingLayout.for_task(staging_root, TASK_ID).prepare()
+
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
 def test_cleanup_recomputes_task_root_and_removes_only_that_task(
     tmp_path: Path,
 ) -> None:
@@ -67,6 +86,26 @@ def test_cleanup_recomputes_task_root_and_removes_only_that_task(
 
     assert not layout.root.exists()
     assert other.original_source.read_bytes() == b"other"
+
+
+def test_cleanup_unlinks_child_reparse_without_traversing_external_target(
+    tmp_path: Path,
+) -> None:
+    layout = StagingLayout.for_task(tmp_path / "staging", TASK_ID)
+    layout.prepare()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker.txt"
+    marker.write_text("keep", encoding="utf-8")
+    try:
+        (layout.input_dir / "linked").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("当前环境不允许创建目录符号链接")
+
+    layout.cleanup()
+
+    assert marker.read_text(encoding="utf-8") == "keep"
+    assert not layout.root.exists()
 
 
 def test_cleanup_rejects_symlinked_task_root_without_deleting_target(
@@ -85,6 +124,36 @@ def test_cleanup_rejects_symlinked_task_root_without_deleting_target(
 
     with pytest.raises(ValueError, match="staging"):
         StagingLayout.for_task(staging_root, TASK_ID).cleanup()
+
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_cleanup_rejects_task_root_replaced_at_quarantine_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging_root = tmp_path / "staging"
+    layout = StagingLayout.for_task(staging_root, TASK_ID)
+    layout.prepare()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    marker = outside / "marker.txt"
+    marker.write_text("keep", encoding="utf-8")
+    original_replace = os.replace
+
+    def replace_with_link(source: Path, destination: Path) -> None:
+        if Path(source) == layout.root:
+            layout.root.rename(staging_root / "displaced")
+            try:
+                layout.root.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                pytest.skip("当前环境不允许创建目录符号链接")
+        original_replace(source, destination)
+
+    monkeypatch.setattr(os, "replace", replace_with_link)
+
+    with pytest.raises(ValueError, match="staging"):
+        layout.cleanup()
 
     assert marker.read_text(encoding="utf-8") == "keep"
 
