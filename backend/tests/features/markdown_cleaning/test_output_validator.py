@@ -272,7 +272,7 @@ def test_validator_rechecks_output_hash_and_length_from_actual_file(
     output_file.write_text("cleaned", encoding="utf-8")
     result = _make_result(output_file, input_payload=source.read_bytes())
     expected_input_sha = hashlib.sha256(source.read_bytes()).hexdigest()
-    output_file.write_text("tampered", encoding="utf-8")
+    output_file.write_text("tamperd", encoding="utf-8")
 
     with pytest.raises(MarkdownCleaningProcessorError) as error:
         validate_pipeline_output(

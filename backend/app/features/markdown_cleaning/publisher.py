@@ -110,7 +110,10 @@ class MarkdownCleaningResultPublisher:
         )
 
     def _fsync_directory(self, directory: Path) -> None:
-        fd = os.open(directory, os.O_RDONLY)
+        try:
+            fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            return
         try:
             os.fsync(fd)
         finally:
