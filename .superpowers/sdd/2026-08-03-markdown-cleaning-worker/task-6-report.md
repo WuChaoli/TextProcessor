@@ -26,3 +26,13 @@
 - MyPy 探测：`uv run mypy app/features/markdown_cleaning tests/integration/markdown_cleaning` 未通过，报告 37 条测试类型错误（主要为原有 fixture 未标注、Celery/Kombu 无 stubs，以及生产 Protocol 的严格逆变不兼容）；运行时完整 integration 已通过，本轮不以忽略规则掩盖该边界。
 - Windows teardown 修复：旧实现只 terminate `uv` launcher，曾遗留本 worktree 的 Celery/Python 子进程；已精确清理，并改为对 fixture 记录的根 PID 执行 `taskkill /PID <pid> /T /F`、等待根进程退出。连续 worker 测试及完整 integration 后精确命令行核验均为 `OWNED_WORKERS_REMAINING=0`。
 - 最终资源核验：无 `tp-md-redis-*` 容器、无 `tp_md_*` PostgreSQL database。
+
+## fix round2/5：review Medium/Low 收敛
+
+- 配置语义：API `MARKDOWN_CLEANING_OUTPUT_ROOTS` 与 worker `output_roots` 相同或位于其子目录均允许；output 与 API input、worker staging 相同或父子重叠继续拒绝。相关 config/orchestration/Celery 测试 `37 passed`。
+- 真实 crash/takeover：本机 `host.docker.internal:80` 受控 Markdown HTTP 服务仅允许解析出的 LAN 地址 `/32`，首请求阻塞；API POST 后首 worker 已 claim 且 DB 为 `running` 时按 fixture 根 PID 杀完整进程树，确认无目标文件；2 秒 lease 到期后生产 `markdown_cleaning.recover` 经真实 Redis 被新 solo worker 消费并重投 execute，第二次 HTTP 返回后最终 `succeeded`、`attempt_count == 2`、仅一个目标，额外等待后字节不变。
+- 严格 envelope：真实 POST 后使用 Kombu 取出消息并逐字段断言仅含 `taskId/taskType/schemaVersion`，随后 requeue 原消息交给真实 worker。
+- 入队失败：使用未监听的真实 Redis 端口和独立 `Celery(set_as_current=False)`，生产 dispatcher 返回稳定 503 并在真实 PostgreSQL 持久化失败；每例 API Celery app 独立，避免 producer pool/current app 跨 fixture 污染。
+- cleanup：terminal staging cleanup 遇到 `OSError` 记录安全 warning，结构化日志含 `task_id`，不记录异常或宿主路径。
+- deadline/decorator：真实 crash 任务断言 `processing_deadline - started_at` 位于 29 到 31 秒，且 Celery decorator `time_limit` 大于 processor soft timeout。
+- 完整 integration：`uv run pytest -q tests/integration/markdown_cleaning --maxfail=1`，结果 `12 passed, 4 warnings in 80.06s`。

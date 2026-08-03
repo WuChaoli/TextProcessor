@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
+import socket
 
+from celery import Celery
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from app.features.markdown_cleaning import routes
+from app.features.markdown_cleaning.dispatcher import (
+    CeleryMarkdownCleaningTaskDispatcher,
+)
 from app.features.markdown_cleaning.task_models import MarkdownCleaningTask
-
-
-class FailingDispatcher:
-    def enqueue_execute(self, task_id) -> None:
-        raise RuntimeError("broker unavailable at C:/internal/redis")
 
 
 def test_real_api_persists_safe_failure_when_enqueue_fails(
@@ -20,8 +20,16 @@ def test_real_api_persists_safe_failure_when_enqueue_fails(
 ) -> None:
     runtime = markdown_cleaning_runtime
     runtime.source.write_text("# safe\n", encoding="utf-8")
-    runtime.app.dependency_overrides[routes.get_markdown_cleaning_dispatcher] = (
-        FailingDispatcher
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        bad_port = probe.getsockname()[1]
+    bad_celery = Celery(
+        "bad-broker-integration",
+        broker=f"redis://127.0.0.1:{bad_port}/0",
+        set_as_current=False,
+    )
+    runtime.app.dependency_overrides[routes.get_markdown_cleaning_dispatcher] = lambda: (
+        CeleryMarkdownCleaningTaskDispatcher(bad_celery)
     )
     try:
         with caplog.at_level(logging.WARNING), TestClient(runtime.app) as client:
@@ -53,8 +61,9 @@ def test_real_api_persists_safe_failure_when_enqueue_fails(
             assert task.staging_path is None
         exposed = json.dumps(response.json(), ensure_ascii=False) + caplog.text
         assert str(runtime.staging_root) not in exposed
-        assert "C:/internal/redis" not in exposed
+        assert str(runtime.source.parent.parent) not in exposed
     finally:
+        bad_celery.close()
         runtime.app.dependency_overrides.pop(
             routes.get_markdown_cleaning_dispatcher, None
         )

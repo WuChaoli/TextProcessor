@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 import uuid
 from collections.abc import Generator
@@ -282,6 +283,24 @@ def test_execute_runs_ordered_pipeline_with_deadline_and_safe_cleanup(
         if name not in {"claim", "renew"}
     }
     assert tokens == {"lease-new"}
+
+
+def test_terminal_cleanup_oserror_logs_safe_task_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    orchestrator, _, _, _, _, task = build_orchestrator(tmp_path)
+
+    def fail_cleanup(_layout: StagingLayout) -> None:
+        raise OSError(f"cannot remove {tmp_path / 'secret-staging'}")
+
+    monkeypatch.setattr(StagingLayout, "cleanup", fail_cleanup)
+    with caplog.at_level(logging.WARNING):
+        orchestrator.execute(task.id)
+
+    assert any(
+        getattr(record, "task_id", None) == str(task.id) for record in caplog.records
+    )
+    assert str(tmp_path) not in caplog.text
 
 
 def test_execute_claims_persisted_deadline_from_real_repository(

@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from kombu import Connection
 from sqlalchemy import text
 from sqlmodel import Session
 
@@ -40,7 +41,15 @@ def test_api_and_real_worker_clean_markdown_end_to_end(
         assert response.status_code == 202, response.text
         accepted = response.json()
         assert accepted["status"] == "queued"
-        assert runtime.redis.llen("markdown_cleaning") == 1
+        with Connection(runtime.redis_url) as connection:
+            queue = connection.SimpleQueue("markdown_cleaning")
+            message = queue.get(block=True, timeout=5)
+            assert message.payload[1] == {
+                "taskId": accepted["taskId"],
+                "taskType": "markdown_cleaning",
+                "schemaVersion": 1,
+            }
+            message.requeue()
 
         with runtime.worker():
             deadline = time.monotonic() + 45

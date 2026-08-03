@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ from app.features.markdown_cleaning.publisher import (
 )
 from app.features.markdown_cleaning.staging import StagingLayout
 from app.features.markdown_cleaning.worker_models import MarkdownCleaningWorkerTask
+
+logger = logging.getLogger(__name__)
 
 
 class LeaseLostError(RuntimeError):
@@ -331,7 +334,10 @@ class MarkdownCleaningOrchestrator:
                     # Cleanup is best-effort after the authoritative terminal DB
                     # transition. A Windows handle race must not turn a completed
                     # task into an apparent worker failure or trigger reprocessing.
-                    pass
+                    logger.warning(
+                        "markdown cleaning terminal staging cleanup failed",
+                        extra={"task_id": str(task.id)},
+                    )
 
     def _fail(
         self,

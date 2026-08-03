@@ -15,7 +15,7 @@ def test_real_redis_broker_envelope_contains_only_authoritative_identifiers(
     markdown_cleaning_runtime,
 ) -> None:
     redis_url = markdown_cleaning_runtime.redis_url
-    celery = Celery("task6-contract", broker=redis_url)
+    celery = Celery("task6-contract", broker=redis_url, set_as_current=False)
     task_id = uuid.uuid4()
     CeleryMarkdownCleaningTaskDispatcher(celery).enqueue_execute(task_id)
     with Connection(redis_url) as connection:

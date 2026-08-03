@@ -56,7 +56,7 @@ def test_duplicate_broker_delivery_is_terminally_idempotent(
     source.write_text("# Once\n", encoding="utf-8")
     task = persist_queued_task(pg_session, caller, source=source, target=target)
     dispatcher = CeleryMarkdownCleaningTaskDispatcher(
-        Celery("duplicate-delivery", broker=runtime.redis_url)
+        Celery("duplicate-delivery", broker=runtime.redis_url, set_as_current=False)
     )
     dispatcher.enqueue_execute(task.id)
     dispatcher.enqueue_execute(task.id)

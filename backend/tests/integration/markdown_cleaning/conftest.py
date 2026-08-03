@@ -14,6 +14,7 @@ from pathlib import Path
 import psycopg
 import pytest
 import redis
+from celery import Celery
 from fastapi import FastAPI
 from sqlalchemy import text
 from sqlmodel import Session, create_engine
@@ -128,6 +129,7 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     target = output_root / "清洗结果.md"
     engine = None
     redis_client = None
+    api_celery = None
     created_database = False
     try:
         with psycopg.connect(admin_dsn, autocommit=True) as connection:
@@ -203,6 +205,10 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from app.api import deps
         from app.core.celery_app import celery_app
         from app.core.config import MarkdownCleaningWorkerSettings, settings
+        from app.features.markdown_cleaning import routes
+        from app.features.markdown_cleaning.dispatcher import (
+            CeleryMarkdownCleaningTaskDispatcher,
+        )
         from app.main import app
 
         settings.POSTGRES_SERVER = "127.0.0.1"
@@ -220,6 +226,11 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(deps, "engine", engine)
         celery_app.close()
         celery_app.conf.broker_url = redis_url
+        api_celery = Celery(
+            f"markdown-cleaning-api-{database_name}",
+            broker=redis_url,
+            set_as_current=False,
+        )
         caller = User(
             email=f"task6-{uuid.uuid4()}@example.com",
             hashed_password="integration-only",
@@ -229,6 +240,9 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             session.commit()
             session.refresh(caller)
         app.dependency_overrides[deps.get_current_user] = lambda: caller
+        app.dependency_overrides[routes.get_markdown_cleaning_dispatcher] = lambda: (
+            CeleryMarkdownCleaningTaskDispatcher(api_celery)
+        )
         yield MarkdownCleaningRuntime(
             app=app,
             engine=engine,
@@ -245,9 +259,11 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     finally:
         try:
             from app.api import deps
+            from app.features.markdown_cleaning import routes
             from app.main import app
 
             app.dependency_overrides.pop(deps.get_current_user, None)
+            app.dependency_overrides.pop(routes.get_markdown_cleaning_dispatcher, None)
         except ImportError:
             pass
         if engine is not None:
@@ -256,6 +272,8 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             from app.core.celery_app import celery_app
 
             celery_app.close()
+            if api_celery is not None:
+                api_celery.close()
         except ImportError:
             pass
         subprocess.run(
