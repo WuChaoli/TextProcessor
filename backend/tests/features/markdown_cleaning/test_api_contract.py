@@ -43,7 +43,7 @@ def test_create_schema_selects_local_input_and_rejects_unknown_fields() -> None:
     ["sessionId", "fileId", "fileStoragePath", "fileOssUrl", "targetPath"],
 )
 def test_create_schema_rejects_blank_values(field: str) -> None:
-    payload = {
+    payload: dict[str, str | None] = {
         "sessionId": "session-1",
         "fileId": "11",
         "fileStoragePath": "C:/input/source.md",
@@ -61,7 +61,7 @@ def test_create_schema_rejects_blank_values(field: str) -> None:
     ["fileStoragePath", "fileOssUrl"],
 )
 def test_create_schema_requires_at_least_one_input(input_field: str) -> None:
-    payload = {
+    payload: dict[str, str | None] = {
         "sessionId": "session-1",
         "fileId": "11",
         "fileStoragePath": "C:/input/source.md",
@@ -131,6 +131,9 @@ def test_task_public_requires_a_result_only_for_success_and_never_an_error() -> 
         "startedAt": datetime.now(UTC),
         "finishedAt": datetime.now(UTC),
         "result": {
+            "fileId": "11",
+            "fileStoragePath": "C:/output/source.md",
+            "fileOssUrl": "https://oss.internal/source.md",
             "targetPath": "C:/output/result.md",
             "summary": {
                 "duplicateParagraphsRemoved": 2,
@@ -250,3 +253,4 @@ def test_domain_error_keeps_a_stable_code_and_safe_message() -> None:
     assert error.code is MarkdownCleaningApiErrorCode.TASK_NOT_FOUND
     assert error.safe_message == "任务不存在"
     assert error.http_status == 404
+

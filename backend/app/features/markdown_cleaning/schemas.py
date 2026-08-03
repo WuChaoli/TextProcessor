@@ -53,6 +53,7 @@ class MarkdownCleaningTaskAccepted(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     task_id: uuid.UUID = Field(alias="taskId")
+    file_id: str = Field(alias="fileId")
     session_id: str = Field(alias="sessionId")
     status: MarkdownCleaningTaskStatus
 
@@ -80,6 +81,9 @@ class MarkdownCleaningSummaryPublic(BaseModel):
 class MarkdownCleaningResultPublic(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
+    file_id: str = Field(alias="fileId")
+    file_storage_path: str | None = Field(default=None, alias="fileStoragePath")
+    file_oss_url: str | None = Field(default=None, alias="fileOssUrl")
     target_path: str = Field(alias="targetPath")
     summary: MarkdownCleaningSummaryPublic
 
