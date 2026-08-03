@@ -1,6 +1,6 @@
 import threading
 import uuid
-from collections.abc import Generator
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +18,7 @@ from app.features.markdown_cleaning.api_errors import (
 )
 from app.features.markdown_cleaning.repository import (
     MarkdownCleaningTaskRepository,
+    _idempotency_lock_key,
 )
 from app.features.markdown_cleaning.request_policy import (
     MarkdownCleaningRequestPolicy,
@@ -31,7 +32,7 @@ from app.models import UserCreate
 
 
 @pytest.fixture(scope="session", autouse=True)
-def db() -> Generator[None, None, None]:
+def db() -> Iterator[None]:
     yield
 
 
@@ -47,7 +48,7 @@ class Dispatcher:
 
 
 @pytest.fixture
-def session() -> Generator[Session]:
+def session() -> Iterator[Session]:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -111,6 +112,23 @@ def _skip_if_postgres_unreachable() -> None:
         pytest.skip(f"PostgreSQL unavailable: {error}")
 
 
+def _can_acquire_advisory_lock_for_key(
+    caller_id: uuid.UUID,
+    session_id: str,
+    file_id: str,
+) -> bool:
+    key = _idempotency_lock_key(caller_id, session_id, file_id)
+    with engine.connect() as db:
+        acquired = bool(
+            db.exec_driver_sql(f"SELECT pg_try_advisory_lock({key})").one()._mapping[
+                "pg_try_advisory_lock"
+            ]
+        )
+        if acquired:
+            db.exec_driver_sql(f"SELECT pg_advisory_unlock({key})")
+        return acquired
+
+
 @dataclass
 class BlockingDispatcher:
     blocked_event: threading.Event = field(default_factory=threading.Event)
@@ -124,12 +142,24 @@ class BlockingDispatcher:
         if not self._first_seen:
             self._first_seen = True
             self.blocked_event.set()
-            assert self.release_event.wait(timeout=8.0)
+            assert self.release_event.wait(timeout=10.0)
             if self.fail_first:
                 raise RuntimeError("redis-secret: broker blocked")
 
         else:
             return
+
+
+def _assert_no_advisory_lock_for_key(
+    caller_id: uuid.UUID,
+    session_id: str,
+    file_id: str,
+) -> None:
+    assert _can_acquire_advisory_lock_for_key(
+        caller_id=caller_id,
+        session_id=session_id,
+        file_id=file_id,
+    )
 
 
 def test_create_is_idempotent_and_dispatches_once(
@@ -239,6 +269,87 @@ def test_queue_failure_replay_returns_same_safe_503_and_preserves_error(
     assert dispatcher.task_ids == []
 
 
+def test_idempotency_lock_holds_postgres_session_lock_across_transaction_commits(
+    tmp_path: Path,
+) -> None:
+    if engine.dialect.name != "postgresql":
+        pytest.skip("PostgreSQL is required for advisory-lock concurrency test")
+    _skip_if_postgres_unreachable()
+
+    caller_id = _create_test_user()
+    dispatcher = BlockingDispatcher(fail_first=False)
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    input_root.mkdir(exist_ok=True)
+    output_root.mkdir(exist_ok=True)
+    session_id = f"session-{uuid.uuid7()}"
+    file_id = f"file-{uuid.uuid7()}"
+    source = input_root / f"source-{uuid.uuid4()}.md"
+    source.write_text("raw", encoding="utf-8")
+    target = output_root / f"result-{uuid.uuid4()}.md"
+    markdown_request = MarkdownCleaningTaskCreate(
+        sessionId=session_id,
+        fileId=file_id,
+        fileStoragePath=str(source),
+        targetPath=str(target),
+    )
+    policy = MarkdownCleaningRequestPolicy(
+        input_roots=(input_root,),
+        output_roots=(output_root,),
+        allowed_http_hosts=(),
+        allowed_http_cidrs=(),
+    )
+
+    def create_once(
+        *,
+        bound_policy: MarkdownCleaningRequestPolicy = policy,
+        bound_dispatcher: BlockingDispatcher = dispatcher,
+        bound_caller_id: uuid.UUID = caller_id,
+        bound_request: MarkdownCleaningTaskCreate = markdown_request,
+    ) -> MarkdownCleaningDomainError | None:
+        with Session(engine) as pg_session:
+            service = MarkdownCleaningTaskService(
+                MarkdownCleaningTaskRepository(pg_session),
+                bound_policy,
+                bound_dispatcher,
+            )
+            try:
+                service.create_task(bound_caller_id, bound_request)
+                return None
+            except MarkdownCleaningDomainError as error:
+                return error
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(create_once)
+        assert dispatcher.blocked_event.wait(timeout=10.0)
+        assert not _can_acquire_advisory_lock_for_key(
+            caller_id=caller_id,
+            session_id=session_id,
+            file_id=file_id,
+        )
+
+        dispatcher.release_event.set()
+        first_result = first_future.result(timeout=10.0)
+
+    assert first_result is None
+    assert len(dispatcher.task_ids) == 1
+    assert _can_acquire_advisory_lock_for_key(
+        caller_id=caller_id,
+        session_id=session_id,
+        file_id=file_id,
+    )
+
+    with Session(engine) as pg_session:
+        saved = MarkdownCleaningTaskRepository(pg_session).get_by_key(
+            caller_id=caller_id,
+            session_id=session_id,
+            file_id=file_id,
+        )
+        assert saved is not None
+        pg_session.delete(saved)
+        pg_session.commit()
+
+
 def test_concurrent_replay_waits_for_lock_and_returns_safe_503(
     tmp_path: Path,
 ) -> None:
@@ -253,12 +364,14 @@ def test_concurrent_replay_waits_for_lock_and_returns_safe_503(
     output_root = tmp_path / "output"
     input_root.mkdir(exist_ok=True)
     output_root.mkdir(exist_ok=True)
-    source = input_root / "source.md"
+    source = input_root / f"source-{uuid.uuid4()}.md"
     source.write_text("raw", encoding="utf-8")
-    target = output_root / "result.md"
+    session_id = f"session-{uuid.uuid7()}"
+    file_id = f"file-{uuid.uuid7()}"
+    target = output_root / f"result-{uuid.uuid4()}.md"
     markdown_request = MarkdownCleaningTaskCreate(
-        sessionId="session-1",
-        fileId="11",
+        sessionId=session_id,
+        fileId=file_id,
         fileStoragePath=str(source),
         targetPath=str(target),
     )
@@ -299,3 +412,111 @@ def test_concurrent_replay_waits_for_lock_and_returns_safe_503(
     assert second_result.http_status == 503
     assert "redis-secret" not in second_result.safe_message
     assert len(dispatcher.task_ids) == 1
+
+    with Session(engine) as pg_session:
+        saved = MarkdownCleaningTaskRepository(pg_session).get_by_key(
+            caller_id=caller_id,
+            session_id=markdown_request.session_id,
+            file_id=markdown_request.file_id,
+        )
+        assert saved is not None
+        assert saved.status is MarkdownCleaningTaskStatus.FAILED
+        assert saved.error_code == MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED
+        assert saved.error_message == "任务提交失败"
+        _assert_no_advisory_lock_for_key(
+            caller_id=caller_id,
+            session_id=markdown_request.session_id,
+            file_id=markdown_request.file_id,
+        )
+        pg_session.delete(saved)
+        pg_session.commit()
+
+
+def test_concurrent_replay_multiple_rounds_keeps_single_dispatch_and_release_lock(
+    tmp_path: Path,
+) -> None:
+    if engine.dialect.name != "postgresql":
+        pytest.skip("PostgreSQL is required for advisory-lock concurrency test")
+    _skip_if_postgres_unreachable()
+
+    rounds = 3
+    for _ in range(rounds):
+        caller_id = _create_test_user()
+        dispatcher = BlockingDispatcher()
+
+        input_root = tmp_path / "input"
+        output_root = tmp_path / "output"
+        input_root.mkdir(exist_ok=True)
+        output_root.mkdir(exist_ok=True)
+        session_id = f"session-{uuid.uuid4()}"
+        file_id = f"file-{uuid.uuid7()}"
+        source = input_root / f"source-{uuid.uuid4()}.md"
+        source.write_text("raw", encoding="utf-8")
+        target = output_root / f"result-{uuid.uuid4()}.md"
+        markdown_request = MarkdownCleaningTaskCreate(
+            sessionId=session_id,
+            fileId=file_id,
+            fileStoragePath=str(source),
+            targetPath=str(target),
+        )
+        policy = MarkdownCleaningRequestPolicy(
+            input_roots=(input_root,),
+            output_roots=(output_root,),
+            allowed_http_hosts=(),
+            allowed_http_cidrs=(),
+        )
+
+        def create_once(
+            *,
+            bound_policy: MarkdownCleaningRequestPolicy = policy,
+            bound_dispatcher: BlockingDispatcher = dispatcher,
+            bound_caller_id: uuid.UUID = caller_id,
+            bound_request: MarkdownCleaningTaskCreate = markdown_request,
+        ) -> MarkdownCleaningDomainError | None:
+            with Session(engine) as pg_session:
+                service = MarkdownCleaningTaskService(
+                    MarkdownCleaningTaskRepository(pg_session),
+                    bound_policy,
+                    bound_dispatcher,
+                )
+                try:
+                    service.create_task(bound_caller_id, bound_request)
+                    return None
+                except MarkdownCleaningDomainError as error:
+                    return error
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first_future = executor.submit(create_once)
+            assert dispatcher.blocked_event.wait(timeout=5.0)
+            second_future = executor.submit(create_once)
+
+            dispatcher.release_event.set()
+            first_result = first_future.result(timeout=10.0)
+            second_result = second_future.result(timeout=10.0)
+
+        assert isinstance(first_result, MarkdownCleaningDomainError)
+        assert first_result.code is MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED
+        assert first_result.http_status == 503
+        assert isinstance(second_result, MarkdownCleaningDomainError)
+        assert second_result.code is MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED
+        assert second_result.http_status == 503
+        assert "redis-secret" not in second_result.safe_message
+        assert len(dispatcher.task_ids) == 1
+
+        with Session(engine) as pg_session:
+            saved = MarkdownCleaningTaskRepository(pg_session).get_by_key(
+                caller_id=caller_id,
+                session_id=markdown_request.session_id,
+                file_id=markdown_request.file_id,
+            )
+            assert saved is not None
+            assert saved.status is MarkdownCleaningTaskStatus.FAILED
+            assert saved.error_code == MarkdownCleaningApiErrorCode.QUEUE_SUBMISSION_FAILED
+            assert saved.error_message == "任务提交失败"
+            _assert_no_advisory_lock_for_key(
+                caller_id=caller_id,
+            session_id=markdown_request.session_id,
+            file_id=markdown_request.file_id,
+            )
+            pg_session.delete(saved)
+            pg_session.commit()

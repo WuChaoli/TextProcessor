@@ -41,7 +41,7 @@ def test_markdown_cleaning_message_only_contains_minimal_identity_fields() -> No
 
 def test_celery_dispatcher_sends_minimal_payload() -> None:
     celery = FakeCelery()
-    dispatcher = CeleryMarkdownCleaningTaskDispatcher(celery)  # type: ignore[arg-type]
+    dispatcher = CeleryMarkdownCleaningTaskDispatcher(celery)
     task_id = uuid.uuid4()
 
     dispatcher.enqueue_execute(task_id)

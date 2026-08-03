@@ -52,3 +52,38 @@
   - `uv run --project backend ruff check backend/app/features/markdown_cleaning`
   - `uv run --project backend mypy backend/app/features/markdown_cleaning`
   - 结果：`All checks passed` / `Success: no issues found`
+
+## Task4-round3（本次续跑）验证记录
+- 统一环境：`POSTGRES_SERVER=127.0.0.1 POSTGRES_PORT=5433 POSTGRES_DB=app POSTGRES_USER=postgres POSTGRES_PASSWORD=changethis PROJECT_NAME=TextProcessor FIRST_SUPERUSER=admin@example.com FIRST_SUPERUSER_PASSWORD=changethis SECRET_KEY=changethis ENVIRONMENT=local`，在 `backend` 目录执行 `uv run --project . ...`
+- 1）`pytest tests/features/markdown_cleaning/test_service.py -k idempotency_lock_holds_postgres_session_lock_across_transaction_commits -q`
+  - 结果：`1 passed, 6 deselected`
+- 2）`pytest tests/features/markdown_cleaning/test_service.py -k concurrent_replay_multiple_rounds_keeps_single_dispatch_and_release_lock -q`
+  - 结果：`1 passed, 6 deselected`
+- 3）`pytest tests/features/markdown_cleaning/test_repository.py -k concurrent -q`
+  - 结果：`1 passed, 8 deselected`
+- 4）`pytest tests/features/markdown_cleaning/test_state_machine.py tests/features/markdown_cleaning/test_repository.py -q`
+  - 结果：`21 passed`
+- 5）`pytest tests/features/markdown_cleaning/test_service.py tests/features/markdown_cleaning/test_messages.py -q`
+  - 结果：`10 passed`
+- 6）`ruff check app/features/markdown_cleaning tests/features/markdown_cleaning`
+  - 结果：失败（`UP043`, `B023` 5 个问题，均在 `tests/features/markdown_cleaning/test_service.py`）
+- 7）`mypy app/features/markdown_cleaning tests/features/markdown_cleaning`
+  - 结果：失败（`test_messages.py:44` unused type ignore，`test_service.py:129` no-any-return）
+
+## 仓库状态核验
+- 主仓库：`git -C C:\\Users\\wuchaoli\\Desktop\\codespace\\TextProcessor status --short` 为 `clean`
+- worktree：`git -C C:\\Users\\wuchaoli\\Desktop\\codespace\\TextProcessor\\.worktrees\\markdown-cleaning-api status --short` 有 `backend/tests/features/markdown_cleaning/test_service.py` 的未提交改动（测试修订）
+
+## 测试：稳定Markdown清洗并发锁验证（本轮收官）
+- 执行命令与结果（均在 `POSTGRES_SERVER=127.0.0.1 POSTGRES_PORT=5433 POSTGRES_DB=app POSTGRES_USER=postgres POSTGRES_PASSWORD=changethis PROJECT_NAME=TextProcessor FIRST_SUPERUSER=admin@example.com FIRST_SUPERUSER_PASSWORD=changethis SECRET_KEY=changethis ENVIRONMENT=local` 下执行）：
+  1. `ruff check app/features/markdown_cleaning tests/features/markdown_cleaning`
+     - 结果：`All checks passed!`
+  2. `mypy app/features/markdown_cleaning tests/features/markdown_cleaning`
+     - 结果：`Success: no issues found in 18 source files`
+  3. `pytest tests/features/markdown_cleaning/test_service.py -k "idempotency_lock_holds_postgres_session_lock_across_transaction_commits or concurrent_replay_multiple_rounds_keeps_single_dispatch_and_release_lock" -q`
+     - 结果：`2 passed, 5 deselected`
+  4. `pytest tests/features/markdown_cleaning/test_service.py tests/features/markdown_cleaning/test_messages.py -q`
+     - 结果：`10 passed`
+- 说明：`test_service.py` 中新增/变更的 `advisory-lock` 闭包与事务路径已消除 Ruff B023、UP043 与 MyPy `no-any-return`/类型告警；`test_messages.py` 现仅保留显式类型兼容实现，未新增静态告警。
+- 最新 worktree 状态：`git -C C:\\Users\\wuchaoli\\Desktop\\codespace\\TextProcessor\\.worktrees\\markdown-cleaning-api status --short`（仅工作区文件为本轮修订，需你决定是否提交）
+- 主仓库状态：`git -C C:\\Users\\wuchaoli\\Desktop\\codespace\\TextProcessor status --short` 依旧 `clean`
