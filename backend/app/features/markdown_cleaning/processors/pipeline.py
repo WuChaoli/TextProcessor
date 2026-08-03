@@ -461,7 +461,7 @@ class MarkdownCleaningPipeline:
                     raise ValueError("isolated runtime protocol response exceeds limit")
             process.wait(timeout=max(0.01, deadline.remaining_seconds()))
             return bytes(response)
-        except TimeoutError as exc:
+        except (TimeoutError, subprocess.TimeoutExpired) as exc:
             raise map_processing_exception(
                 exc, MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
             ) from exc

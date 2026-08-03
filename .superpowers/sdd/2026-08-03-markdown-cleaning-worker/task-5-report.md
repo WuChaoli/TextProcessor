@@ -16,7 +16,7 @@
 
 ## GREEN 与门禁
 
-- Celery/部署/完整 pipeline 目标：首次交付 `59 passed`；review fix round 1 后 `61 passed`。
+- Celery/部署/完整 pipeline 目标：首次交付 `59 passed`；review fix round 1 后 `61 passed`；review fix round 2 后 `63 passed`。
 - pipeline 全量：`50 passed`；Celery/部署：`9 passed`。
 - task registry：精确得到 `['markdown_cleaning.execute', 'markdown_cleaning.recover']`。
 - Ruff check 与 format check：通过。
@@ -30,6 +30,12 @@
 - `CeleryMarkdownCleaningTaskDispatcher.send_task` 显式携带 `queue="markdown_cleaning"`；同一 dispatcher 覆盖 API 首次投递及 recovery 重投，测试逐次核验 task、严格 envelope 与 queue。
 - RED：首次/恢复 dispatcher 调用均缺少 queue；持续输出 child 的 spool 版本等待 child 结束，早杀断言超过 3 秒失败。
 - GREEN：持续输出超过协议上限后立即终止，测试确认两秒内返回、child 完成 marker 不存在、目标文件不存在，且不存在命名为 `markdown-cleaning-runtime-*` 的残留线程；原有 deadline/timeout 与完整 pipeline 回归继续通过。
+
+## Review fix round 2
+
+- 项目要求 Python 3.14，PEP 758 的无括号多异常语法有效；按可读性要求改为 `except (BrokenPipeError, OSError):`。
+- RED：可控 process 在 stdout EOF 后由 `wait()` 抛出 `subprocess.TimeoutExpired`，原实现未映射而直接泄漏该异常。
+- GREEN：显式捕获 `TimeoutError` 与 `subprocess.TimeoutExpired` 并统一映射 `PROCESSING_TIMEOUT`；真实 child 提前关闭 stdout 后继续 sleep 的测试确认 deadline、kill/reap、无 marker、无目标输出及无线程残留。
 
 测试仍显示项目既有 4 个 warning：Starlette/httpx deprecation 与 3 个默认开发凭据配置 warning。
 

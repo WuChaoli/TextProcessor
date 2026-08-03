@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
+import subprocess
 import sys
 import threading
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 
@@ -816,3 +819,51 @@ def test_pipeline_kills_continuous_oversized_runtime_output_early(
         thread.name.startswith("markdown-cleaning-runtime-")
         for thread in threading.enumerate()
     )
+
+
+def test_pipeline_maps_wait_timeout_after_stdout_eof_and_cleans_runtime(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "output.md"
+    marker = tmp_path / "child-finished.txt"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    script = (
+        "import os,pathlib,sys,time; sys.stdin.buffer.read(); os.close(1); "
+        "time.sleep(3); pathlib.Path(sys.argv[1]).write_text('finished')"
+    )
+    pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
+        limits=MarkdownCleaningPipelineLimits(processing_timeout_seconds=1),
+        _runtime_command=(sys.executable, "-c", script, str(marker)),
+    )
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        pipeline.process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
+    assert not marker.exists()
+    assert not destination.exists()
+    assert not any(
+        thread.name.startswith("markdown-cleaning-runtime-")
+        for thread in threading.enumerate()
+    )
+
+
+def test_bounded_communicator_maps_process_wait_timeout(tmp_path: Path) -> None:
+    pipeline = MarkdownCleaningPipeline(staging_root=tmp_path, _run_inline=True)
+    process = Mock()
+    process.stdin = io.BytesIO()
+    process.stdout = io.BytesIO(b"")
+    process.wait.side_effect = subprocess.TimeoutExpired(("child",), 1)
+    process.poll.return_value = 0
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        pipeline._communicate_bounded(
+            process,
+            b"request",
+            pipeline._create_processing_deadline(None),
+            protocol_limit=1024,
+        )
+
+    assert exc.value.code is MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
