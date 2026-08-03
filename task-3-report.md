@@ -21,3 +21,23 @@
 
 ## 风险与待确认
 - 继续保留 `.env` 定位的数据库配置说明（本路径仅在 `backend/app/core/config.py` 的 `env_file` 指向 `backend/.env`，未设置时会导致连接空库）；建议在新环境运行前统一设置 `POSTGRES_DB`
+
+## 追加（补丁 20260803_02）
+- 新增 Alembic 迁移 `backend/app/alembic/versions/20260803_02_set_markdown_cleaning_task_defaults.py`（`down_revision=20260803_01`），对已执行 `20260803_01` 的旧库补齐 `processor_contract_version` 与 `max_attempts` 的 `server_default`。
+- 调整 `backend/tests/features/markdown_cleaning/test_repository.py` 中 `test_task_columns_have_database_defaults` 的 migration 文件路径，改为 `Path(__file__)` 相对计算，避免依赖进程 cwd。
+
+## 追加验证结果（已执行）
+- 已在 `.venv` 环境下执行：
+  - `Set-Location backend; $env:POSTGRES_SERVER='127.0.0.1'; $env:POSTGRES_PORT='5433'; $env:POSTGRES_DB='app'; $env:POSTGRES_USER='postgres'; $env:POSTGRES_PASSWORD='changethis'; $env:PROJECT_NAME='TextProcessor'; $env:FIRST_SUPERUSER='admin@example.com'; $env:FIRST_SUPERUSER_PASSWORD='changethis'; $env:SECRET_KEY='changethis'; $env:ENVIRONMENT='local'; uv run --project . alembic upgrade head`  
+    - 升级到 `20260803_02` 成功。
+  - `uv run --project backend pytest backend/tests/features/markdown_cleaning/test_state_machine.py backend/tests/features/markdown_cleaning/test_repository.py -q`  
+    - 通过：`21 passed`
+  - `Set-Location backend; uv run --project . pytest tests/features/markdown_cleaning/test_state_machine.py tests/features/markdown_cleaning/test_repository.py -q`  
+    - 通过：`21 passed`
+  - `uv run --project backend python -c ...`（查询 `information_schema.columns`）  
+    - `processor_contract_version` -> `"'markdown_cleaning_v1'::character varying"`  
+    - `max_attempts` -> `'3'`
+  - 全量新库校验（临时库）：
+    - `CREATE DATABASE task3_tmp_default` + `alembic upgrade head` 成功升级到 `20260803_02`
+    - `information_schema.columns` 查询返回 `[('max_attempts', '3'), ('processor_contract_version', "'markdown_cleaning_v1'::character varying")]`
+    - 临时库已清理（`DROP DATABASE task3_tmp_default`）

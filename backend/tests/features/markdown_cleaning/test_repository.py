@@ -227,7 +227,11 @@ def test_task_columns_have_database_defaults() -> None:
     assert str(max_attempts_default.arg) == "3"
 
     migration_file = Path(
-        "backend/app/alembic/versions/20260803_01_add_markdown_cleaning_tasks.py"
+        Path(__file__).resolve().parents[3]
+        / "app"
+        / "alembic"
+        / "versions"
+        / "20260803_02_set_markdown_cleaning_task_defaults.py"
     )
     content = migration_file.read_text(encoding="utf-8")
     assert 'server_default="markdown_cleaning_v1"' in content
