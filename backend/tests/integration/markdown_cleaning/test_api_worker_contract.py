@@ -3,23 +3,22 @@ from __future__ import annotations
 import json
 import uuid
 
-import redis
 from celery import Celery
 from kombu import Connection
 
 from app.features.markdown_cleaning.dispatcher import (
     CeleryMarkdownCleaningTaskDispatcher,
 )
-from tests.integration.markdown_cleaning.conftest import REDIS_URL
 
 
-def test_real_redis_broker_envelope_contains_only_authoritative_identifiers() -> None:
-    client = redis.Redis.from_url(REDIS_URL)
-    client.flushdb()
-    celery = Celery("task6-contract", broker=REDIS_URL)
+def test_real_redis_broker_envelope_contains_only_authoritative_identifiers(
+    markdown_cleaning_runtime,
+) -> None:
+    redis_url = markdown_cleaning_runtime.redis_url
+    celery = Celery("task6-contract", broker=redis_url)
     task_id = uuid.uuid4()
     CeleryMarkdownCleaningTaskDispatcher(celery).enqueue_execute(task_id)
-    with Connection(REDIS_URL) as connection:
+    with Connection(redis_url) as connection:
         queue = connection.SimpleQueue("markdown_cleaning")
         message = queue.get(block=True, timeout=5)
         body = message.payload

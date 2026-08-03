@@ -1,13 +1,22 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import time
 import uuid
 from collections.abc import Generator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import psycopg
 import pytest
+import redis
+from fastapi import FastAPI
 from sqlalchemy import text
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, create_engine
 
 from app.features.markdown_cleaning.input_resolver import InputResolver
 from app.features.markdown_cleaning.input_validator import MarkdownInputValidator
@@ -22,18 +31,234 @@ from app.features.markdown_cleaning.state_machine import MarkdownCleaningTaskSta
 from app.features.markdown_cleaning.task_models import MarkdownCleaningTask
 from app.models import User
 
-POSTGRES_URL = "postgresql+psycopg://postgres:changethis@127.0.0.1:5433/app"
-REDIS_URL = "redis://127.0.0.1:6396/15"
+
+@pytest.fixture(scope="session", autouse=True)
+def db() -> Generator[None]:
+    """This directory provisions and owns its database per infrastructure test."""
+    yield
 
 
-@pytest.fixture(scope="session")
-def pg_engine():
-    engine = create_engine(POSTGRES_URL, pool_pre_ping=True)
-    with engine.connect() as connection:
-        connection.execute(text("select 1"))
-    SQLModel.metadata.create_all(engine)
-    yield engine
-    engine.dispose()
+@dataclass(frozen=True)
+class MarkdownCleaningRuntime:
+    app: FastAPI
+    engine: object
+    redis: redis.Redis
+    redis_url: str
+    source: Path
+    target: Path
+    staging_root: Path
+    session_id: str
+    alembic_head: str
+    _worker_env: dict[str, str]
+    _backend_root: Path
+
+    @contextmanager
+    def worker(self):
+        process = subprocess.Popen(
+            [
+                "uv",
+                "run",
+                "celery",
+                "-A",
+                "app.core.celery_app:celery_app",
+                "worker",
+                "-P",
+                "solo",
+                "-Q",
+                "markdown_cleaning",
+                "--loglevel=INFO",
+                "--without-gossip",
+                "--without-mingle",
+                "--without-heartbeat",
+            ],
+            cwd=self._backend_root,
+            env=self._worker_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        try:
+            yield process
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
+def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+    completed = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return completed.stdout.strip()
+
+
+@pytest.fixture
+def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    database_name = f"tp_md_{uuid.uuid4().hex}"
+    container_name = f"tp-md-redis-{uuid.uuid4().hex}"
+    admin_dsn = "postgresql://postgres:changethis@127.0.0.1:5433/postgres"
+    backend_root = Path(__file__).parents[3]
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    for root in (input_root, output_root, staging_root):
+        root.mkdir()
+    source = input_root / "中文样本.md"
+    target = output_root / "清洗结果.md"
+    engine = None
+    redis_client = None
+    created_database = False
+    try:
+        with psycopg.connect(admin_dsn, autocommit=True) as connection:
+            connection.execute(f'CREATE DATABASE "{database_name}"')
+        created_database = True
+        _run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                container_name,
+                "-p",
+                "127.0.0.1::6379",
+                "redis:7-alpine",
+            ],
+            cwd=backend_root,
+        )
+        port_output = _run(
+            ["docker", "port", container_name, "6379/tcp"], cwd=backend_root
+        )
+        redis_port = int(port_output.rsplit(":", 1)[1])
+        redis_url = f"redis://127.0.0.1:{redis_port}/0"
+        redis_client = redis.Redis.from_url(redis_url)
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                if redis_client.ping():
+                    break
+            except redis.ConnectionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "POSTGRES_SERVER": "127.0.0.1",
+                "POSTGRES_PORT": "5433",
+                "POSTGRES_USER": "postgres",
+                "POSTGRES_PASSWORD": "changethis",
+                "POSTGRES_DB": database_name,
+                "CELERY_BROKER_URL": redis_url,
+                "MARKDOWN_CLEANING_INPUT_ROOTS": json.dumps([str(input_root)]),
+                "MARKDOWN_CLEANING_OUTPUT_ROOTS": json.dumps([str(output_root)]),
+                "MARKDOWN_CLEANING_WORKER": json.dumps(
+                    {
+                        "staging_root": str(staging_root),
+                        "output_roots": [str(output_root)],
+                        "processing_soft_timeout_seconds": 30,
+                        "processing_hard_timeout_seconds": 60,
+                    }
+                ),
+                "PYTHONUTF8": "1",
+            }
+        )
+        _run(["uv", "run", "alembic", "upgrade", "head"], cwd=backend_root, env=env)
+        alembic_head = _run(
+            ["uv", "run", "alembic", "heads"], cwd=backend_root, env=env
+        ).split()[0]
+        database_url = (
+            f"postgresql+psycopg://postgres:changethis@127.0.0.1:5433/{database_name}"
+        )
+        engine = create_engine(database_url, pool_pre_ping=True)
+        with engine.connect() as connection:
+            assert (
+                connection.execute(
+                    text("select version_num from alembic_version")
+                ).scalar_one()
+                == alembic_head
+            )
+
+        from app.api import deps
+        from app.core.celery_app import celery_app
+        from app.core.config import MarkdownCleaningWorkerSettings, settings
+        from app.main import app
+
+        settings.POSTGRES_SERVER = "127.0.0.1"
+        settings.POSTGRES_PORT = 5433
+        settings.POSTGRES_DB = database_name
+        settings.CELERY_BROKER_URL = redis_url
+        settings.MARKDOWN_CLEANING_INPUT_ROOTS = [input_root]
+        settings.MARKDOWN_CLEANING_OUTPUT_ROOTS = [output_root]
+        settings.MARKDOWN_CLEANING_WORKER = MarkdownCleaningWorkerSettings(
+            staging_root=staging_root,
+            output_roots=(output_root,),
+            processing_soft_timeout_seconds=30,
+            processing_hard_timeout_seconds=60,
+        )
+        monkeypatch.setattr(deps, "engine", engine)
+        celery_app.conf.broker_url = redis_url
+        caller = User(
+            email=f"task6-{uuid.uuid4()}@example.com",
+            hashed_password="integration-only",
+        )
+        with Session(engine) as session:
+            session.add(caller)
+            session.commit()
+            session.refresh(caller)
+        app.dependency_overrides[deps.get_current_user] = lambda: caller
+        yield MarkdownCleaningRuntime(
+            app=app,
+            engine=engine,
+            redis=redis_client,
+            redis_url=redis_url,
+            source=source,
+            target=target,
+            staging_root=staging_root,
+            session_id=f"task6-{uuid.uuid4()}",
+            alembic_head=alembic_head,
+            _worker_env=env,
+            _backend_root=backend_root,
+        )
+    finally:
+        try:
+            from app.api import deps
+            from app.main import app
+
+            app.dependency_overrides.pop(deps.get_current_user, None)
+        except ImportError:
+            pass
+        if engine is not None:
+            engine.dispose()
+        subprocess.run(
+            ["docker", "rm", "-f", container_name],
+            cwd=backend_root,
+            capture_output=True,
+        )
+        if created_database:
+            with psycopg.connect(admin_dsn, autocommit=True) as connection:
+                connection.execute(
+                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s AND pid <> pg_backend_pid()",
+                    (database_name,),
+                )
+                connection.execute(f'DROP DATABASE IF EXISTS "{database_name}"')
+
+
+@pytest.fixture
+def pg_engine(markdown_cleaning_runtime: MarkdownCleaningRuntime):
+    return markdown_cleaning_runtime.engine
 
 
 @pytest.fixture

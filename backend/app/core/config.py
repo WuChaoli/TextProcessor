@@ -396,14 +396,6 @@ class Settings(BaseSettings):
             for worker_output_root in self.MARKDOWN_CLEANING_WORKER.output_roots
         ):
             raise ValueError("Markdown 清洗输入根目录和输出任务根目录不能重叠")
-        if any(
-            _has_parent_or_child_overlap(
-                root, worker_output_root
-            )
-            for root in markdown_output_roots
-            for worker_output_root in self.MARKDOWN_CLEANING_WORKER.output_roots
-        ):
-            raise ValueError("Markdown 清洗输出根目录和输出任务根目录不能重叠")
         self.MARKDOWN_CLEANING_INPUT_ROOTS = sorted(markdown_input_roots, key=str)
         self.MARKDOWN_CLEANING_OUTPUT_ROOTS = sorted(markdown_output_roots, key=str)
         return self
