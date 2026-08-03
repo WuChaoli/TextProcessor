@@ -24,10 +24,6 @@ dependencies = [
     "s3fs>=2026.0",
     "mistune>=3,<4",
     "defusedxml>=0.7,<1",
-    "markdown-it-py>=4.2,<5",
-    "presidio-analyzer>=2.2.363,<3",
-    "mdformat>=1,<2",
-    "mdformat-gfm>=1,<2",
 ]
 
 [dependency-groups]

@@ -207,10 +207,6 @@ class Settings(BaseSettings):
     EXTRACTION_MAX_INPUT_BYTES: int = 100 * 1024 * 1024
     EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
     EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
-    MARKDOWN_CLEANING_INPUT_ROOTS: list[Path] = []
-    MARKDOWN_CLEANING_OUTPUT_ROOTS: list[Path] = []
-    MARKDOWN_CLEANING_HTTP_ALLOWED_HOSTS: list[str] = []
-    MARKDOWN_CLEANING_HTTP_ALLOWED_CIDRS: list[str] = []
     GLOBAL_DEDUP_INPUT_ROOTS: list[Path] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS: list[str] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS: list[str] = []
@@ -300,16 +296,6 @@ class Settings(BaseSettings):
         if global_input_roots & set(self.GLOBAL_DEDUP_WORKER.output_roots):
             raise ValueError("全局去重输入根目录和输出根目录不能重叠")
         self.GLOBAL_DEDUP_INPUT_ROOTS = sorted(global_input_roots, key=str)
-        markdown_input_roots = {
-            path.resolve(strict=False) for path in self.MARKDOWN_CLEANING_INPUT_ROOTS
-        }
-        markdown_output_roots = {
-            path.resolve(strict=False) for path in self.MARKDOWN_CLEANING_OUTPUT_ROOTS
-        }
-        if markdown_input_roots & markdown_output_roots:
-            raise ValueError("Markdown 清洗输入根目录和输出根目录不能重叠")
-        self.MARKDOWN_CLEANING_INPUT_ROOTS = sorted(markdown_input_roots, key=str)
-        self.MARKDOWN_CLEANING_OUTPUT_ROOTS = sorted(markdown_output_roots, key=str)
         return self
 
 
