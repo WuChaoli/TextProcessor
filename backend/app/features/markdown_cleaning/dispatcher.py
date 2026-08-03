@@ -1,7 +1,5 @@
 import uuid
-from typing import Protocol
-
-from celery import Celery  # type: ignore[import-untyped]
+from typing import Any, Protocol
 
 from app.features.markdown_cleaning.messages import MarkdownCleaningMessage
 
@@ -10,13 +8,17 @@ class MarkdownCleaningTaskDispatcher(Protocol):
     def enqueue_execute(self, task_id: uuid.UUID) -> None: ...
 
 
+class MarkdownCleaningCeleryClient(Protocol):
+    def send_task(self, name: str, *, kwargs: dict[str, Any]) -> None: ...
+
+
 class CeleryMarkdownCleaningTaskDispatcher:
-    def __init__(self, app: Celery | None = None) -> None:
+    def __init__(self, app: MarkdownCleaningCeleryClient | None = None) -> None:
         if app is None:
             from app.core.celery_app import celery_app
 
             app = celery_app
-        self._app = app
+        self._app: MarkdownCleaningCeleryClient = app
 
     def enqueue_execute(self, task_id: uuid.UUID) -> None:
         payload = MarkdownCleaningMessage(
