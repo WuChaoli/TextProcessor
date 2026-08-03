@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from collections import Counter
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Final
@@ -136,8 +135,18 @@ class MarkdownFormatterAdapter:
         return change_count
 
     @staticmethod
-    def _normalize_semantic_text(markdown: str) -> str:
-        normalized = markdown.replace("\r\n", "\n").replace("\r", "\n")
+    def _normalize_semantic_text(
+        markdown: str,
+        table_spans: tuple[tuple[int, int], ...] = (),
+    ) -> str:
+        normalized = markdown
+        if table_spans:
+            normalized = MarkdownFormatterAdapter._normalize_table_pipes(
+                normalized,
+                table_spans=table_spans,
+            )
+
+        normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
         normalized = re.sub(r"\\\s*\n", " ", normalized)
         normalized = re.sub(
             r"\!\[([^\]]*)\]\([^)]*\)",
@@ -151,6 +160,7 @@ class MarkdownFormatterAdapter:
         )
 
         lines: list[str] = []
+
         for line in normalized.split("\n"):
             line = line.strip()
             line = re.sub(r"^[\t ]*>\s*", "", line)
@@ -163,12 +173,37 @@ class MarkdownFormatterAdapter:
             line = re.sub(r"_([^_\n]+)_", r"\1", line)
             line = re.sub(r"~~([^~\n]+)~~", r"\1", line)
 
-            line = line.replace("|", " ")
             lines.append(line)
 
         normalized = "\n".join(lines)
         normalized = re.sub(r"\s+", " ", normalized).strip()
         return normalized
+
+    @staticmethod
+    def _normalize_table_pipes(
+        markdown: str,
+        table_spans: tuple[tuple[int, int], ...],
+    ) -> str:
+        if not markdown or not table_spans:
+            return markdown
+
+        output: list[str] = []
+        table_index = 0
+        table_count = len(table_spans)
+        for absolute_offset, char in enumerate(markdown):
+            while table_index < table_count and absolute_offset >= table_spans[table_index][1]:
+                table_index += 1
+
+            if (
+                table_index < table_count
+                and table_spans[table_index][0] <= absolute_offset < table_spans[table_index][1]
+                and char == "|"
+            ):
+                output.append(" ")
+            else:
+                output.append(char)
+
+        return "".join(output)
 
     @staticmethod
     def _line_and_column(markdown: str, offset: int) -> tuple[int, int]:
@@ -183,8 +218,19 @@ class MarkdownFormatterAdapter:
         markdown: str,
         parsed: MarkdownParseResult,
     ) -> str:
+        table_spans = tuple(
+            (
+                block.source_span.start,
+                block.source_span.end,
+            )
+            for block in parsed.blocks
+            if block.block_type is MarkdownBlockType.TABLE
+        )
         if not parsed.protected_spans:
-            return MarkdownFormatterAdapter._normalize_semantic_text(markdown)
+            return MarkdownFormatterAdapter._normalize_semantic_text(
+                markdown,
+                table_spans=table_spans,
+            )
 
         parts: list[str] = []
         cursor = 0
@@ -193,7 +239,10 @@ class MarkdownFormatterAdapter:
             cursor = span.end
         parts.append(markdown[cursor:])
 
-        return MarkdownFormatterAdapter._normalize_semantic_text("".join(parts))
+        return MarkdownFormatterAdapter._normalize_semantic_text(
+            "".join(parts),
+            table_spans=table_spans,
+        )
 
     @staticmethod
     def _collect_inline_leaf_signature(parsed: MarkdownParseResult) -> tuple[tuple[str, str], ...]:
@@ -210,33 +259,40 @@ class MarkdownFormatterAdapter:
     def _collect_protected_units(
         markdown: str,
         parsed: MarkdownParseResult,
-    ) -> tuple[tuple[str, str, str, str], ...]:
-        units: list[tuple[int, str, str, str, str]] = []
-        block_ordinal = 0
+    ) -> tuple[tuple[str, ...], ...]:
+        table_spans = tuple(
+            (
+                block.source_span.start,
+                block.source_span.end,
+            )
+            for block in parsed.blocks
+            if block.block_type is MarkdownBlockType.TABLE
+        )
+
+        protected_entries: list[tuple[int, tuple[str, ...]]] = []
 
         for block in parsed.blocks:
             if block.block_type in {
                 MarkdownBlockType.FENCED_CODE,
                 MarkdownBlockType.HTML_BLOCK,
             }:
-                anchor = (
-                    f"block:{block.block_type.value}:"
-                    f"ord={block_ordinal}"
-                )
-                block_ordinal += 1
-                units.append(
+                protected_entries.append(
                     (
                         block.source_span.start,
-                        "block",
-                        block.block_type.value,
-                        anchor,
-                        MarkdownFormatterAdapter._normalize_protected_text(
-                            markdown[block.source_span.start : block.source_span.end]
+                        (
+                            "p",
+                            "block",
+                            block.block_type.value,
+                            "",
+                            MarkdownFormatterAdapter._normalize_protected_text(
+                                markdown[
+                                    block.source_span.start : block.source_span.end
+                                ]
+                            ),
                         ),
                     )
                 )
 
-        inline_occurrence: Counter[str] = Counter()
         for leaf in parsed.inline_leaves:
             if leaf.kind not in {
                 MarkdownInlineLeafType.CODE_INLINE,
@@ -246,29 +302,49 @@ class MarkdownFormatterAdapter:
             }:
                 continue
 
-            key = f"{leaf.kind.value}|{leaf.parent_block_kind.value}"
-            occurrence = inline_occurrence[key]
-            inline_occurrence[key] += 1
-
-            anchor = (
-                f"inline:{leaf.kind.value}:"
-                f"parent={leaf.parent_block_kind.value}:"
-                f"ord={occurrence}"
-            )
-            units.append(
+            protected_entries.append(
                 (
                     leaf.source_span.start,
-                    "inline",
-                    leaf.kind.value,
-                    anchor,
-                    MarkdownFormatterAdapter._normalize_protected_text(
-                        markdown[leaf.source_span.start : leaf.source_span.end]
+                    (
+                        "p",
+                        "inline",
+                        leaf.kind.value,
+                        leaf.parent_block_kind.value,
+                        MarkdownFormatterAdapter._normalize_protected_text(
+                            markdown[leaf.source_span.start : leaf.source_span.end]
+                        ),
                     ),
                 )
             )
 
-        units.sort(key=lambda item: item[0])
-        return tuple(unit[1:] for unit in units)
+        protected_entries.sort(key=lambda item: item[0])
+
+        visible_segments: list[str] = []
+        cursor = 0
+        for span in parsed.protected_spans:
+            visible_segments.append(markdown[cursor : span.start])
+            cursor = span.end
+        visible_segments.append(markdown[cursor:])
+
+        normalized_visible = [
+            MarkdownFormatterAdapter._normalize_semantic_text(
+                segment,
+                table_spans=table_spans,
+            )
+            for segment in visible_segments
+        ]
+
+        stream: list[tuple[str, ...]] = []
+        segment_index = 0
+        for _start, entry in protected_entries:
+            stream.append(("v", normalized_visible[segment_index]))
+            segment_index += 1
+            stream.append(entry)
+
+        if segment_index < len(normalized_visible):
+            stream.append(("v", normalized_visible[segment_index]))
+
+        return tuple(stream)
 
     @staticmethod
     def _collect_link_targets(

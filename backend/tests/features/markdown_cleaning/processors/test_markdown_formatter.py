@@ -15,10 +15,11 @@ from app.features.markdown_cleaning.processors.markdown_parser import (
 
 
 def _collect_visible_signature(markdown: str) -> str:
-    return MarkdownFormatterAdapter._normalize_semantic_text(markdown)
+    parsed = MarkdownParserAdapter().parse(markdown)
+    return MarkdownFormatterAdapter._collect_visible_semantic_signature(markdown, parsed)
 
 
-def _collect_protected_units(markdown: str) -> tuple[tuple[str, str, str, str], ...]:
+def _collect_protected_units(markdown: str) -> tuple[tuple[str, ...], ...]:
     parsed = MarkdownParserAdapter().parse(markdown)
     return MarkdownFormatterAdapter._collect_protected_units(markdown, parsed)
 
@@ -103,10 +104,10 @@ def test_non_protected_plaintext_change_is_rejected(monkeypatch: pytest.MonkeyPa
 
 
 def test_protected_reorder_or_duplicate_violation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    markdown = "`alpha` `beta`\n"
+    markdown = "a `x` b `x` c\n"
 
     def _bad_format(*_args: object, **_kwargs: object) -> str:
-        return "`beta` `alpha`\n"
+        return "a `x` `x` b c\n"
 
     monkeypatch.setattr(markdown_formatter.mdformat, "text", _bad_format)
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
@@ -115,6 +116,34 @@ def test_protected_reorder_or_duplicate_violation_is_rejected(monkeypatch: pytes
     assert (
         exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
     )
+
+
+def test_non_table_pipe_change_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    markdown = "a|b\n"
+
+    def _bad_format(*_args: object, **_kwargs: object) -> str:
+        return "a | b\n"
+
+    monkeypatch.setattr(markdown_formatter.mdformat, "text", _bad_format)
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownFormatterAdapter().format(markdown)
+
+    assert (
+        exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_NORMALIZATION_FAILED
+    )
+
+
+def test_table_pipe_normalization_only_in_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    markdown = "|a|b|\n|---|---|\n|x|y|\n"
+
+    def _bad_format(*_args: object, **_kwargs: object) -> str:
+        return "| a | b |\n| --- | --- |\n| x | y |\n"
+
+    monkeypatch.setattr(markdown_formatter.mdformat, "text", _bad_format)
+    result = MarkdownFormatterAdapter().format(markdown)
+
+    assert result.formatting_changes >= 1
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(result.text)
 
 
 def test_link_targets_are_rejected_when_changed(monkeypatch: pytest.MonkeyPatch) -> None:
