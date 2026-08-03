@@ -21,16 +21,21 @@ def test_markdown_cleaning_golden_corpus_bytes_summary_and_idempotency(
     assert cases, "golden corpus should contain at least one case"
 
     pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
         limits=MarkdownCleaningPipelineLimits(max_input_bytes=10_485_760, max_output_bytes=10_485_760)
     )
 
     for case_dir in cases:
-        source = case_dir / "input.md"
+        fixture_source = case_dir / "input.md"
+        case_staging = tmp_path / case_dir.name
+        case_staging.mkdir()
+        source = case_staging / "input.md"
+        source.write_bytes(fixture_source.read_bytes())
         expected = case_dir / "expected.md"
         expected_summary = case_dir / "summary.json"
 
-        output = tmp_path / f"{case_dir.name}-output.md"
-        rerun_output = tmp_path / f"{case_dir.name}-rerun-output.md"
+        output = case_staging / "output.md"
+        rerun_output = case_staging / "rerun-output.md"
         first = pipeline.process(source, output)
 
         actual_summary = asdict(first.summary)

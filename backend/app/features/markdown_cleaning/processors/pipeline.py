@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
+import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Final
 
@@ -26,6 +29,8 @@ from app.features.markdown_cleaning.processors.markdown_formatter import (
 )
 from app.features.markdown_cleaning.processors.markdown_parser import (
     MarkdownParserAdapter,
+    MarkdownParserError,
+    MarkdownParserErrorCode,
     MarkdownParseResult,
 )
 from app.features.markdown_cleaning.processors.models import (
@@ -39,6 +44,7 @@ from app.features.markdown_cleaning.processors.paragraph_dedup import (
 from app.features.markdown_cleaning.processors.presidio_adapter import (
     PresidioMarkdownRedactor,
     SensitiveRedactionResult,
+    SensitiveRedactionSummary,
 )
 
 _BOM: Final = "\ufeff"
@@ -50,6 +56,20 @@ _CN_MOBILE_CANDIDATE_PATTERN: Final = re.compile(r"(?<!\d)1[3-9](?:[ -]?\d){9}(?
 _ID_CARD_CANDIDATE_PATTERN: Final = re.compile(r"(?<!\d)(\d{17}[Xx\d])(?!\d)")
 _CREDIT_CARD_CANDIDATE_PATTERN: Final = re.compile(r"(?<!\d)(\d{12,19})(?!\d)")
 _IPV4_CANDIDATE_PATTERN: Final = re.compile(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)")
+_RUNTIME_ENV_ALLOWLIST: Final = (
+    "COMSPEC",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "PATH",
+    "PATHEXT",
+    "SYSTEMDRIVE",
+    "SYSTEMROOT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "WINDIR",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +119,17 @@ class _ProcessingDeadline:
                 MarkdownCleaningErrorCode.PROCESSING_TIMEOUT,
             )
 
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.timeout_seconds - (self.time_fn() - self.started_at))
+
+
+@dataclass(frozen=True, slots=True)
+class _PipelineTransformResult:
+    text: str
+    duplicate_count: int
+    redaction_summary: SensitiveRedactionSummary
+    formatting_changes: int
+
 
 class MarkdownCleaningPipeline:
     """Run deterministic markdown cleaning stages in fixed order."""
@@ -106,13 +137,35 @@ class MarkdownCleaningPipeline:
     def __init__(
         self,
         *,
+        staging_root: Path,
         parser: MarkdownParserAdapter | None = None,
         deduplicator: ParagraphDeduplicator | None = None,
         redactor: PresidioMarkdownRedactor | None = None,
         formatter: MarkdownFormatterAdapter | None = None,
         limits: MarkdownCleaningPipelineLimits | None = None,
         time_fn: Callable[[], float] = time.perf_counter,
+        _runtime_command: tuple[str, ...] | None = None,
+        _run_inline: bool = False,
     ) -> None:
+        if self._is_link_or_junction(staging_root):
+            raise ValueError("staging_root cannot be a link")
+        try:
+            resolved_staging_root = staging_root.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("staging_root must exist") from exc
+        if not resolved_staging_root.is_dir():
+            raise ValueError("staging_root must be a directory")
+        has_custom_components = any(
+            component is not None
+            for component in (parser, deduplicator, redactor, formatter)
+        )
+        if (
+            (has_custom_components or time_fn is not time.perf_counter)
+            and not _run_inline
+            and _runtime_command is None
+        ):
+            raise ValueError("custom stages and clocks require explicit inline execution")
+        self._staging_root = resolved_staging_root
         self._parser = parser or MarkdownParserAdapter()
         self._deduplicator = deduplicator or ParagraphDeduplicator(parser=self._parser)
         self._redactor = redactor or PresidioMarkdownRedactor()
@@ -120,9 +173,21 @@ class MarkdownCleaningPipeline:
         self._limits = limits or MarkdownCleaningPipelineLimits()
         self._time_fn = time_fn
         self._token_parser = MarkdownIt("commonmark").enable("table")
+        if _run_inline:
+            self._runtime_command = None
+        else:
+            self._runtime_command = _runtime_command or (
+                sys.executable,
+                "-m",
+                "app.features.markdown_cleaning.processors.pipeline_runtime",
+            )
 
     def process(self, source_path: Path, destination_path: Path) -> ProcessorResult:
         try:
+            source_path, destination_path = self._validate_staging_paths(
+                source_path,
+                destination_path,
+            )
             deadline = _ProcessingDeadline(
                 started_at=self._time_fn(),
                 timeout_seconds=self._limits.processing_timeout_seconds,
@@ -131,39 +196,20 @@ class MarkdownCleaningPipeline:
             raw_input = self._read_source(source_path, deadline)
 
             source_text = self._decode_utf8_no_bom(raw_input)
-            parsed_input = self._parse(source_text, deadline)
-            self._enforce_parse_invariants(parsed_input, deadline)
-
-            deduped_text, duplicate_count = self._deduplicate(source_text, deadline)
-            deduped_parse = self._parse(deduped_text, deadline)
-            self._enforce_parse_invariants(deduped_parse, deadline)
-
-            self._enforce_pii_candidate_limit(
-                deduped_text,
-                deduped_parse.protected_spans,
-                deadline,
+            transformed = (
+                self._run_transform_isolated(source_text, deadline)
+                if self._runtime_command is not None
+                else self._transform_text(source_text, deadline)
             )
 
-            redaction = self._redact(
-                deduped_text,
-                deduped_parse.protected_spans,
-                deadline,
-            )
-            redacted_parse = self._parse(redaction.text, deadline)
-            self._enforce_parse_invariants(redacted_parse, deadline)
-
-            formatted = self._format(redaction.text, deadline)
-            formatted_parse = self._parse(formatted.text, deadline)
-            self._enforce_parse_invariants(formatted_parse, deadline)
-
-            output_bytes = formatted.text.encode("utf-8")
-            self._enforce_output_invariants(formatted.text, output_bytes, deadline)
+            output_bytes = transformed.text.encode("utf-8")
+            self._enforce_output_invariants(transformed.text, output_bytes, deadline)
             output_sha256 = self._sha256(output_bytes)
             input_sha256 = self._sha256(raw_input)
             summary = self._build_summary(
-                duplicate_count=duplicate_count,
-                redaction=redaction,
-                formatting_changes=formatted.formatting_changes,
+                duplicate_count=transformed.duplicate_count,
+                redaction_summary=transformed.redaction_summary,
+                formatting_changes=transformed.formatting_changes,
             )
             result = ProcessorResult(
                 output_path=destination_path,
@@ -180,6 +226,225 @@ class MarkdownCleaningPipeline:
             raise
         except Exception as exc:
             raise map_processing_exception(exc) from exc
+
+    def _transform_text(
+        self,
+        source_text: str,
+        deadline: _ProcessingDeadline,
+    ) -> _PipelineTransformResult:
+        parsed_input = self._parse(source_text, deadline)
+        self._enforce_parse_invariants(parsed_input, deadline)
+
+        deduped_text, duplicate_count = self._deduplicate(source_text, deadline)
+        deduped_parse = self._parse(deduped_text, deadline)
+        self._enforce_parse_invariants(deduped_parse, deadline)
+
+        self._enforce_pii_candidate_limit(
+            deduped_text,
+            deduped_parse.protected_spans,
+            deadline,
+        )
+
+        redaction = self._redact(
+            deduped_text,
+            deduped_parse.protected_spans,
+            deadline,
+        )
+        redacted_parse = self._parse(redaction.text, deadline)
+        self._enforce_parse_invariants(redacted_parse, deadline)
+
+        formatted = self._format(redaction.text, deadline)
+        formatted_parse = self._parse(formatted.text, deadline)
+        self._enforce_parse_invariants(formatted_parse, deadline)
+        return _PipelineTransformResult(
+            text=formatted.text,
+            duplicate_count=duplicate_count,
+            redaction_summary=redaction.summary,
+            formatting_changes=formatted.formatting_changes,
+        )
+
+    def _run_transform_isolated(
+        self,
+        source_text: str,
+        deadline: _ProcessingDeadline,
+    ) -> _PipelineTransformResult:
+        deadline.check()
+        runtime_command = self._runtime_command
+        if runtime_command is None:
+            raise map_processing_exception(
+                RuntimeError("isolated runtime command missing"),
+                MarkdownCleaningErrorCode.INTERNAL_ERROR,
+            )
+        request = json.dumps(
+            {
+                "markdown": source_text,
+                "limits": asdict(self._limits),
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        try:
+            process = subprocess.Popen(
+                runtime_command,
+                cwd=Path(__file__).resolve().parents[4],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                env=self._runtime_environment(),
+            )
+        except OSError as exc:
+            raise map_processing_exception(
+                exc,
+                MarkdownCleaningErrorCode.INTERNAL_ERROR,
+            ) from exc
+
+        try:
+            stdout, _stderr = process.communicate(
+                input=request,
+                timeout=deadline.remaining_seconds(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            self._terminate_runtime(process)
+            raise map_processing_exception(
+                TimeoutError("isolated transform timeout"),
+                MarkdownCleaningErrorCode.PROCESSING_TIMEOUT,
+            ) from exc
+
+        deadline.check()
+        if process.returncode != 0:
+            raise map_processing_exception(
+                RuntimeError("isolated transform failed"),
+                MarkdownCleaningErrorCode.INTERNAL_ERROR,
+            )
+        try:
+            response = json.loads(stdout.decode("utf-8"))
+            if not isinstance(response, dict):
+                raise ValueError("runtime response must be an object")
+            if response.get("ok") is not True:
+                code = MarkdownCleaningErrorCode(response["errorCode"])
+                safe_message = str(response["safeMessage"])
+                raise MarkdownCleaningProcessorError(code, safe_message)
+            redaction = response["redactionSummary"]
+            if not isinstance(redaction, dict):
+                raise ValueError("runtime redaction summary must be an object")
+            return _PipelineTransformResult(
+                text=str(response["text"]),
+                duplicate_count=int(response["duplicateCount"]),
+                redaction_summary=SensitiveRedactionSummary(
+                    phone=int(redaction["phone"]),
+                    id_card=int(redaction["idCard"]),
+                    bank_card=int(redaction["bankCard"]),
+                    email=int(redaction["email"]),
+                    ipv4=int(redaction["ipv4"]),
+                ),
+                formatting_changes=int(response["formattingChanges"]),
+            )
+        except MarkdownCleaningProcessorError:
+            raise
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+            raise map_processing_exception(
+                exc,
+                MarkdownCleaningErrorCode.INTERNAL_ERROR,
+            ) from exc
+
+    @staticmethod
+    def _terminate_runtime(process: subprocess.Popen[bytes]) -> None:
+        try:
+            process.kill()
+        except OSError:
+            return
+        try:
+            process.communicate(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            if process.stdin is not None:
+                process.stdin.close()
+            if process.stdout is not None:
+                process.stdout.close()
+
+    @staticmethod
+    def _runtime_environment() -> dict[str, str]:
+        environment = {
+            key: os.environ[key]
+            for key in _RUNTIME_ENV_ALLOWLIST
+            if key in os.environ
+        }
+        environment["PYTHONIOENCODING"] = "utf-8"
+        environment["PYTHONUTF8"] = "1"
+        return environment
+
+    def _validate_staging_paths(
+        self,
+        source: Path,
+        destination: Path,
+    ) -> tuple[Path, Path]:
+        if self._has_link_component(source):
+            raise map_processing_exception(
+                ValueError("source cannot be a link"),
+                MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
+            )
+        if self._has_link_component(destination):
+            raise map_processing_exception(
+                ValueError("destination cannot use links"),
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+            )
+        try:
+            resolved_source = source.resolve(strict=True)
+        except OSError as exc:
+            raise map_processing_exception(
+                exc,
+                MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
+            ) from exc
+        if not resolved_source.is_file() or not resolved_source.is_relative_to(
+            self._staging_root
+        ):
+            raise map_processing_exception(
+                ValueError("source outside staging root"),
+                MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
+            )
+
+        try:
+            resolved_destination_parent = destination.parent.resolve(strict=True)
+            resolved_destination = (
+                destination.resolve(strict=True)
+                if destination.exists()
+                else resolved_destination_parent / destination.name
+            )
+        except OSError as exc:
+            raise map_processing_exception(
+                exc,
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+            ) from exc
+        if not resolved_destination.is_relative_to(self._staging_root):
+            raise map_processing_exception(
+                ValueError("destination outside staging root"),
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+            )
+        if resolved_source == resolved_destination:
+            raise map_processing_exception(
+                ValueError("source and destination must differ"),
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+            )
+        return resolved_source, resolved_destination
+
+    @staticmethod
+    def _is_link_or_junction(path: Path) -> bool:
+        return path.is_symlink() or (
+            hasattr(os.path, "isjunction") and os.path.isjunction(path)
+        )
+
+    def _has_link_component(self, path: Path) -> bool:
+        lexical_path = Path(os.path.abspath(path))
+        try:
+            relative_path = lexical_path.relative_to(self._staging_root)
+        except ValueError:
+            return False
+
+        candidate = self._staging_root
+        for part in relative_path.parts:
+            candidate /= part
+            if self._is_link_or_junction(candidate):
+                return True
+        return False
 
     @staticmethod
     def _sha256(content: bytes) -> str:
@@ -234,6 +499,13 @@ class MarkdownCleaningPipeline:
             parsed = self._parser.parse(markdown)
         except MarkdownCleaningProcessorError:
             raise
+        except MarkdownParserError as exc:
+            error_code = (
+                MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+                if exc.code is MarkdownParserErrorCode.INVALID_MARKDOWN_INPUT
+                else MarkdownCleaningErrorCode.MARKDOWN_PARSE_FAILED
+            )
+            raise map_processing_exception(exc, error_code) from exc
         except Exception as exc:
             raise map_processing_exception(
                 exc,
@@ -364,7 +636,6 @@ class MarkdownCleaningPipeline:
     ) -> None:
         deadline.check()
         destination_parent = destination.parent
-        destination_parent.mkdir(parents=True, exist_ok=True)
         fd = None
         handle = None
         tmp_path = None
@@ -416,17 +687,17 @@ class MarkdownCleaningPipeline:
     def _build_summary(
         *,
         duplicate_count: int,
-        redaction: SensitiveRedactionResult,
+        redaction_summary: SensitiveRedactionSummary,
         formatting_changes: int,
     ) -> MarkdownCleaningSummary:
         try:
             return MarkdownCleaningSummary(
                 duplicate_paragraphs_removed=duplicate_count,
-                phone_redactions=redaction.summary.phone,
-                id_card_redactions=redaction.summary.id_card,
-                bank_card_redactions=redaction.summary.bank_card,
-                email_redactions=redaction.summary.email,
-                ipv4_redactions=redaction.summary.ipv4,
+                phone_redactions=redaction_summary.phone,
+                id_card_redactions=redaction_summary.id_card,
+                bank_card_redactions=redaction_summary.bank_card,
+                email_redactions=redaction_summary.email,
+                ipv4_redactions=redaction_summary.ipv4,
                 formatting_changes=formatting_changes,
             )
         except (TypeError, ValueError) as exc:

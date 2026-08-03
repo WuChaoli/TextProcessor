@@ -14,6 +14,8 @@
 - Worker 不接受消息中的路径/正文/配置；所有权威参数从 PostgreSQL 读取。
 - 本地输入失败不能切换 OSS；请求选择的输入源不可在 Worker 自动改变。
 - staging 根必须由 `task_id` 派生并做 containment 校验；清理不得信任数据库中的任意路径。
+- Worker 必须把服务端 staging root 与 processor limits 显式注入 `MarkdownCleaningPipeline`；不得把数据库 `targetPath` 传给 Processor。
+- Processor 的纯文本变换运行在可终止子进程中，子进程无 destination 访问权；pipeline deadline 到期先终止子进程。Celery `time_limit` 作为第二道硬上限，必须大于 pipeline timeout 与终止宽限之和，防止父进程或操作系统级终止异常长期占用 worker。
 - 目标已存在必须失败，不能覆盖；发布需要跨进程安全的 `O_EXCL`/hard-link 或等价原子原语，不能只用进程内锁。
 - 每次续租、进度、成功或失败落库均校验 lease token，旧 Worker 不得覆盖新 Worker。
 - 真实验收必须启动 API、Worker、beat、PostgreSQL、Redis，使用真实 Processor 和固定中文输入逐字节验证。
@@ -28,7 +30,7 @@
 - Create: `backend/tests/features/markdown_cleaning/{test_worker_config.py,test_worker_repository.py}`
 
 **Steps:**
-- [ ] RED：覆盖 staging/input/output roots、HTTP host/CIDR、字节/超时/attempt/lease/recovery/concurrency 校验，以及 staging/output 根不重叠。
+- [ ] RED：覆盖 staging/input/output roots、HTTP host/CIDR、字节/超时/attempt/lease/recovery/concurrency 校验，以及 staging/output 根不重叠；校验 `processor timeout < Celery hard time limit` 并保留终止宽限。
 - [ ] RED：覆盖 queued 原子 claim、token 续租、阶段进度、prepared/finished/failure、旧 token 拒绝、attempt 上限、recoverable 分页和 dispatch 节流。
 - [ ] 实现嵌套 Markdown Worker settings 和值对象；Repository 所有 Worker 写操作使用 `status + lease_token` 条件更新。
 - [ ] GREEN：运行目标测试和 Alembic upgrade/downgrade（如有迁移）。
@@ -83,7 +85,8 @@
 - Create: `backend/tests/features/markdown_cleaning/{test_celery_tasks.py,test_deployment_stack.py}`
 
 **Steps:**
-- [ ] RED：验证 task 名 `markdown_cleaning.execute`/`markdown_cleaning.recover`、严格 envelope、每次 task 独立 DB session、acks-late/reject-on-worker-lost、include 与 beat schedule。
+- [ ] RED：验证 task 名 `markdown_cleaning.execute`/`markdown_cleaning.recover`、严格 envelope、每次 task 独立 DB session、acks-late/reject-on-worker-lost、显式 soft/hard time limit、include 与 beat schedule。
+- [ ] execute task 的 hard time limit 必须来自服务端配置且覆盖 pipeline timeout + 子进程终止宽限；超时后不得发布 destination，Worker 中断按现有租约恢复。
 - [ ] Celery entrypoint 只做 message validation、依赖组装、调用 orchestration 和安全日志；不得实现文件/SQL/Processor 细节。
 - [ ] recover task 使用 Repository 列表与现有 dispatcher 重投 envelope，逐项记录失败但不中断。
 - [ ] GREEN：运行目标测试并启动 Celery app 检查 task registry。

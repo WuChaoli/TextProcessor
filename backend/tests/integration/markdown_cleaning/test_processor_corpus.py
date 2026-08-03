@@ -17,17 +17,22 @@ def test_processor_corpus_end_to_end_integration(tmp_path: Path) -> None:
     cases = sorted(item for item in _ROOT.iterdir() if item.is_dir())
     assert cases, "golden corpus should contain at least one case"
     pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
         limits=MarkdownCleaningPipelineLimits(max_input_bytes=10_485_760, max_output_bytes=10_485_760),
     )
 
     for case_dir in cases:
-        source = case_dir / "input.md"
+        fixture_source = case_dir / "input.md"
+        case_staging = tmp_path / case_dir.name
+        case_staging.mkdir()
+        source = case_staging / "input.md"
+        source.write_bytes(fixture_source.read_bytes())
         expected = case_dir / "expected.md"
         expected_summary = json.loads(
             (case_dir / "summary.json").read_text(encoding="utf-8")
         )
-        output = tmp_path / f"{case_dir.name}-output.md"
-        rerun_output = tmp_path / f"{case_dir.name}-rerun-output.md"
+        output = case_staging / "output.md"
+        rerun_output = case_staging / "rerun-output.md"
 
         first = pipeline.process(source, output)
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,11 @@ from app.features.markdown_cleaning.processors.errors import (
 from app.features.markdown_cleaning.processors.markdown_formatter import (
     MarkdownFormatterAdapter,
     MarkdownFormatterResult,
+)
+from app.features.markdown_cleaning.processors.markdown_parser import (
+    MarkdownParserAdapter,
+    MarkdownParserError,
+    MarkdownParserErrorCode,
 )
 
 _BOM = "\ufeff"
@@ -54,6 +61,7 @@ def test_pipeline_process_executes_in_order_and_preserves_protection_blocks(tmp_
     )
 
     pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
         limits=MarkdownCleaningPipelineLimits(
             max_input_bytes=2_000,
             max_output_bytes=2_000,
@@ -100,7 +108,7 @@ def test_pipeline_second_run_is_idempotent_when_input_is_bytestable_output(tmp_p
         encoding="utf-8",
         newline="",
     )
-    pipeline = MarkdownCleaningPipeline()
+    pipeline = MarkdownCleaningPipeline(staging_root=tmp_path)
     pipeline.process(source, first_dest)
     second = pipeline.process(first_dest, second_dest)
 
@@ -125,7 +133,7 @@ def test_pipeline_rejects_non_utf8_input_and_bom_and_null_bytes(
     tmp_path: Path,
     invalid_bytes: bytes,
 ) -> None:
-    pipeline = MarkdownCleaningPipeline()
+    pipeline = MarkdownCleaningPipeline(staging_root=tmp_path)
     invalid = tmp_path / "invalid.bin"
     destination = tmp_path / "ignore.md"
     invalid.write_bytes(invalid_bytes)
@@ -133,6 +141,89 @@ def test_pipeline_rejects_non_utf8_input_and_bom_and_null_bytes(
         pipeline.process(invalid, destination)
     assert exc.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
     assert not destination.exists()
+
+
+def test_pipeline_maps_unclosed_fence_to_invalid_markdown_input(tmp_path: Path) -> None:
+    source = tmp_path / "unclosed.md"
+    destination = tmp_path / "output.md"
+    source.write_text("```text\nsecret\n", encoding="utf-8", newline="")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    assert not destination.exists()
+
+
+def test_pipeline_preserves_true_parser_failure_code(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "output.md"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    parser = MarkdownParserAdapter()
+
+    def fail_parse(_markdown: str) -> None:
+        raise MarkdownParserError(
+            MarkdownParserErrorCode.MARKDOWN_PARSE_FAILED,
+            "sensitive parser detail",
+        )
+
+    monkeypatch.setattr(parser, "parse", fail_parse)
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(
+            staging_root=tmp_path,
+            parser=parser,
+            _run_inline=True,
+        ).process(
+            source, destination
+        )
+
+    assert exc.value.code is MarkdownCleaningErrorCode.MARKDOWN_PARSE_FAILED
+    assert "sensitive parser detail" not in exc.value.safe_message
+    assert not destination.exists()
+
+
+def test_pipeline_rejects_symlink_source_even_when_target_stays_in_staging(
+    tmp_path: Path,
+) -> None:
+    actual_source = tmp_path / "actual.md"
+    source_link = tmp_path / "source-link.md"
+    destination = tmp_path / "output.md"
+    actual_source.write_text("正文\n", encoding="utf-8", newline="")
+    try:
+        source_link.symlink_to(actual_source)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(source_link, destination)
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    assert not destination.exists()
+
+
+def test_pipeline_rejects_symlink_destination_parent_inside_staging(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    real_output_dir = tmp_path / "real-output"
+    output_link = tmp_path / "output-link"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    real_output_dir.mkdir()
+    try:
+        output_link.symlink_to(real_output_dir, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    destination = output_link / "output.md"
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(source, destination)
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert not (real_output_dir / "output.md").exists()
 
 
 @pytest.mark.parametrize(
@@ -154,7 +245,7 @@ def test_pipeline_rejects_each_resource_limit(
     source = tmp_path / "resource.md"
     destination = tmp_path / "resource-out.md"
     source.write_text(markdown, encoding="utf-8", newline="")
-    pipeline = MarkdownCleaningPipeline(limits=limits)
+    pipeline = MarkdownCleaningPipeline(staging_root=tmp_path, limits=limits)
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         pipeline.process(source, destination)
     assert exc.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
@@ -175,8 +266,10 @@ def test_pipeline_rejects_timeout_without_publishing_output(tmp_path: Path) -> N
             return 3.0
 
     pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
         limits=MarkdownCleaningPipelineLimits(processing_timeout_seconds=1.0),
         time_fn=frozen,
+        _run_inline=True,
     )
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         pipeline.process(source, destination)
@@ -184,10 +277,80 @@ def test_pipeline_rejects_timeout_without_publishing_output(tmp_path: Path) -> N
     assert not destination.exists()
 
 
+def test_pipeline_terminates_long_transform_within_deadline_without_artifacts(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "output.md"
+    runtime_marker = tmp_path / "runtime-finished"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    runtime_script = (
+        "import time;from pathlib import Path;time.sleep(0.4);"
+        f"Path({str(runtime_marker)!r}).write_text('finished', encoding='utf-8')"
+    )
+    pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
+        limits=MarkdownCleaningPipelineLimits(processing_timeout_seconds=0.1),
+        _runtime_command=(
+            sys.executable,
+            "-c",
+            runtime_script,
+        ),
+    )
+
+    started_at = time.perf_counter()
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        pipeline.process(source, destination)
+    elapsed = time.perf_counter() - started_at
+
+    assert exc.value.code is MarkdownCleaningErrorCode.PROCESSING_TIMEOUT
+    assert elapsed < 1.0
+    time.sleep(0.5)
+    assert not destination.exists()
+    assert not runtime_marker.exists()
+    assert list(tmp_path.glob("markdown-cleaning-*.tmp")) == []
+
+
+def test_pipeline_rejects_silent_inline_execution_for_custom_stage(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="explicit inline"):
+        MarkdownCleaningPipeline(
+            staging_root=tmp_path,
+            parser=MarkdownParserAdapter(),
+        )
+
+
+def test_pipeline_does_not_forward_application_secrets_to_transform_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    destination = tmp_path / "output.md"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    monkeypatch.setenv("TASK6_RUNTIME_SECRET", "must-not-leak")
+    response_script = (
+        "import json,os,sys;sys.stdin.buffer.read();"
+        "text=('leaked' if os.getenv('TASK6_RUNTIME_SECRET') else 'clean')+'\\n';"
+        "sys.stdout.write(json.dumps({'ok':True,'text':text,'duplicateCount':0,"
+        "'redactionSummary':{'phone':0,'idCard':0,'bankCard':0,'email':0,'ipv4':0},"
+        "'formattingChanges':0}))"
+    )
+    pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
+        _runtime_command=(sys.executable, "-c", response_script),
+    )
+
+    pipeline.process(source, destination)
+
+    assert destination.read_bytes() == b"clean\n"
+
+
 def test_pipeline_output_size_limit_is_enforced(tmp_path: Path) -> None:
     source = tmp_path / "huge.md"
     source.write_text("x" * 1024, encoding="utf-8", newline="")
     pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
         limits=MarkdownCleaningPipelineLimits(
             max_output_bytes=16,
             max_input_bytes=2_000,
@@ -232,7 +395,11 @@ def test_pipeline_preserves_existing_destination_when_stage_fails(
         raise RuntimeError("sensitive content must not escape")
 
     monkeypatch.setattr(formatter, "format", fail_format)
-    pipeline = MarkdownCleaningPipeline(formatter=formatter)
+    pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
+        formatter=formatter,
+        _run_inline=True,
+    )
 
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
         pipeline.process(source, destination)
@@ -261,7 +428,11 @@ def test_pipeline_validates_summary_before_publishing(
     )
 
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
-        MarkdownCleaningPipeline(formatter=formatter).process(source, destination)
+        MarkdownCleaningPipeline(
+            staging_root=tmp_path,
+            formatter=formatter,
+            _run_inline=True,
+        ).process(source, destination)
 
     assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
     assert destination.read_bytes() == b"previous\n"
@@ -281,8 +452,10 @@ def test_pipeline_preserves_timeout_code_and_destination_during_atomic_write(
         return 0.0
 
     pipeline = MarkdownCleaningPipeline(
+        staging_root=tmp_path,
         limits=MarkdownCleaningPipelineLimits(processing_timeout_seconds=1.0),
         time_fn=time_fn,
+        _run_inline=True,
     )
 
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
@@ -313,7 +486,11 @@ def test_pipeline_rejects_invalid_formatter_output_before_atomic_replace(
     )
 
     with pytest.raises(MarkdownCleaningProcessorError) as exc:
-        MarkdownCleaningPipeline(formatter=formatter).process(source, destination)
+        MarkdownCleaningPipeline(
+            staging_root=tmp_path,
+            formatter=formatter,
+            _run_inline=True,
+        ).process(source, destination)
 
     assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
     assert not destination.exists()
@@ -328,8 +505,84 @@ def test_pipeline_deduplicates_before_redaction(tmp_path: Path) -> None:
         newline="",
     )
 
-    result = MarkdownCleaningPipeline().process(source, destination)
+    result = MarkdownCleaningPipeline(staging_root=tmp_path).process(source, destination)
 
     assert result.summary.duplicate_paragraphs_removed == 1
     assert result.summary.phone_redactions == 2
     assert destination.read_text(encoding="utf-8").count("电话: [PHONE]") == 2
+
+
+def test_pipeline_rejects_business_target_outside_staging_root(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir()
+    source = staging_root / "source.md"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    business_target = tmp_path / "business" / "target.md"
+    business_target.parent.mkdir()
+
+    pipeline = MarkdownCleaningPipeline(staging_root=staging_root)
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        pipeline.process(source, business_target)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert not business_target.exists()
+
+
+def test_pipeline_rejects_source_outside_staging_root(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir()
+    source = tmp_path / "business-input.md"
+    destination = staging_root / "output.md"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=staging_root).process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    assert not destination.exists()
+
+
+def test_pipeline_rejects_lexical_destination_escape(tmp_path: Path) -> None:
+    staging_root = tmp_path / "staging"
+    outside_dir = tmp_path / "outside"
+    staging_root.mkdir()
+    outside_dir.mkdir()
+    source = staging_root / "source.md"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+    escaped_destination = staging_root / ".." / "outside" / "escaped.md"
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=staging_root).process(
+            source, escaped_destination
+        )
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert not (outside_dir / "escaped.md").exists()
+
+
+def test_pipeline_rejects_source_as_destination_without_modifying_it(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.md"
+    original = "正文\n".encode()
+    source.write_bytes(original)
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(source, source)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert source.read_bytes() == original
+
+
+def test_pipeline_does_not_create_unowned_destination_directories(tmp_path: Path) -> None:
+    source = tmp_path / "source.md"
+    missing_parent = tmp_path / "unowned"
+    destination = missing_parent / "output.md"
+    source.write_text("正文\n", encoding="utf-8", newline="")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        MarkdownCleaningPipeline(staging_root=tmp_path).process(source, destination)
+
+    assert exc.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert not missing_parent.exists()
