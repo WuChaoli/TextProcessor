@@ -93,6 +93,10 @@ class MarkdownCleaningErrorPublic(BaseModel):
     message: str
 
 
+class MarkdownCleaningDomainErrorResponse(BaseModel):
+    detail: MarkdownCleaningErrorPublic | str
+
+
 class MarkdownCleaningTaskPublic(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

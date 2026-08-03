@@ -15,6 +15,7 @@ from app.features.markdown_cleaning.dispatcher import (
 from app.features.markdown_cleaning.repository import MarkdownCleaningTaskRepository
 from app.features.markdown_cleaning.request_policy import MarkdownCleaningRequestPolicy
 from app.features.markdown_cleaning.schemas import (
+    MarkdownCleaningDomainErrorResponse,
     MarkdownCleaningErrorPublic,
     MarkdownCleaningRedactionsPublic,
     MarkdownCleaningResultPublic,
@@ -129,6 +130,24 @@ def task_to_public(task: MarkdownCleaningTask) -> MarkdownCleaningTaskPublic:
     "",
     response_model=MarkdownCleaningTaskAccepted,
     status_code=status.HTTP_202_ACCEPTED,
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "model": MarkdownCleaningDomainErrorResponse,
+            "description": "Input not allowed by request policy",
+        },
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": MarkdownCleaningDomainErrorResponse,
+            "description": "Missing or invalid credentials",
+        },
+        status.HTTP_409_CONFLICT: {
+            "model": MarkdownCleaningDomainErrorResponse,
+            "description": "Idempotency conflict for the same caller/session/file",
+        },
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "model": MarkdownCleaningDomainErrorResponse,
+            "description": "Queue temporarily unavailable",
+        },
+    },
 )
 def create_markdown_cleaning_task(
     request: MarkdownCleaningTaskCreate,
@@ -150,6 +169,16 @@ def create_markdown_cleaning_task(
 @router.get(
     "/{task_id}",
     response_model=MarkdownCleaningTaskPublic,
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "model": MarkdownCleaningDomainErrorResponse,
+            "description": "Missing or invalid credentials",
+        },
+        status.HTTP_404_NOT_FOUND: {
+            "model": MarkdownCleaningDomainErrorResponse,
+            "description": "Task not found for caller",
+        },
+    },
 )
 def get_markdown_cleaning_task(
     task_id: uuid.UUID,
