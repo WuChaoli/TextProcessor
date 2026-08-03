@@ -4,9 +4,9 @@
 
 本接口接收单个 Markdown 文件，对文档执行固定的段落去重、规则脱敏和 Markdown 格式规范化，异步生成一个新的 Markdown 文件。调用方通过 POST 获得 `taskId`，再通过 GET 轮询任务状态和结果路径；接口不等待处理完成、不回调业务系统，也不返回 Markdown 正文。
 
-本设计只确定外部 API、幂等、任务状态、访问控制、结果摘要和错误边界。输入解析、Data-Juicer 调用、输出发布和恢复由 Worker 专项设计负责；具体清洗规则由 Data-Juicer profile 专项设计负责。
+本设计只确定外部 API、幂等、任务状态、访问控制、结果摘要和错误边界。输入解析、本地 processor 执行、输出发布和恢复由 Worker 专项设计负责；具体清洗规则由 Markdown Cleaning Processor 专项设计负责。
 
-首版只处理 UTF-8 Markdown 文件，不接收正文、算子列表、规则表达式、掩码、阈值或 Data-Juicer 参数。结构化提取、跨文档全局去重、语义改写和实体识别不属于本接口。
+首版只处理 UTF-8 Markdown 文件，不接收正文、处理器列表、规则表达式、掩码或阈值。结构化提取、跨文档全局去重、语义改写和实体识别不属于本接口。
 
 ## 2. 总体架构
 
@@ -14,8 +14,8 @@
 - PostgreSQL 是任务参数、状态和生命周期的唯一权威来源。
 - Redis 只作为 Celery broker。
 - Celery 消息只携带 `taskId`、任务类型和 schema version。
-- Worker 读取输入、调用固定的 `markdown_cleaning_v1` profile、校验并发布输出。
-- Data-Juicer Service 不感知调用方身份、业务路径访问策略或最终业务任务状态。
+- Worker 读取输入，在受控执行器中调用固定的 `MarkdownCleaningProcessor`，校验并发布输出。
+- `MarkdownCleaningProcessor` 与 FastAPI route、PostgreSQL、Redis、Celery 和业务路径解耦。
 
 该能力使用独立的 route、任务表、Celery task namespace 和配置，不复用结构化提取或全局去重的业务任务记录。
 
@@ -144,7 +144,7 @@
 }
 ```
 
-`result` 与 `error` 必须互斥。外部协议使用 camelCase，Python 与数据库内部使用 snake_case 并在 schema 边界显式映射。API 不返回输入或输出正文、敏感值、匹配位置、原始 Data-Juicer 错误或宿主机内部 staging 路径。
+`result` 与 `error` 必须互斥。外部协议使用 camelCase，Python 与数据库内部使用 snake_case 并在 schema 边界显式映射。API 不返回输入或输出正文、敏感值、匹配位置、底层库异常或宿主机内部 staging 路径。
 
 ## 4. 幂等规则
 
@@ -155,7 +155,7 @@
 - 原任务已失败或取消时仍返回原任务；重新处理必须使用新的 `sessionId`。
 - 数据库对 `(caller_id, session_id, file_id)` 建立唯一约束，收敛并发创建。
 - 请求参数规范化后生成 `requestFingerprint`，但摘要不能替代数据库唯一约束。
-- profile 固定为 `markdown_cleaning_v1`，不属于调用方参数；profile 升级必须通过新的 API 契约或显式迁移决定，不能静默改变已创建任务。
+- processor contract version 固定为 `markdown_cleaning_v1`，不属于调用方参数；行为升级必须使用新版本并显式迁移，不能静默改变已创建任务。
 
 ## 5. 状态与进度
 
@@ -173,13 +173,12 @@ pending -> queued -> running -> succeeded
 
 ```text
 validating_input
-submitting
 cleaning
 publishing
 completed
 ```
 
-`percent` 为 `0..100` 的单调非递减整数，只表示阶段性估算，不承诺与耗时线性对应。Data-Juicer 的内部算子名称和细粒度阶段不进入公共 API。
+`percent` 为 `0..100` 的单调非递减整数，只表示阶段性估算，不承诺与耗时线性对应。本地 processor 的细粒度步骤不进入公共 API。
 
 ## 6. 数据模型
 
@@ -197,7 +196,7 @@ file_storage_path
 file_oss_url
 selected_input_type
 target_path
-profile
+processor_contract_version
 status
 processing_phase
 progress_percent
@@ -205,7 +204,6 @@ attempt_count
 max_attempts
 lease_token
 lease_expires_at
-external_job_id
 input_sha256
 prepared_output_sha256
 output_sha256
@@ -237,7 +235,7 @@ PostgreSQL 不保存 Markdown 正文、匹配到的敏感值或逐项匹配位�
 - 拒绝 `..`、符号链接逃逸、设备路径、输入输出同文件和输入输出根目录违规重叠。
 - `fileOssUrl` 只允许服务端配置的协议、host/CIDR、端口和重定向目标；禁止内嵌凭据、loopback、link-local、云元数据地址和未授权公网地址。
 - 服务端限制输入字节数、下载时长、重定向次数和任务总时长。
-- 请求不能提供或扩大文件、网络、对象存储或 Data-Juicer 凭据权限。
+- 请求不能提供或扩大文件、网络、对象存储或服务端处理器权限。
 - 日志只记录 `requestId`、`taskId`、`callerId`、状态、阶段、计数和错误码，不记录正文、敏感值或完整路径。
 
 ## 8. 稳定错误码
@@ -259,9 +257,6 @@ PostgreSQL 不保存 Markdown 正文、匹配到的敏感值或逐项匹配位�
 
 处理：
 
-- `PROCESSOR_SUBMISSION_FAILED`
-- `PROCESSOR_JOB_NOT_FOUND`
-- `PROCESSOR_PROTOCOL_ERROR`
 - `PROCESSING_FAILED`
 - `PROCESSING_TIMEOUT`
 - `INVALID_PROCESSOR_OUTPUT`
@@ -305,4 +300,4 @@ HTTP 语义：一致幂等创建返回 `202`，请求校验失败返回 `422`，
 - 一致重放返回同一 `taskId`；冲突重放返回 `409`。
 - 成功任务返回原始业务字段、`targetPath` 和安全汇总计数。
 - 失败任务返回稳定错误码和脱敏信息。
-- 公共 API 不接受 profile、operator、规则或掩码参数。
+- 公共 API 不接受 processor 版本、处理步骤、规则或掩码参数。
