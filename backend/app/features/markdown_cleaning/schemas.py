@@ -33,8 +33,8 @@ class MarkdownCleaningTaskCreate(BaseModel):
     @field_validator("file_storage_path", "file_oss_url", "target_path")
     @classmethod
     def _must_be_markdown(cls, value: str | None) -> str | None:
-        if value is not None and not value.lower().endswith(".md"):
-            raise ValueError("Markdown 文件路径必须以 .md 结尾")
+        if value is not None and not value.lower().endswith((".md", ".markdown")):
+            raise ValueError("Markdown 文件路径必须以 .md 或 .markdown 结尾")
         return value
 
     @model_validator(mode="after")
@@ -60,8 +60,11 @@ class MarkdownCleaningTaskAccepted(BaseModel):
 class MarkdownCleaningRedactionsPublic(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    emails: int = Field(ge=0)
-    phone_numbers: int = Field(alias="phoneNumbers", ge=0)
+    phone: int = Field(ge=0)
+    id_card: int = Field(alias="idCard", ge=0)
+    bank_card: int = Field(alias="bankCard", ge=0)
+    email: int = Field(ge=0)
+    ipv4: int = Field(ge=0)
 
 
 class MarkdownCleaningSummaryPublic(BaseModel):

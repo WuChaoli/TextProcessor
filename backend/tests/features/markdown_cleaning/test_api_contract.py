@@ -105,6 +105,22 @@ def test_create_schema_requires_case_insensitive_markdown_suffix(
         MarkdownCleaningTaskCreate.model_validate(payload)
 
 
+def test_create_schema_accepts_markdown_suffix_case_insensitively() -> None:
+    request = MarkdownCleaningTaskCreate.model_validate(
+        {
+            "sessionId": "session-1",
+            "fileId": "11",
+            "fileStoragePath": "C:/input/source.MARKDOWN",
+            "fileOssUrl": "https://files.internal/source.markdown",
+            "targetPath": "C:/output/result.MarkDown",
+        }
+    )
+
+    assert request.file_storage_path == "C:/input/source.MARKDOWN"
+    assert request.file_oss_url == "https://files.internal/source.markdown"
+    assert request.target_path == "C:/output/result.MarkDown"
+
+
 def test_task_public_requires_a_result_only_for_success_and_never_an_error() -> None:
     payload = {
         "taskId": "019fb000-0000-7000-8000-000000000001",
@@ -118,7 +134,13 @@ def test_task_public_requires_a_result_only_for_success_and_never_an_error() -> 
             "targetPath": "C:/output/result.md",
             "summary": {
                 "duplicateParagraphsRemoved": 2,
-                "redactions": {"emails": 1, "phoneNumbers": 0},
+                "redactions": {
+                    "phone": 1,
+                    "idCard": 0,
+                    "bankCard": 0,
+                    "email": 1,
+                    "ipv4": 0,
+                },
                 "formattingChanges": 3,
             },
         },
@@ -140,14 +162,26 @@ def test_summary_is_count_only_and_rejects_unknown_fields() -> None:
     summary = MarkdownCleaningSummaryPublic.model_validate(
         {
             "duplicateParagraphsRemoved": 2,
-            "redactions": {"emails": 1, "phoneNumbers": 0},
+            "redactions": {
+                "phone": 1,
+                "idCard": 0,
+                "bankCard": 0,
+                "email": 1,
+                "ipv4": 0,
+            },
             "formattingChanges": 3,
         }
     )
 
     assert summary.model_dump(by_alias=True) == {
         "duplicateParagraphsRemoved": 2,
-        "redactions": {"emails": 1, "phoneNumbers": 0},
+        "redactions": {
+            "phone": 1,
+            "idCard": 0,
+            "bankCard": 0,
+            "email": 1,
+            "ipv4": 0,
+        },
         "formattingChanges": 3,
     }
     with pytest.raises(ValidationError):
@@ -155,6 +189,53 @@ def test_summary_is_count_only_and_rejects_unknown_fields() -> None:
             {
                 **summary.model_dump(by_alias=True),
                 "cleanedContent": "sensitive content must not be public",
+            }
+        )
+
+
+def test_summary_exposes_exactly_five_camel_case_redaction_counts() -> None:
+    summary = MarkdownCleaningSummaryPublic.model_validate(
+        {
+            "duplicateParagraphsRemoved": 2,
+            "redactions": {
+                "phone": 1,
+                "idCard": 2,
+                "bankCard": 3,
+                "email": 4,
+                "ipv4": 5,
+            },
+            "formattingChanges": 3,
+        }
+    )
+
+    assert summary.model_dump(by_alias=True)["redactions"] == {
+        "phone": 1,
+        "idCard": 2,
+        "bankCard": 3,
+        "email": 4,
+        "ipv4": 5,
+    }
+
+
+@pytest.mark.parametrize(
+    "field", ["phone", "idCard", "bankCard", "email", "ipv4"]
+)
+def test_summary_rejects_negative_redaction_counts(field: str) -> None:
+    redactions = {
+        "phone": 1,
+        "idCard": 2,
+        "bankCard": 3,
+        "email": 4,
+        "ipv4": 5,
+    }
+    redactions[field] = -1
+
+    with pytest.raises(ValidationError):
+        MarkdownCleaningSummaryPublic.model_validate(
+            {
+                "duplicateParagraphsRemoved": 2,
+                "redactions": redactions,
+                "formattingChanges": 3,
             }
         )
 
