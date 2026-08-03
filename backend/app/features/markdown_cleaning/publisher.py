@@ -152,8 +152,8 @@ class MarkdownCleaningResultPublisher:
             raise _publication_system_error("文件系统发布失败") from exc
         finally:
             if temporary_fd is not None:
-                self._remove_temporary(parent_handle, temporary_name, temporary_fd)
                 os.close(temporary_fd)
+                self._remove_temporary(parent_handle, temporary_name)
             self._close_parent(parent_handle)
 
     @classmethod
@@ -406,13 +406,13 @@ class MarkdownCleaningResultPublisher:
             raise _publication_system_error("文件系统发布失败") from exc
 
     @staticmethod
-    def _remove_temporary(parent_handle: int, name: str, descriptor: int) -> None:
+    def _remove_temporary(parent_handle: int, name: str) -> None:
         try:
             if os.name == "nt":
-                _WindowsPinnedDirectory.mark_delete(descriptor)
+                _WindowsPinnedDirectory.delete_relative(parent_handle, name)
             else:
                 os.unlink(name, dir_fd=parent_handle)
-        except OSError:
+        except FileNotFoundError:
             pass
 
     @staticmethod
@@ -651,18 +651,46 @@ class _WindowsPinnedDirectory:
             raise OSError(errno.ENOTSUP, "safe hardlink unavailable")
 
     @staticmethod
-    def mark_delete(file_fd: int) -> None:
-        import msvcrt
+    def delete_relative(parent: int, name: str) -> None:
+        from ctypes import wintypes
 
-        delete = ctypes.c_ubyte(1)
-        ok = ctypes.WinDLL("kernel32", use_last_error=True).SetFileInformationByHandle(
-            msvcrt.get_osfhandle(file_fd),
-            4,  # FileDispositionInfo
-            ctypes.byref(delete),
-            ctypes.sizeof(delete),
+        class UnicodeString(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.USHORT),
+                ("MaximumLength", wintypes.USHORT),
+                ("Buffer", wintypes.LPWSTR),
+            ]
+
+        class ObjectAttributes(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.ULONG),
+                ("RootDirectory", wintypes.HANDLE),
+                ("ObjectName", ctypes.POINTER(UnicodeString)),
+                ("Attributes", wintypes.ULONG),
+                ("SecurityDescriptor", wintypes.LPVOID),
+                ("SecurityQualityOfService", wintypes.LPVOID),
+            ]
+
+        buffer = ctypes.create_unicode_buffer(name)
+        string = UnicodeString(
+            len(name) * 2,
+            (len(name) + 1) * 2,
+            ctypes.cast(buffer, wintypes.LPWSTR),
         )
-        if not ok:
-            raise ctypes.WinError(ctypes.get_last_error())
+        attributes = ObjectAttributes(
+            ctypes.sizeof(ObjectAttributes),
+            parent,
+            ctypes.pointer(string),
+            0x40,  # OBJ_CASE_INSENSITIVE
+            None,
+            None,
+        )
+        status = ctypes.WinDLL("ntdll").NtDeleteFile(ctypes.byref(attributes))
+        if status < 0:
+            error = status & 0xFFFFFFFF
+            if error in {0xC0000034, 0xC000003A}:
+                raise FileNotFoundError(errno.ENOENT, "entry missing")
+            raise OSError(errno.EIO, "relative NT delete failed")
 
 
 def _invalid_output(message: str) -> InvalidPreparedOutputError:

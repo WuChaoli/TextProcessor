@@ -165,6 +165,20 @@ def test_publish_filesystem_failure_has_retryable_type(
     with pytest.raises(PublicationSystemError):
         publisher.publish(prepared, tmp_path / "out.md", allow_recovery=False)
 
+    assert not list(tmp_path.glob(".markdown-cleaning-publish-*.tmp"))
+
+
+def test_publish_success_removes_temporary_entry(tmp_path: Path) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("ok", encoding="utf-8")
+    output = tmp_path / "output"
+    output.mkdir()
+    publisher = MarkdownCleaningResultPublisher(output_roots=(output,))
+
+    publisher.publish(publisher.prepare(source), output / "result.md", allow_recovery=False)
+
+    assert [path.name for path in output.iterdir()] == ["result.md"]
+
 
 def test_publish_recovers_only_when_digest_and_size_match(
     tmp_path: Path,
