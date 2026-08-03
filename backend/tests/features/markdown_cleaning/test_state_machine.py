@@ -12,6 +12,7 @@ from app.features.markdown_cleaning.state_machine import (
     [
         (MarkdownCleaningTaskStatus.PENDING, MarkdownCleaningTaskStatus.QUEUED),
         (MarkdownCleaningTaskStatus.QUEUED, MarkdownCleaningTaskStatus.RUNNING),
+        (MarkdownCleaningTaskStatus.QUEUED, MarkdownCleaningTaskStatus.FAILED),
         (MarkdownCleaningTaskStatus.RUNNING, MarkdownCleaningTaskStatus.SUCCEEDED),
         (MarkdownCleaningTaskStatus.RUNNING, MarkdownCleaningTaskStatus.FAILED),
         (MarkdownCleaningTaskStatus.RUNNING, MarkdownCleaningTaskStatus.CANCELLED),
@@ -28,6 +29,7 @@ def test_legal_transitions(
     [
         (MarkdownCleaningTaskStatus.PENDING, MarkdownCleaningTaskStatus.RUNNING),
         (MarkdownCleaningTaskStatus.QUEUED, MarkdownCleaningTaskStatus.SUCCEEDED),
+        (MarkdownCleaningTaskStatus.PENDING, MarkdownCleaningTaskStatus.FAILED),
         (MarkdownCleaningTaskStatus.SUCCEEDED, MarkdownCleaningTaskStatus.RUNNING),
         (MarkdownCleaningTaskStatus.FAILED, MarkdownCleaningTaskStatus.QUEUED),
         (MarkdownCleaningTaskStatus.CANCELLED, MarkdownCleaningTaskStatus.QUEUED),

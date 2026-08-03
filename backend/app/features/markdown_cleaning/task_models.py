@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Enum, UniqueConstraint
+from sqlalchemy import Column, DateTime, Enum, Integer, String, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from app.features.markdown_cleaning.state_machine import MarkdownCleaningTaskStatus
@@ -38,6 +38,11 @@ class MarkdownCleaningTask(SQLModel, table=True):
     processor_contract_version: str = Field(
         default="markdown_cleaning_v1",
         max_length=64,
+        sa_column=Column(
+            String(length=64),
+            nullable=False,
+            server_default="'markdown_cleaning_v1'",
+        ),
     )
     status: MarkdownCleaningTaskStatus = Field(
         sa_type=Enum(
@@ -51,7 +56,15 @@ class MarkdownCleaningTask(SQLModel, table=True):
     processing_phase: str | None = Field(default=None, max_length=64)
     progress_percent: int = Field(default=0, ge=0, le=100)
     attempt_count: int = Field(default=0, ge=0)
-    max_attempts: int = Field(default=3, gt=0)
+    max_attempts: int = Field(
+        default=3,
+        gt=0,
+        sa_column=Column(
+            Integer,
+            nullable=False,
+            server_default="3",
+        ),
+    )
     lease_token: str | None = Field(default=None, max_length=128)
     lease_expires_at: datetime | None = Field(
         default=None,

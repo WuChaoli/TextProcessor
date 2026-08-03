@@ -22,7 +22,7 @@ ALLOWED_TRANSITIONS: Final[
         {MarkdownCleaningTaskStatus.QUEUED}
     ),
     MarkdownCleaningTaskStatus.QUEUED: frozenset(
-        {MarkdownCleaningTaskStatus.RUNNING}
+        {MarkdownCleaningTaskStatus.RUNNING, MarkdownCleaningTaskStatus.FAILED}
     ),
     MarkdownCleaningTaskStatus.RUNNING: frozenset(
         {

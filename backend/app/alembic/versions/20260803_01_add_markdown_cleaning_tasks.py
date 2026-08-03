@@ -33,12 +33,18 @@ def upgrade() -> None:
             "processor_contract_version",
             sa.String(length=64),
             nullable=False,
+            server_default="markdown_cleaning_v1",
         ),
         sa.Column("status", sa.String(length=16), nullable=False),
         sa.Column("processing_phase", sa.String(length=64), nullable=True),
         sa.Column("progress_percent", sa.Integer(), nullable=False),
         sa.Column("attempt_count", sa.Integer(), nullable=False),
-        sa.Column("max_attempts", sa.Integer(), nullable=False),
+        sa.Column(
+            "max_attempts",
+            sa.Integer(),
+            nullable=False,
+            server_default="3",
+        ),
         sa.Column("lease_token", sa.String(length=128), nullable=True),
         sa.Column(
             "lease_expires_at",
@@ -137,4 +143,3 @@ def downgrade() -> None:
             table_name="markdown_cleaning_task",
         )
     op.drop_table("markdown_cleaning_task")
-

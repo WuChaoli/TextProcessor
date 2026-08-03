@@ -1,6 +1,9 @@
 import uuid
+from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -59,7 +62,7 @@ def _assert_summary_fields_still_null(task: MarkdownCleaningTask) -> None:
 
 
 @pytest.fixture
-def session() -> Session:
+def session() -> Generator[Session]:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -201,18 +204,34 @@ def test_queue_failure_path_keeps_summary_fields_null_before_completion(session:
     task = repository.transition(
         task.id,
         expected=MarkdownCleaningTaskStatus.QUEUED,
-        target=MarkdownCleaningTaskStatus.RUNNING,
-        started_at=datetime(2026, 8, 3, tzinfo=UTC),
-    )
-    task = repository.transition(
-        task.id,
-        expected=MarkdownCleaningTaskStatus.RUNNING,
         target=MarkdownCleaningTaskStatus.FAILED,
         error_code="QUEUE_SUBMISSION_FAILED",
         error_message="queue submission failed",
+        processing_phase="dispatching_failed",
     )
 
     _assert_summary_fields_still_null(task)
+    assert task.status is MarkdownCleaningTaskStatus.FAILED
+
+
+def test_task_columns_have_database_defaults() -> None:
+    task_table = cast(Any, MarkdownCleaningTask).__table__
+    processor_contract_version_default = (
+        task_table.c["processor_contract_version"].server_default
+    )
+    max_attempts_default = task_table.c["max_attempts"].server_default
+
+    assert processor_contract_version_default is not None
+    assert str(processor_contract_version_default.arg) == "'markdown_cleaning_v1'"
+    assert max_attempts_default is not None
+    assert str(max_attempts_default.arg) == "3"
+
+    migration_file = Path(
+        "backend/app/alembic/versions/20260803_01_add_markdown_cleaning_tasks.py"
+    )
+    content = migration_file.read_text(encoding="utf-8")
+    assert 'server_default="markdown_cleaning_v1"' in content
+    assert "server_default=\"3\"" in content
 
 
 def test_mark_dispatched_updates_queued_task(session: Session) -> None:
