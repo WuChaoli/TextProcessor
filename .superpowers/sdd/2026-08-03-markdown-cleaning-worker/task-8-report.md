@@ -27,3 +27,13 @@
 - 默认 `.env` 的 PostgreSQL 5432 凭据与本机实例不匹配；现有测试 PostgreSQL 在 5433。
 - 切换 5433 后，精确 8 个目标 pytest node 两次均在 120 秒内没有进入收集/没有断言输出；进程 CPU 约为 0，PostgreSQL `pg_stat_activity` 无对应连接。按主会话指令已精确终止本轮 pytest 父子进程，不再重复启动。
 - 因 runner hang，本轮没有可声称的 pytest GREEN 计数，也未执行全量 349、integration 12、Alembic 往返或 fresh-stack；这些必须由主会话在独立运行环境复验。
+
+## 主会话独立复验
+
+- API/契约定向测试：`56 passed`。
+- Markdown feature 与 API 路由全量：`361 passed`。
+- 真实 PostgreSQL/Redis/Celery integration：`12 passed`。
+- 独立临时 PostgreSQL 数据库执行 Alembic `upgrade head -> downgrade -1 -> upgrade head`，最终为 `20260803_03 (head)`，随后删除该测试数据库。
+- Ruff format/check、Mypy、Pyright、ty 均通过；生产类型检查覆盖 32 个 Markdown 清洗源文件。
+- fresh 全栈脚本成功：`runId=e53e37843f9f`，`exit 0`，`37.97s`；真实 API、worker、beat、崩溃恢复、冲突和幂等均通过。
+- 验收后 `tp-md-*` 容器、Celery 进程、`textprocessor-md-*` 临时目录和 `tp_md_*` 测试数据库均为 0。
