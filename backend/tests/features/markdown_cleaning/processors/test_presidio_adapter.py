@@ -3,8 +3,12 @@ from __future__ import annotations
 import pytest
 
 import app.features.markdown_cleaning.processors.presidio_adapter as presidio_adapter
+from app.features.markdown_cleaning.processors.errors import (
+    MarkdownCleaningErrorCode,
+)
 from app.features.markdown_cleaning.processors.models import SourceSpan
 from app.features.markdown_cleaning.processors.presidio_adapter import (
+    MarkdownCleaningProcessorError,
     PresidioMarkdownRedactor,
     SensitiveRedactionSummary,
 )
@@ -58,18 +62,51 @@ def test_main_path_redacts_all_supported_entities_and_preserves_priority(
     )
 
 
-def test_redact_runtime_analyze_error_maps_to_sensitive_error_without_fallback() -> None:
+def test_redact_runtime_analyze_error_raises_processor_error() -> None:
     class _FailingAnalyzer:
         def analyze(self, *_: object, **__: object) -> list[object]:
             raise RuntimeError("analyzer fail")
 
     markdown = "contact:13800138000"
-    result = PresidioMarkdownRedactor(analyzer=_FailingAnalyzer()).redact(markdown)
+    with pytest.raises(MarkdownCleaningProcessorError) as exc:
+        PresidioMarkdownRedactor(analyzer=_FailingAnalyzer()).redact(markdown)
 
+    assert exc.value.code == MarkdownCleaningErrorCode.SENSITIVE_DATA_REDACTION_FAILED
+    assert exc.value.safe_message == "敏感数据脱敏失败"
+    assert str(exc.value) == "SENSITIVE_DATA_REDACTION_FAILED: 敏感数据脱敏失败"
+
+
+def test_main_path_filters_invalid_spans_and_keeps_valid_text_and_summary() -> None:
+    markdown = (
+        "bad@ a@sample.org 13800138000 11010519491231002X 10.0.0.1 256.1.1.1"
+    )
+
+    email_start = markdown.index("a@sample.org")
+    phone_start = markdown.index("13800138000")
+    id_start = markdown.index("11010519491231002X")
+    ipv4_start = markdown.index("10.0.0.1")
+
+    class _FakeAnalyzer:
+        def analyze(self, **_: object) -> list[_DummyResult]:
+            return [
+                _DummyResult("EMAIL_ADDRESS", 0, 4),
+                _DummyResult("EMAIL_ADDRESS", email_start, email_start + len("a@sample.org")),
+                _DummyResult("CN_MOBILE_PHONE", phone_start + 1, phone_start + 10),
+                _DummyResult("CN_MOBILE_PHONE", phone_start, phone_start + 11),
+                _DummyResult("CN_ID_CARD", id_start, id_start + 18),
+                _DummyResult("IPV4_ADDRESS", ipv4_start, ipv4_start + 8),
+                _DummyResult("IPV4_ADDRESS", 999, 1002),
+                _DummyResult("CN_MOBILE_PHONE", -1, 5),
+            ]
+
+    result = PresidioMarkdownRedactor(analyzer=_FakeAnalyzer()).redact(markdown)
     assert result.used_fallback is False
-    assert result.fallback_error == "敏感数据脱敏失败"
-    assert result.text == markdown
-    assert result.summary == SensitiveRedactionSummary()
+    assert result.text == (
+        "bad@ [EMAIL] [PHONE] [ID_CARD] [IPV4] 256.1.1.1"
+    )
+    assert result.summary == SensitiveRedactionSummary(
+        phone=1, id_card=1, bank_card=0, email=1, ipv4=1
+    )
 
 
 def test_fallback_uses_only_valid_matches_and_respects_protected_and_tokens(
@@ -165,6 +202,9 @@ def test_presidio_main_path_uses_noop_nlp_and_allowlist_registry(
     redactor.redact("a@sample.org 13800138000")
 
     registry = analyzer.registry
+    assert "_DummyEmailRecognizer" in registry.names
+    assert "_DummyCreditCardRecognizer" in registry.names
+    assert "_FallbackCreditCardRecognizer" not in registry.names
     assert registry.names == [
         "_DummyEmailRecognizer",
         "_DummyCreditCardRecognizer",
@@ -190,7 +230,9 @@ def test_fallback_registry_registers_credit_card_recognizer_when_builtin_missing
             self.names.append(type(recognizer).__name__)
 
     monkeypatch.setattr(presidio_adapter, "RecognizerRegistry", _DummyRegistry)
+    monkeypatch.setattr(presidio_adapter, "EmailRecognizer", None)
     monkeypatch.setattr(presidio_adapter, "CreditCardRecognizer", None)
 
     registry = presidio_adapter.PresidioMarkdownRedactor._build_registry()
+    assert "_FallbackEmailRecognizer" in registry.names
     assert "_FallbackCreditCardRecognizer" in registry.names

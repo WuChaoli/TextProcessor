@@ -105,6 +105,18 @@ if PatternRecognizer is not None and Pattern is not None:
         def validate_result(self, pattern_text: str) -> bool:
             return is_valid_credit_card(pattern_text)
 
+    class _FallbackEmailRecognizer(PatternRecognizer):  # type: ignore[misc]
+        """Fallback email recognizer with project-scoped deterministic regex."""
+
+        def __init__(self) -> None:
+            super().__init__(
+                supported_entity="EMAIL_ADDRESS",
+                patterns=[Pattern("EMAIL_ADDRESS", _EMAIL_PATTERN.pattern, 0.5)],
+            )
+
+        def validate_result(self, pattern_text: str) -> bool:
+            return bool(_EMAIL_PATTERN.fullmatch(pattern_text))
+
 
 @dataclass(frozen=True, slots=True)
 class SensitiveRedactionSummary:
@@ -161,6 +173,8 @@ class PresidioMarkdownRedactor:
         registry: Any = RecognizerRegistry()
         if EmailRecognizer is not None:
             registry.add_recognizer(EmailRecognizer())
+        elif PatternRecognizer is not None and Pattern is not None:
+            registry.add_recognizer(_FallbackEmailRecognizer())
         if CreditCardRecognizer is not None:
             registry.add_recognizer(CreditCardRecognizer())
         elif PatternRecognizer is not None and Pattern is not None:
@@ -207,12 +221,7 @@ class PresidioMarkdownRedactor:
                 MarkdownCleaningErrorCode.SENSITIVE_DATA_REDACTION_FAILED,
             )
             if self._analyzer is not None:
-                return SensitiveRedactionResult(
-                    text=markdown,
-                    summary=SensitiveRedactionSummary(),
-                    used_fallback=False,
-                    fallback_error=mapped.safe_message,
-                )
+                raise mapped
 
             fallback_matches = self._fallback_matches(markdown, protected)
             selected = self._resolve_overlaps(fallback_matches, protected)
@@ -254,7 +263,9 @@ class PresidioMarkdownRedactor:
         end = getattr(result, "end", None)
         if not isinstance(entity_type, str) or not isinstance(start, int) or not isinstance(end, int):
             return False
-        if start < 0 or end <= start:
+        if start < 0 or end < start or end > len(markdown):
+            return False
+        if end == start:
             return False
         text = markdown[start:end]
         if entity_type == "CREDIT_CARD":
@@ -265,6 +276,8 @@ class PresidioMarkdownRedactor:
             return is_valid_cn_id_card(text)
         if entity_type == "IPV4_ADDRESS":
             return is_valid_ipv4_address(text)
+        if entity_type == "EMAIL_ADDRESS":
+            return bool(_EMAIL_PATTERN.fullmatch(text))
         return True
 
     @staticmethod
