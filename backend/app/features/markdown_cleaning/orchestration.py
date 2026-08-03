@@ -325,7 +325,13 @@ class MarkdownCleaningOrchestrator:
             terminal = True
         finally:
             if terminal:
-                layout.cleanup()
+                try:
+                    layout.cleanup()
+                except OSError:
+                    # Cleanup is best-effort after the authoritative terminal DB
+                    # transition. A Windows handle race must not turn a completed
+                    # task into an apparent worker failure or trigger reprocessing.
+                    pass
 
     def _fail(
         self,
