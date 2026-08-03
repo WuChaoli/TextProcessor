@@ -1,9 +1,17 @@
-"""Markdown cleaning processor contracts."""
+"""Markdown cleaning processor contracts and parser helpers."""
 
 from .errors import (
     MarkdownCleaningErrorCode,
     MarkdownCleaningProcessorError,
     map_processing_exception,
+)
+from .markdown_parser import (
+    MarkdownBlock,
+    MarkdownBlockType,
+    MarkdownParserAdapter,
+    MarkdownParserError,
+    MarkdownParserErrorCode,
+    MarkdownParseResult,
 )
 from .models import MarkdownCleaningSummary, ProcessorResult, SourceSpan
 from .protocol import MarkdownCleaningProcessor
@@ -16,4 +24,10 @@ __all__ = [
     "MarkdownCleaningSummary",
     "ProcessorResult",
     "SourceSpan",
+    "MarkdownBlock",
+    "MarkdownBlockType",
+    "MarkdownParseResult",
+    "MarkdownParserAdapter",
+    "MarkdownParserError",
+    "MarkdownParserErrorCode",
 ]

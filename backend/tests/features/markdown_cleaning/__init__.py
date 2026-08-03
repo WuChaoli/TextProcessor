@@ -1,1 +1,1 @@
-"""Markdown cleaning feature contract tests."""
+"Markdown cleaning feature tests."
