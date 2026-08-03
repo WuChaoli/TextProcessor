@@ -1,0 +1,47 @@
+from __future__ import annotations
+
+import json
+from dataclasses import asdict
+from pathlib import Path
+
+from app.features.markdown_cleaning.processors import (
+    MarkdownCleaningPipeline,
+    MarkdownCleaningPipelineLimits,
+    MarkdownCleaningSummary,
+)
+
+_ROOT = Path("backend/tests/fixtures/markdown_cleaning/v1")
+
+
+def test_processor_corpus_end_to_end_integration(tmp_path: Path) -> None:
+    cases = sorted(item for item in _ROOT.iterdir() if item.is_dir())
+    assert cases, "golden corpus should contain at least one case"
+    pipeline = MarkdownCleaningPipeline(
+        limits=MarkdownCleaningPipelineLimits(max_input_bytes=10_485_760, max_output_bytes=10_485_760),
+    )
+
+    for case_dir in cases:
+        source = case_dir / "input.md"
+        expected = case_dir / "expected.md"
+        expected_summary = json.loads(
+            (case_dir / "summary.json").read_text(encoding="utf-8")
+        )
+        output = tmp_path / f"{case_dir.name}-output.md"
+        rerun_output = tmp_path / f"{case_dir.name}-rerun-output.md"
+
+        first = pipeline.process(source, output)
+
+        assert output.read_bytes() == expected.read_bytes()
+        assert asdict(first.summary) == expected_summary
+
+        second = pipeline.process(output, rerun_output)
+        assert rerun_output.read_bytes() == expected.read_bytes()
+        assert second.summary == MarkdownCleaningSummary(
+            duplicate_paragraphs_removed=0,
+            phone_redactions=0,
+            id_card_redactions=0,
+            bank_card_redactions=0,
+            email_redactions=0,
+            ipv4_redactions=0,
+            formatting_changes=0,
+        )

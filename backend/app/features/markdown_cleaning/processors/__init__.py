@@ -27,6 +27,7 @@ from .markdown_parser import (
 )
 from .models import MarkdownCleaningSummary, ProcessorResult, SourceSpan
 from .paragraph_dedup import ParagraphDeduplicator
+from .pipeline import MarkdownCleaningPipeline, MarkdownCleaningPipelineLimits
 from .presidio_adapter import (
     PresidioMarkdownRedactor,
     SensitiveRedactionResult,
@@ -39,6 +40,8 @@ __all__ = [
     "MarkdownCleaningProcessorError",
     "map_processing_exception",
     "MarkdownCleaningProcessor",
+    "MarkdownCleaningPipeline",
+    "MarkdownCleaningPipelineLimits",
     "MarkdownCleaningSummary",
     "ProcessorResult",
     "SourceSpan",
