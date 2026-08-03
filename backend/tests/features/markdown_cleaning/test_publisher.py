@@ -195,6 +195,7 @@ def test_publish_recovers_without_overwrite_with_multiprocess_race(
         pytest.skip(f"hardlink unavailable for cross-process check: {exc}")
     target = tmp_path / "out" / "result.md"
     output_root = tmp_path / "out"
+    output_root.mkdir()
     publisher = MarkdownCleaningResultPublisher(output_roots=(output_root,))
     prepared_a = publisher.prepare(source_a)
     prepared_b = publisher.prepare(source_b)
@@ -435,4 +436,68 @@ def test_publish_pins_parent_when_path_is_swapped_to_junction(
     assert published.sha256 == prepared.sha256
     assert (pinned / "result.md").read_text(encoding="utf-8") == "safe"
     assert not (outside / "result.md").exists()
+    assert not list(outside.iterdir())
+
+
+def test_publish_rejects_source_tampering_after_prepare(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("safe", encoding="utf-8")
+    output = tmp_path / "output"
+    output.mkdir()
+    publisher = MarkdownCleaningResultPublisher(output_roots=(output,))
+    prepared = publisher.prepare(source)
+    original_copy = publisher._copy_to_exclusive_temporary
+
+    def _tamper_then_copy(*args: object, **kwargs: object) -> int:
+        source.write_text("evil", encoding="utf-8")
+        return original_copy(*args, **kwargs)
+
+    monkeypatch.setattr(publisher, "_copy_to_exclusive_temporary", _tamper_then_copy)
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        publisher.publish(prepared, output / "result.md", allow_recovery=False)
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert "摘要" in error.value.safe_message
+    assert not (output / "result.md").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction race regression")
+def test_publish_pins_every_ancestor_during_relative_descent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    source = tmp_path / "source.md"
+    source.write_text("safe", encoding="utf-8")
+    root = tmp_path / "root"
+    ancestor = root / "a"
+    moved = root / "a-pinned"
+    outside = tmp_path / "outside"
+    ancestor.mkdir(parents=True)
+    outside.mkdir()
+    publisher = MarkdownCleaningResultPublisher(output_roots=(root,))
+    prepared = publisher.prepare(source)
+    original_open_child = publisher._open_child_directory
+
+    def _swap_a_before_opening_b(parent_handle: int, name: str) -> int:
+        if name == "b" and not moved.exists():
+            ancestor.rename(moved)
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(ancestor), str(outside)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0:
+                pytest.skip("junction creation unavailable")
+        return original_open_child(parent_handle, name)
+
+    monkeypatch.setattr(publisher, "_open_child_directory", _swap_a_before_opening_b)
+    publisher.publish(prepared, root / "a" / "b" / "result.md", allow_recovery=False)
+
+    assert (moved / "b" / "result.md").read_text(encoding="utf-8") == "safe"
     assert not list(outside.iterdir())

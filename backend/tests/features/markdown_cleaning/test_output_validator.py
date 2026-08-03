@@ -373,6 +373,45 @@ def test_validator_rejects_source_path_digest_mismatch(
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
 
 
+def test_validator_normalizes_missing_source_error(tmp_path: Path) -> None:
+    output = tmp_path / "result.md"
+    output.write_bytes(b"cleaned\n")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(output, input_payload=b"input"),
+            expected_input_sha256=hashlib.sha256(b"input").hexdigest(),
+            max_output_bytes=1024,
+            source_path=tmp_path / "missing.md",
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_validator_rejects_source_symlink_or_junction(tmp_path: Path) -> None:
+    real = tmp_path / "real.md"
+    linked = tmp_path / "linked.md"
+    output = tmp_path / "result.md"
+    real.write_bytes(b"input")
+    output.write_bytes(b"cleaned\n")
+    try:
+        linked.symlink_to(real)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+
+    with pytest.raises(MarkdownCleaningProcessorError) as error:
+        validate_pipeline_output(
+            _make_result(output, input_payload=b"input"),
+            expected_input_sha256=hashlib.sha256(b"input").hexdigest(),
+            max_output_bytes=1024,
+            source_path=linked,
+        )
+
+    assert error.value.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    assert "路径不安全" in error.value.safe_message
+
+
 def test_validator_rejects_output_with_invalid_utf8(
     tmp_path: Path,
 ) -> None:

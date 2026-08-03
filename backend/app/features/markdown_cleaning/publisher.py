@@ -50,6 +50,10 @@ class MarkdownCleaningResultPublisher:
         if copy_chunk_bytes <= 0:
             raise ValueError("copy_chunk_bytes 必须为正整数")
         self._output_roots = tuple(self._normalize_root(root) for root in output_roots)
+        self._root_identities = {
+            root: self._path_identity(root) if root.is_dir() else None
+            for root in self._output_roots
+        }
         self._max_output_bytes = max_output_bytes
         self._copy_chunk_bytes = copy_chunk_bytes
 
@@ -84,13 +88,7 @@ class MarkdownCleaningResultPublisher:
         allow_recovery: bool,
     ) -> PublishedMarkdownResult:
         normalized_target = self._normalize_target(target)
-        normalized_target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            parent_handle = type(self)._open_directory_no_follow(
-                normalized_target.parent
-            )
-        except OSError as exc:
-            raise _output_conflict("目标目录无法安全打开") from exc
+        parent_handle = self._open_target_parent(normalized_target)
         temporary_name = f".markdown-cleaning-publish-{uuid.uuid4()}.tmp"
         temporary_fd: int | None = None
         try:
@@ -112,6 +110,7 @@ class MarkdownCleaningResultPublisher:
                 temporary_name,
                 parent_fd=parent_handle,
             )
+            self._verify_prepared_temporary(prepared, temporary_fd)
             try:
                 self._link_no_replace(
                     parent_handle,
@@ -163,6 +162,100 @@ class MarkdownCleaningResultPublisher:
         if self._has_link_or_junction_component(normalized.parent):
             raise _output_conflict("目标路径不在允许输出目录")
         return normalized
+
+    @staticmethod
+    def _path_identity(path: Path) -> tuple[int, int]:
+        if os.name == "nt":
+            handle = _WindowsPinnedDirectory.open(path)
+            try:
+                return _WindowsPinnedDirectory.identity(handle)
+            finally:
+                _WindowsPinnedDirectory.close(handle)
+        metadata = path.stat(follow_symlinks=False)
+        return metadata.st_dev, metadata.st_ino
+
+    def _open_target_parent(self, target: Path) -> int:
+        root = max(
+            (
+                candidate
+                for candidate in self._output_roots
+                if target.is_relative_to(candidate)
+            ),
+            key=lambda candidate: len(candidate.parts),
+        )
+        expected_identity = self._root_identities[root]
+        if expected_identity is None:
+            raise _output_conflict("允许输出根目录不存在")
+        current: int | None = None
+        try:
+            current = type(self)._open_directory_no_follow(root)
+            if self._descriptor_identity(current) != expected_identity:
+                raise _output_conflict("允许输出根目录已变化")
+            for component in target.parent.relative_to(root).parts:
+                child = self._open_child_directory(current, component)
+                self._close_parent(current)
+                current = child
+            result = current
+            current = None
+            return result
+        except MarkdownCleaningProcessorError:
+            raise
+        except OSError as exc:
+            raise _output_conflict("目标目录无法安全打开") from exc
+        finally:
+            if current is not None:
+                self._close_parent(current)
+
+    @staticmethod
+    def _descriptor_identity(descriptor: int) -> tuple[int, int]:
+        if os.name == "nt":
+            return _WindowsPinnedDirectory.identity(descriptor)
+        metadata = os.fstat(descriptor)
+        return metadata.st_dev, metadata.st_ino
+
+    @staticmethod
+    def _open_child_directory(parent_handle: int, name: str) -> int:
+        if name in {"", ".", ".."} or Path(name).name != name:
+            raise _output_conflict("目标目录组件不安全")
+        if os.name == "nt":
+            try:
+                return _WindowsPinnedDirectory.open_directory_relative(
+                    parent_handle, name, create=False
+                )
+            except FileNotFoundError:
+                return _WindowsPinnedDirectory.open_directory_relative(
+                    parent_handle, name, create=True
+                )
+        try:
+            return os.open(
+                name,
+                os.O_RDONLY | _O_CLOEXEC | _O_DIRECTORY | _O_NOFOLLOW,
+                dir_fd=parent_handle,
+            )
+        except FileNotFoundError:
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=parent_handle)
+            except FileExistsError:
+                pass
+            return os.open(
+                name,
+                os.O_RDONLY | _O_CLOEXEC | _O_DIRECTORY | _O_NOFOLLOW,
+                dir_fd=parent_handle,
+            )
+
+    @staticmethod
+    def _verify_prepared_temporary(
+        prepared: PreparedMarkdownResult,
+        descriptor: int,
+    ) -> None:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        digest = hashlib.sha256()
+        size = 0
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+        if size != prepared.size_bytes or digest.hexdigest() != prepared.sha256:
+            raise _invalid_output("待发布结果摘要与准备记录不一致")
 
     @classmethod
     def _has_link_or_junction_component(cls, path: Path) -> bool:
@@ -255,7 +348,7 @@ class MarkdownCleaningResultPublisher:
         else:
             descriptor = os.open(
                 temporary_name,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_CLOEXEC | _O_BINARY,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | _O_CLOEXEC | _O_BINARY,
                 0o600,
                 dir_fd=parent_fd,
             )
@@ -326,6 +419,7 @@ class _WindowsPinnedDirectory:
         from ctypes import wintypes
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateFileW.restype = wintypes.HANDLE
         handle = kernel32.CreateFileW(
             str(path),
             0x80000000 | 0x40000000 | 0x00010000,  # read/write/delete
@@ -342,11 +436,68 @@ class _WindowsPinnedDirectory:
 
     @staticmethod
     def close(handle: int) -> None:
-        ctypes.WinDLL("kernel32", use_last_error=True).CloseHandle(handle)
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+
+    @staticmethod
+    def identity(handle: int) -> tuple[int, int]:
+        from ctypes import wintypes
+
+        class ByHandleFileInformation(ctypes.Structure):
+            _fields_ = [
+                ("FileAttributes", wintypes.DWORD),
+                ("CreationTime", wintypes.FILETIME),
+                ("LastAccessTime", wintypes.FILETIME),
+                ("LastWriteTime", wintypes.FILETIME),
+                ("VolumeSerialNumber", wintypes.DWORD),
+                ("FileSizeHigh", wintypes.DWORD),
+                ("FileSizeLow", wintypes.DWORD),
+                ("NumberOfLinks", wintypes.DWORD),
+                ("FileIndexHigh", wintypes.DWORD),
+                ("FileIndexLow", wintypes.DWORD),
+            ]
+
+        information = ByHandleFileInformation()
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetFileInformationByHandle.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(ByHandleFileInformation),
+        ]
+        ok = kernel32.GetFileInformationByHandle(
+            wintypes.HANDLE(handle), ctypes.byref(information)
+        )
+        if not ok:
+            raise ctypes.WinError(ctypes.get_last_error())
+        file_index = (information.FileIndexHigh << 32) | information.FileIndexLow
+        return information.VolumeSerialNumber, file_index
 
     @staticmethod
     def open_relative(parent: int, name: str, *, create: bool) -> int:
         import msvcrt
+
+        handle = _WindowsPinnedDirectory._nt_open_relative(
+            parent, name, create=create, directory=False
+        )
+        flags = os.O_BINARY | (os.O_RDWR if create else os.O_RDONLY)
+        return msvcrt.open_osfhandle(handle, flags)
+
+    @staticmethod
+    def open_directory_relative(parent: int, name: str, *, create: bool) -> int:
+        return _WindowsPinnedDirectory._nt_open_relative(
+            parent, name, create=create, directory=True
+        )
+
+    @staticmethod
+    def _nt_open_relative(
+        parent: int,
+        name: str,
+        *,
+        create: bool,
+        directory: bool,
+    ) -> int:
         from ctypes import wintypes
 
         class UnicodeString(ctypes.Structure):
@@ -382,16 +533,20 @@ class _WindowsPinnedDirectory:
         )
         handle = wintypes.HANDLE()
         iosb = (ctypes.c_size_t * 2)()
+        desired_access = (
+            0x001F01FF if directory else (0x0012019F if create else 0x00120089)
+        )
+        create_options = 0x00000020 | (0x00000001 if directory else 0x00000040)
         status = ctypes.WinDLL("ntdll").NtCreateFile(
             ctypes.byref(handle),
-            0x0012019F if create else 0x00120089,
+            desired_access,
             ctypes.byref(attributes),
             ctypes.byref(iosb),
             None,
             0,
             0x00000001 | 0x00000002 | 0x00000004,
             2 if create else 1,  # FILE_CREATE / FILE_OPEN
-            0x00000020 | 0x00000040,  # synchronous, non-directory
+            create_options,
             None,
             0,
         )
@@ -401,10 +556,9 @@ class _WindowsPinnedDirectory:
             if status & 0xFFFFFFFF in {0xC0000035, 0xC00000BA}:
                 raise FileExistsError(errno.EEXIST, "entry exists")
             raise OSError(errno.EIO, "relative NT file operation failed")
-        flags = os.O_BINARY | (os.O_RDWR if create else os.O_RDONLY)
         if handle.value is None:
             raise OSError(errno.EIO, "relative NT file operation returned no handle")
-        return msvcrt.open_osfhandle(handle.value, flags)
+        return handle.value
 
     @staticmethod
     def link_no_replace(file_fd: int, parent: int, target_name: str) -> None:

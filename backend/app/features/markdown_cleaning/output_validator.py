@@ -282,19 +282,27 @@ def _read_source_path(source_path: Path, expected_input_sha256: str) -> str:
             MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
             "输入路径不安全",
         )
-    descriptor = _open_path_nofollow(source_path)
     try:
-        metadata = os.fstat(descriptor)
-        _validate_regular_file(metadata)
-        with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            descriptor = -1
-            source_bytes = stream.read()
-    finally:
-        if descriptor >= 0:
-            try:
+        descriptor = _open_path_nofollow(source_path)
+        try:
+            metadata = os.fstat(descriptor)
+            _validate_regular_file(metadata)
+            with os.fdopen(descriptor, "rb", closefd=False) as stream:
+                descriptor = -1
+                source_bytes = stream.read()
+        finally:
+            if descriptor >= 0:
                 os.close(descriptor)
-            except OSError:
-                pass
+    except MarkdownCleaningProcessorError as exc:
+        raise MarkdownCleaningProcessorError(
+            MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
+            "输入路径不安全",
+        ) from exc
+    except OSError as exc:
+        raise MarkdownCleaningProcessorError(
+            MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
+            "输入读取失败",
+        ) from exc
     if hashlib.sha256(source_bytes).hexdigest() != expected_input_sha256:
         raise MarkdownCleaningProcessorError(
             MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
@@ -302,7 +310,7 @@ def _read_source_path(source_path: Path, expected_input_sha256: str) -> str:
         )
     try:
         return source_bytes.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as exc:
+    except UnicodeError as exc:
         raise MarkdownCleaningProcessorError(
             MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT,
             "输入不是有效 UTF-8",

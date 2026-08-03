@@ -32,3 +32,13 @@
 ## 环境边界
 
 仓库根 `backend/tests/conftest.py` 会无条件连接 PostgreSQL；当前 `.env` 的本机 PostgreSQL 凭据不可用。因此 Task3 纯文件系统单测使用 `--confcutdir=backend/tests/features` 隔离无关数据库 fixture，未声称数据库集成测试通过。
+
+## Round 2 安全复核修复
+
+- `prepare()` 后 source 若被修改，Publisher 会在复制完成后从临时文件描述符重新计算摘要和长度，并在 hard-link 前与 `PreparedMarkdownResult` 精确比对；不一致时删除本任务临时文件且不发布目标。
+- 输出根必须预先存在并在 Publisher 初始化时记录文件系统 identity；发布时重新固定 root handle 并核对 identity，防止 root 自身被替换。
+- 不再对完整目标路径调用 `mkdir(parents=True)` 或完整路径打开 parent。从 root handle 开始逐级处理每个祖先：POSIX 使用 `openat/mkdirat + O_DIRECTORY + O_NOFOLLOW`，Windows 使用相对 root/child handle 的 `NtCreateFile(FILE_DIRECTORY_FILE)` 创建或打开，随后才创建结果临时文件。
+- 新增中间祖先 `root/a/b` 的 `a` 在下钻期间被 junction 替换回归：结果仍写入已固定的原目录对象，outside 目录为空。
+- source 的 open/stat/read/decode 错误统一映射为安全的 `INVALID_MARKDOWN_INPUT`；missing、symlink/junction 不泄露真实路径。
+
+Round 2 RED：新增四项回归初次运行 `3 failed, 1 passed`；失败分别对应 source 篡改、中间祖先未固定、missing source 原生异常泄漏。Round 2 GREEN：Task3 两组完整测试 `44 passed in 3.65s`，Windows 多进程与两类 junction 竞态专项 `3 passed in 3.23s`。
