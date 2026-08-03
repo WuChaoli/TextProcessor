@@ -168,6 +168,18 @@ def test_http_input_failing_security_policy_is_rejected(
     assert error.value.code == "INPUT_URL_NOT_ALLOWED"
 
 
+def test_remote_url_with_signed_query_is_rejected_by_policy(tmp_path: Path) -> None:
+    output_root = tmp_path / "output"
+    output_root.mkdir()
+
+    with pytest.raises(MarkdownCleaningDomainError) as error:
+        build_policy(input_roots=(), output_roots=(output_root,)).validate_remote_url(
+            "https://files.internal/source.md?X-Amz-Signature=signed-token"
+        )
+
+    assert error.value.code == "INPUT_URL_NOT_ALLOWED"
+
+
 def test_remote_url_with_fragment_is_rejected_by_request_contract() -> None:
     with pytest.raises(ValueError, match="Markdown 文件路径"):
         build_request(
@@ -233,6 +245,36 @@ def test_existing_target_is_accepted_by_api_policy(tmp_path: Path) -> None:
     )
 
     assert validated.target_path == str(target.resolve())
+
+
+def test_target_through_symlink_escaping_output_root_is_rejected(
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    outside = tmp_path / "outside"
+    input_root.mkdir()
+    output_root.mkdir()
+    outside.mkdir()
+    source = input_root / "source.md"
+    source.write_text("text", encoding="utf-8")
+    linked_output = output_root / "linked-output"
+    try:
+        linked_output.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"creating an output symlink is unavailable: {exc}")
+
+    with pytest.raises(MarkdownCleaningDomainError) as error:
+        build_policy(
+            input_roots=(input_root,), output_roots=(output_root,)
+        ).validate_request(
+            build_request(
+                storage_path=str(source),
+                target_path=str(linked_output / "result.md"),
+            )
+        )
+
+    assert error.value.code == "OUTPUT_PATH_NOT_ALLOWED"
 
 
 def test_input_and_target_resolving_to_same_file_is_rejected(tmp_path: Path) -> None:

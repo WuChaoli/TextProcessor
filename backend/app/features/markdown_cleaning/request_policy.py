@@ -122,6 +122,7 @@ class MarkdownCleaningRequestPolicy:
             or hostname is None
             or parsed.username is not None
             or parsed.password is not None
+            or parsed.query
             or parsed.fragment
             or not self._is_markdown(Path(parsed.path))
         ):
