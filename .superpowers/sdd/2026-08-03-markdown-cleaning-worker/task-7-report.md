@@ -27,3 +27,9 @@
 - 正常和异常均进入 `finally`；只停止脚本记录的进程树、删除两个精确容器名和本次随机临时目录。
 - 强制中断 PowerShell 进程本身无法保证 `finally`，runbook 提供按输出 `runId` 的精确人工清理方式，禁止宽泛删除。
 - 不声称或启动 DataJuicer/Docling；fixture 只是经真实 HTTP 提交的输入与 expected oracle，不替代真实服务。
+
+## fix round1/5
+
+- publisher 新增 cleanup failure 回归：目标已 hardlink/fsync 后模拟 Windows `NtDeleteFile`（POSIX 对应 `unlink`）失败，仍返回成功且目标字节存在；只记录 `cleanup_stage=temporary` 的安全 warning，不记录异常或路径。link 提交前失败仍保持原 `PublicationSystemError`。
+- 脚本每启动一个 API/worker/beat launcher 就更新本次临时目录中的 `ownership.json`，记录 `runId/name/pid/apiPort`；初始进程全部启动后输出单行 `MARKDOWN_CLEANING_STACK_STARTED`。runbook 使用 manifest 精确 `taskkill /PID /T /F`，并按 PID 与 API port 双重核验，不使用宽泛进程名。
+- fresh 验证：publisher `23 passed, 4 warnings in 3.26s`，Ruff `All checks passed!`，PowerShell AST parser 无错误；真实全栈 exit `0`，`runId=8b32e9457546`，启动摘要记录 API port `59935` 与 launcher PIDs `20476,34204,23932`，最终耗时 `34.78s`、镜像仍为 `postgres:18` 与 `redis:7-alpine`。正常 `finally` 后该 runId 的容器、进程、端口、临时目录和 manifest 均无残留。

@@ -16,7 +16,9 @@ $stagingRoot = Join-Path $tempRoot "staging"
 $containerPrefix = "tp-md-stack-$runId"
 $dbContainer = "$containerPrefix-db"
 $redisContainer = "$containerPrefix-redis"
+$ownershipManifest = Join-Path $tempRoot "ownership.json"
 $processes = [System.Collections.Generic.List[System.Diagnostics.Process]]::new()
+$ownedProcessRecords = [System.Collections.Generic.List[object]]::new()
 $logs = [System.Collections.Generic.List[string]]::new()
 
 function Get-FreeTcpPort {
@@ -29,12 +31,20 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw "ASSERTION_FAILED: $Message" }
 }
 
-function Start-OwnedProcess([string]$Name, [string[]]$Arguments) {
+function Start-OwnedProcess([string]$Name, [string[]]$Arguments, [int]$ApiPort = 0) {
     $stdout = Join-Path $tempRoot "$Name.stdout.log"
     $stderr = Join-Path $tempRoot "$Name.stderr.log"
     $process = Start-Process -FilePath "uv" -ArgumentList $Arguments -WorkingDirectory $backendRoot `
         -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     $processes.Add($process)
+    $ownedProcessRecords.Add([pscustomobject]@{
+        runId = $runId
+        name = $Name
+        pid = $process.Id
+        apiPort = $ApiPort
+    })
+    ConvertTo-Json -Depth 3 -InputObject @($ownedProcessRecords) |
+        Set-Content -LiteralPath $ownershipManifest -Encoding utf8
     $logs.Add($stdout)
     $logs.Add($stderr)
     return $process
@@ -148,9 +158,10 @@ try {
         Pop-Location
     }
 
-    $api = Start-OwnedProcess "api" @("run", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$apiPort")
+    $api = Start-OwnedProcess "api" @("run", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "$apiPort") $apiPort
     $worker = Start-OwnedProcess "worker-1" @("run", "celery", "-A", "app.core.celery_app:celery_app", "worker", "-P", "solo", "-Q", "markdown_cleaning", "--loglevel=INFO", "--hostname=md-worker-$runId@%h")
     $beat = Start-OwnedProcess "beat" @("run", "celery", "-A", "app.core.celery_app:celery_app", "beat", "--loglevel=INFO", "--pidfile=", "--schedule", (Join-Path $tempRoot "beat-schedule"))
+    Write-Host "MARKDOWN_CLEANING_STACK_STARTED runId=$runId apiPort=$apiPort manifest=$ownershipManifest pids=$($ownedProcessRecords.pid -join ',')"
     $apiBase = "http://127.0.0.1:$apiPort"
     Wait-Http "$apiBase/api/v1/utils/health-check/"
     Start-Sleep -Seconds 3

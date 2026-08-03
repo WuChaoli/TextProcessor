@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import time
 from multiprocessing import get_context
@@ -178,6 +179,41 @@ def test_publish_success_removes_temporary_entry(tmp_path: Path) -> None:
     publisher.publish(publisher.prepare(source), output / "result.md", allow_recovery=False)
 
     assert [path.name for path in output.iterdir()] == ["result.md"]
+
+
+def test_publish_success_is_not_reversed_when_temporary_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("published", encoding="utf-8")
+    output = tmp_path / "output"
+    output.mkdir()
+    target = output / "result.md"
+    publisher = MarkdownCleaningResultPublisher(output_roots=(output,))
+
+    def fail_cleanup(*_args: object, **_kwargs: object) -> None:
+        raise OSError("sensitive cleanup failure", str(tmp_path / "secret.md"))
+
+    if os.name == "nt":
+        monkeypatch.setattr(
+            publisher_module._WindowsPinnedDirectory,
+            "delete_relative",
+            fail_cleanup,
+        )
+    else:
+        monkeypatch.setattr(publisher_module.os, "unlink", fail_cleanup)
+    with caplog.at_level(logging.WARNING):
+        result = publisher.publish(
+            publisher.prepare(source), target, allow_recovery=False
+        )
+
+    assert result.path == target
+    assert target.read_bytes() == b"published"
+    assert "markdown cleaning publish temporary cleanup failed" in caplog.text
+    assert caplog.records[-1].cleanup_stage == "temporary"  # type: ignore[attr-defined]
+    assert str(tmp_path) not in caplog.text
 
 
 def test_publish_recovers_only_when_digest_and_size_match(

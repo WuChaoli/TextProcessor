@@ -46,7 +46,21 @@ pwsh -NoProfile -File scripts/verify-markdown-cleaning-stack.ps1 -TimeoutSeconds
 - API 未就绪：检查失败摘要中的 `api.stderr.log`，常见原因是端口策略、依赖未安装或配置校验失败。
 - worker/beat 超时：检查 `worker-*.stderr.log`、`beat.stderr.log`，以及 Redis 容器日志；确认没有企业安全软件阻止本地子进程或回环端口。
 - migration 或认证失败：检查 PostgreSQL 容器日志和当前 backend Alembic head；脚本不会复用本机 5432 数据库。
-- 失败后核验残留：`docker ps -a --filter "name=tp-md-stack-"` 应为空；进程也不应包含该次输出的随机 `runId`。若 PowerShell 被强制杀死而来不及运行 `finally`，按摘要中的精确 `runId` 人工删除对应两个容器，勿使用宽泛清理命令。
+- 失败后核验残留：`docker ps -a --filter "name=tp-md-stack-"` 应为空；进程也不应包含该次输出的随机 `runId`。脚本在每次启动 API/worker/beat 后更新 `%TEMP%\textprocessor-md-<runId>\ownership.json`，记录精确 launcher PID、逻辑名称、API 端口和 runId，并输出 `MARKDOWN_CLEANING_STACK_STARTED` 摘要。
+
+若 PowerShell 本身被强制杀死而来不及运行 `finally`，使用启动摘要给出的 manifest 精确清理，不能按进程名宽泛终止：
+
+```powershell
+$manifest = 'C:\Users\me\AppData\Local\Temp\textprocessor-md-<runId>\ownership.json'
+$owned = Get-Content -Raw -LiteralPath $manifest | ConvertFrom-Json
+$owned | ForEach-Object { taskkill.exe /PID $_.pid /T /F }
+$owned | ForEach-Object { Get-Process -Id $_.pid -ErrorAction SilentlyContinue }
+$apiPort = ($owned | Where-Object name -eq 'api').apiPort
+Get-NetTCPConnection -LocalPort $apiPort -ErrorAction SilentlyContinue
+docker rm -f "tp-md-stack-<runId>-db" "tp-md-stack-<runId>-redis"
+```
+
+两个 PID/端口核验命令都应无输出；随后才可删除该精确临时目录。不要删除通配目录，也不要按 `python`、`uv`、`celery` 或 `uvicorn` 进程名清理，以免影响其他 checkout 或服务。
 
 ## 安全边界
 

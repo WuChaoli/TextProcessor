@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import errno
 import hashlib
+import logging
 import os
 import stat
 import uuid
@@ -18,6 +19,7 @@ _O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_BINARY = getattr(os, "O_BINARY", 0)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -414,6 +416,11 @@ class MarkdownCleaningResultPublisher:
                 os.unlink(name, dir_fd=parent_handle)
         except FileNotFoundError:
             pass
+        except OSError:
+            logger.warning(
+                "markdown cleaning publish temporary cleanup failed",
+                extra={"cleanup_stage": "temporary"},
+            )
 
     @staticmethod
     def _fsync_fd(descriptor: int) -> None:
