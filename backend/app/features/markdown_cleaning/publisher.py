@@ -35,6 +35,18 @@ class PublishedMarkdownResult:
     recovered: bool
 
 
+class InvalidPreparedOutputError(MarkdownCleaningProcessorError):
+    pass
+
+
+class OutputConflictError(MarkdownCleaningProcessorError):
+    pass
+
+
+class PublicationSystemError(MarkdownCleaningProcessorError):
+    pass
+
+
 class MarkdownCleaningResultPublisher:
     def __init__(
         self,
@@ -136,6 +148,8 @@ class MarkdownCleaningResultPublisher:
             )
         except MarkdownCleaningProcessorError:
             raise
+        except OSError as exc:
+            raise _publication_system_error("文件系统发布失败") from exc
         finally:
             if temporary_fd is not None:
                 self._remove_temporary(parent_handle, temporary_name, temporary_fd)
@@ -153,14 +167,14 @@ class MarkdownCleaningResultPublisher:
 
     def _normalize_target(self, target: Path) -> Path:
         if not target.is_absolute():
-            raise _output_conflict("目标路径不在允许输出目录")
+            raise _invalid_output("目标路径不在允许输出目录")
         normalized = Path(os.path.abspath(target))
         if normalized.suffix.lower() != ".md" or not any(
             normalized.is_relative_to(root) for root in self._output_roots
         ):
-            raise _output_conflict("目标路径不在允许输出目录")
+            raise _invalid_output("目标路径不在允许输出目录")
         if self._has_link_or_junction_component(normalized.parent):
-            raise _output_conflict("目标路径不在允许输出目录")
+            raise _invalid_output("目标路径不在允许输出目录")
         return normalized
 
     @staticmethod
@@ -185,12 +199,12 @@ class MarkdownCleaningResultPublisher:
         )
         expected_identity = self._root_identities[root]
         if expected_identity is None:
-            raise _output_conflict("允许输出根目录不存在")
+            raise _publication_system_error("允许输出根目录不存在")
         current: int | None = None
         try:
             current = type(self)._open_directory_no_follow(root)
             if self._descriptor_identity(current) != expected_identity:
-                raise _output_conflict("允许输出根目录已变化")
+                raise _publication_system_error("允许输出根目录已变化")
             for component in target.parent.relative_to(root).parts:
                 child = self._open_child_directory(current, component)
                 self._close_parent(current)
@@ -201,7 +215,7 @@ class MarkdownCleaningResultPublisher:
         except MarkdownCleaningProcessorError:
             raise
         except OSError as exc:
-            raise _output_conflict("目标目录无法安全打开") from exc
+            raise _publication_system_error("目标目录无法安全打开") from exc
         finally:
             if current is not None:
                 self._close_parent(current)
@@ -216,7 +230,7 @@ class MarkdownCleaningResultPublisher:
     @staticmethod
     def _open_child_directory(parent_handle: int, name: str) -> int:
         if name in {"", ".", ".."} or Path(name).name != name:
-            raise _output_conflict("目标目录组件不安全")
+            raise _invalid_output("目标目录组件不安全")
         if os.name == "nt":
             try:
                 return _WindowsPinnedDirectory.open_directory_relative(
@@ -389,7 +403,7 @@ class MarkdownCleaningResultPublisher:
         except OSError as exc:
             if exc.errno == errno.EEXIST:
                 raise FileExistsError(errno.EEXIST, "target exists") from exc
-            raise _output_conflict("文件系统不支持安全的无覆盖发布") from exc
+            raise _publication_system_error("文件系统发布失败") from exc
 
     @staticmethod
     def _remove_temporary(parent_handle: int, name: str, descriptor: int) -> None:
@@ -651,15 +665,19 @@ class _WindowsPinnedDirectory:
             raise ctypes.WinError(ctypes.get_last_error())
 
 
-def _invalid_output(message: str) -> MarkdownCleaningProcessorError:
-    return MarkdownCleaningProcessorError(
+def _invalid_output(message: str) -> InvalidPreparedOutputError:
+    return InvalidPreparedOutputError(
         MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
         message,
     )
 
 
-def _output_conflict(message: str) -> MarkdownCleaningProcessorError:
-    return MarkdownCleaningProcessorError(
+def _output_conflict(message: str) -> OutputConflictError:
+    return OutputConflictError(
         MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
         message,
     )
+
+
+def _publication_system_error(message: str) -> PublicationSystemError:
+    return PublicationSystemError(MarkdownCleaningErrorCode.INTERNAL_ERROR, message)

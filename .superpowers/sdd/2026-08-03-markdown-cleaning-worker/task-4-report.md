@@ -26,7 +26,7 @@
 
 ## GREEN 与质量门禁
 
-- 目标测试：`13 passed`。
+- 初次交付目标测试：`13 passed`；review fix round 1 后目标数量见本轮提交验证。
 - Ruff check：通过。
 - Ruff format check：通过。
 - Mypy（Task4 生产文件及最小兼容 Repository）：通过。
@@ -37,6 +37,14 @@
 
 ## 明确边界与后续接线要求
 
-- Task1 当前 `MarkdownCleaningTask` 表模型没有 `processing_deadline` 字段。Task4 通过 `MarkdownCleaningWorkerTask` 协议明确该权威字段，并用测试证明原样传入 processor，但没有越权修改 Task1 的表模型或迁移。Task5 接线前必须由 Task1/集成收口补齐持久字段、创建时赋值和迁移；否则真实 Repository 返回对象不能满足 Task4 协议。
+- Task5 必须用独立 DB session 组装 `lease_renewer` callback；禁止将 execute 使用的 Repository/Session 直接交给 heartbeat 线程。
 - 本任务没有实现 Celery task、注册或 beat schedule；它们属于 Task5。
-- worktree 根存在非本任务所有的 untracked `result.md`，本提交不纳入也不删除。
+
+## Review fix round 1
+
+- 新增 `processing_deadline` 持久列与 `20260803_03` 迁移；首次 claim 使用 `coalesce(existing_deadline, now + timeout)`，恢复重试不会延长 deadline。真实 SQLite Repository-backed execute 验证持久 deadline 被传给 processor。
+- 新增 `LeaseHeartbeat`：进入长同步 processor 前立即续租，随后后台周期续租；续租回调由 Task5 使用独立 DB session 组装，Task4 不在线程间共享 SQLAlchemy Session。任一续租失败均在 processor 返回后阻止校验和发布。
+- Publisher 细分 `OutputConflictError`、`InvalidPreparedOutputError` 与 `PublicationSystemError`。execute/recovery 仅将目标已存在或恢复摘要不匹配记为 `OUTPUT_CONFLICT`；prepared 无效记为 `INVALID_PROCESSOR_OUTPUT`；文件系统/能力错误保留为可重试异常。
+- Alembic offline upgrade SQL 已确认新增 timezone-aware 列与索引；downgrade SQL 已确认先删除索引再删除列。
+- Review fix round 1 的 Task1–4 隔离测试：`145 passed`；补充错误分类用例后最终目标数量以提交前 fresh run 为准。
+- 变更范围 Ruff、format、Mypy、Pyright、ty 均通过。全量 `app` 静态检查另暴露 structured extraction 的既有 suppressions/Celery typing，以及仓库既有 26 个 format drift；未越权修改。

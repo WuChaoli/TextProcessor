@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,6 +11,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel.pool import StaticPool
 
 from app.features.markdown_cleaning.input_validator import (
     MarkdownInputError,
@@ -29,10 +33,17 @@ from app.features.markdown_cleaning.processors.models import (
     ProcessorResult,
 )
 from app.features.markdown_cleaning.publisher import (
+    InvalidPreparedOutputError,
+    OutputConflictError,
     PreparedMarkdownResult,
+    PublicationSystemError,
     PublishedMarkdownResult,
 )
+from app.features.markdown_cleaning.repository import MarkdownCleaningTaskRepository
 from app.features.markdown_cleaning.staging import StagingLayout
+from app.features.markdown_cleaning.state_machine import MarkdownCleaningTaskStatus
+from app.features.markdown_cleaning.task_models import MarkdownCleaningTask
+from app.models import User
 
 NOW = datetime(2026, 8, 3, 8, tzinfo=UTC)
 
@@ -40,6 +51,17 @@ NOW = datetime(2026, 8, 3, 8, tzinfo=UTC)
 @pytest.fixture(scope="session", autouse=True)
 def db() -> None:
     """Override the backend-wide PostgreSQL fixture for this pure unit module."""
+
+
+@pytest.fixture
+def local_session() -> Generator[Session]:
+    _ = User
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
 
 
 @dataclass
@@ -53,7 +75,15 @@ class FakeRepository:
 
     def acquire_queued(self, task_id: uuid.UUID, **kwargs: Any) -> Any:
         self.calls.append(("claim", kwargs))
+        if self.task.processing_deadline is None:
+            self.task.processing_deadline = kwargs["now"] + timedelta(
+                seconds=kwargs["processing_timeout_seconds"]
+            )
         return self.task
+
+    def renew_lease(self, task_id: uuid.UUID, **kwargs: Any) -> bool:
+        self.calls.append(("renew", kwargs))
+        return not self.reject_progress
 
     def update_progress(self, task_id: uuid.UUID, **kwargs: Any) -> bool:
         self.calls.append(("progress", kwargs))
@@ -105,8 +135,9 @@ class FakeValidator:
 
 
 class FakeProcessor:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(self, error: Exception | None = None, delay: float = 0) -> None:
         self.error = error
+        self.delay = delay
         self.calls: list[tuple[Path, Path, datetime | None]] = []
 
     def process(
@@ -117,6 +148,8 @@ class FakeProcessor:
         deadline: datetime | None = None,
     ) -> ProcessorResult:
         self.calls.append((source_path, destination_path, deadline))
+        if self.delay:
+            time.sleep(self.delay)
         if self.error is not None:
             raise self.error
         destination_path.write_bytes(b"clean\n")
@@ -206,6 +239,11 @@ def build_orchestrator(
         staging_root=tmp_path / "staging",
         max_output_bytes=1024,
         lease_seconds=120,
+        processing_timeout_seconds=60,
+        lease_renewer=lambda task_id, token: repository.renew_lease(
+            task_id, lease_token=token, now=NOW, lease_seconds=120
+        ),
+        heartbeat_interval_seconds=0.01,
         clock=clock,
     )
     return orchestrator, repository, resolver, processor, publisher, task
@@ -220,7 +258,7 @@ def test_execute_runs_ordered_pipeline_with_deadline_and_safe_cleanup(
 
     orchestrator.execute(task.id)
 
-    assert [name for name, _ in repository.calls] == [
+    assert [name for name, _ in repository.calls if name != "renew"] == [
         "claim",
         "progress",
         "progress",
@@ -239,9 +277,92 @@ def test_execute_runs_ordered_pipeline_with_deadline_and_safe_cleanup(
     assert Path(task.target_path).read_bytes() == b"clean\n"
     assert not (tmp_path / "staging" / str(task.id)).exists()
     tokens = {
-        values["lease_token"] for name, values in repository.calls if name != "claim"
+        values["lease_token"]
+        for name, values in repository.calls
+        if name not in {"claim", "renew"}
     }
     assert tokens == {"lease-new"}
+
+
+def test_execute_claims_persisted_deadline_from_real_repository(
+    tmp_path: Path, local_session: Session
+) -> None:
+    task = MarkdownCleaningTask(
+        caller_id=uuid.uuid4(),
+        session_id="real-repository",
+        file_id="file",
+        request_fingerprint="d" * 64,
+        file_storage_path=str(tmp_path / "input.md"),
+        selected_input_type="local",
+        target_path=str(tmp_path / "output" / "result.md"),
+        status=MarkdownCleaningTaskStatus.QUEUED,
+        queued_at=NOW,
+    )
+    local_session.add(task)
+    local_session.commit()
+    repository = MarkdownCleaningTaskRepository(local_session)
+    resolver = FakeResolver(
+        lambda layout: SimpleNamespace(
+            path=layout.original_source,
+            size_bytes=7,
+            sha256=hashlib.sha256(b"source\n").hexdigest(),
+            source_suffix=".md",
+        )
+    )
+    processor = FakeProcessor()
+    orchestrator = MarkdownCleaningOrchestrator(
+        repository=repository,
+        resolver=resolver,
+        input_validator=FakeValidator(),
+        processor=processor,
+        output_validator=FakeOutputValidator(),
+        publisher=FakePublisher(),
+        staging_root=tmp_path / "staging",
+        max_output_bytes=1024,
+        lease_seconds=120,
+        processing_timeout_seconds=60,
+        lease_renewer=lambda _task_id, _token: True,
+        heartbeat_interval_seconds=0.01,
+        clock=lambda: NOW,
+    )
+
+    orchestrator.execute(task.id)
+
+    persisted = repository.get(task.id)
+    assert persisted is not None
+    assert persisted.processing_deadline in (
+        NOW + timedelta(seconds=60),
+        (NOW + timedelta(seconds=60)).replace(tzinfo=None),
+    )
+    assert processor.calls[0][2] == NOW + timedelta(seconds=60)
+
+
+def test_long_processor_renews_lease_during_synchronous_call(tmp_path: Path) -> None:
+    orchestrator, repository, _, processor, publisher, task = build_orchestrator(
+        tmp_path
+    )
+    processor.delay = 0.05
+    orchestrator.execute(task.id)
+    assert sum(name == "renew" for name, _ in repository.calls) >= 2
+    assert publisher.published
+
+
+def test_heartbeat_lease_loss_prevents_publish(tmp_path: Path) -> None:
+    orchestrator, repository, _, processor, publisher, task = build_orchestrator(
+        tmp_path
+    )
+    processor.delay = 0.05
+    renewals = 0
+
+    def lose_lease(*_args: Any, **_kwargs: Any) -> bool:
+        nonlocal renewals
+        renewals += 1
+        return renewals < 2
+
+    repository.renew_lease = lose_lease  # type: ignore[method-assign]
+    with pytest.raises(LeaseLostError):
+        orchestrator.execute(task.id)
+    assert publisher.published == []
 
 
 def test_expired_task_does_not_touch_source_or_destination(tmp_path: Path) -> None:
@@ -310,7 +431,7 @@ def test_deterministic_errors_are_terminal(
 
 def test_publish_conflict_is_terminal_output_conflict(tmp_path: Path) -> None:
     orchestrator, repository, _, _, publisher, task = build_orchestrator(tmp_path)
-    publisher.error = MarkdownCleaningProcessorError(
+    publisher.error = OutputConflictError(
         MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT, "exists"
     )
 
@@ -318,6 +439,24 @@ def test_publish_conflict_is_terminal_output_conflict(tmp_path: Path) -> None:
 
     assert repository.calls[-1][0] == "failed"
     assert repository.calls[-1][1]["error_code"] == "OUTPUT_CONFLICT"
+
+
+def test_invalid_prepared_is_terminal_invalid_output(tmp_path: Path) -> None:
+    orchestrator, repository, _, _, publisher, task = build_orchestrator(tmp_path)
+    publisher.error = InvalidPreparedOutputError(
+        MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT, "invalid prepared"
+    )
+    orchestrator.execute(task.id)
+    assert repository.calls[-1][1]["error_code"] == "INVALID_PROCESSOR_OUTPUT"
+
+
+def test_publication_system_error_is_retryable(tmp_path: Path) -> None:
+    orchestrator, _, _, _, publisher, task = build_orchestrator(tmp_path)
+    publisher.error = PublicationSystemError(
+        MarkdownCleaningErrorCode.INTERNAL_ERROR, "filesystem unavailable"
+    )
+    with pytest.raises(RetryableWorkerError):
+        orchestrator.execute(task.id)
 
 
 def test_transient_error_is_retryable_only_below_attempt_limit(tmp_path: Path) -> None:

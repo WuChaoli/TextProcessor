@@ -5,6 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
 from typing import Protocol
 
 from app.features.markdown_cleaning.input_validator import (
@@ -18,7 +19,10 @@ from app.features.markdown_cleaning.processors.errors import (
 from app.features.markdown_cleaning.processors.models import ProcessorResult
 from app.features.markdown_cleaning.processors.protocol import MarkdownCleaningProcessor
 from app.features.markdown_cleaning.publisher import (
+    InvalidPreparedOutputError,
+    OutputConflictError,
     PreparedMarkdownResult,
+    PublicationSystemError,
     PublishedMarkdownResult,
 )
 from app.features.markdown_cleaning.staging import StagingLayout
@@ -33,9 +37,51 @@ class RetryableWorkerError(RuntimeError):
     """A transient failure that the bounded task runner may retry."""
 
 
+class LeaseHeartbeat:
+    """Renew a lease through a callback backed by an independent DB session."""
+
+    def __init__(self, renew: Callable[[], bool], interval_seconds: float) -> None:
+        if interval_seconds <= 0:
+            raise ValueError("heartbeat interval 必须大于 0")
+        self._renew = renew
+        self._interval = interval_seconds
+        self._stop = Event()
+        self._lost = Event()
+        self._thread: Thread | None = None
+
+    def __enter__(self) -> LeaseHeartbeat:
+        if not self._renew():
+            raise LeaseLostError("租约续期失败")
+        self._thread = Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        if self._lost.is_set():
+            raise LeaseLostError("处理期间租约已失效")
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                renewed = self._renew()
+            except Exception:
+                renewed = False
+            if not renewed:
+                self._lost.set()
+                self._stop.set()
+
+
 class _Repository(Protocol):
     def acquire_queued(
-        self, task_id: uuid.UUID, *, now: datetime, lease_seconds: int
+        self,
+        task_id: uuid.UUID,
+        *,
+        now: datetime,
+        lease_seconds: int,
+        processing_timeout_seconds: int,
     ) -> MarkdownCleaningWorkerTask | None: ...
 
     def update_progress(self, task_id: uuid.UUID, **kwargs: object) -> bool: ...
@@ -116,6 +162,9 @@ class MarkdownCleaningOrchestrator:
         staging_root: Path,
         max_output_bytes: int,
         lease_seconds: int,
+        processing_timeout_seconds: int,
+        lease_renewer: Callable[[uuid.UUID, str], bool],
+        heartbeat_interval_seconds: float,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._repository = repository
@@ -127,11 +176,17 @@ class MarkdownCleaningOrchestrator:
         self._staging_root = staging_root
         self._max_output_bytes = max_output_bytes
         self._lease_seconds = lease_seconds
+        self._processing_timeout_seconds = processing_timeout_seconds
+        self._lease_renewer = lease_renewer
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._clock = clock
 
     def execute(self, task_id: uuid.UUID) -> None:
         task = self._repository.acquire_queued(
-            task_id, now=self._now(), lease_seconds=self._lease_seconds
+            task_id,
+            now=self._now(),
+            lease_seconds=self._lease_seconds,
+            processing_timeout_seconds=self._processing_timeout_seconds,
         )
         if task is None:
             return
@@ -141,7 +196,14 @@ class MarkdownCleaningOrchestrator:
         layout = StagingLayout.for_task(self._staging_root, task.id)
         terminal = False
         try:
-            if task.processing_deadline <= self._now():
+            if task.processing_deadline is None:
+                raise RetryableWorkerError("任务缺少处理 deadline")
+            processing_deadline = task.processing_deadline
+            if processing_deadline.tzinfo is None:
+                processing_deadline = processing_deadline.replace(tzinfo=UTC)
+            else:
+                processing_deadline = processing_deadline.astimezone(UTC)
+            if processing_deadline <= self._now():
                 self._fail(task, lease_token, "PROCESSING_TIMEOUT", "处理超时")
                 terminal = True
                 return
@@ -170,11 +232,15 @@ class MarkdownCleaningOrchestrator:
                     now=self._now(),
                 )
             )
-            result = self._processor.process(
-                validated.processor_path,
-                layout.result,
-                deadline=task.processing_deadline,
-            )
+            with LeaseHeartbeat(
+                lambda: self._lease_renewer(task.id, lease_token),
+                self._heartbeat_interval_seconds,
+            ):
+                result = self._processor.process(
+                    validated.processor_path,
+                    layout.result,
+                    deadline=processing_deadline,
+                )
             result = self._output_validator.validate(
                 result,
                 expected_input_sha256=validated.processor_sha256,
@@ -182,7 +248,7 @@ class MarkdownCleaningOrchestrator:
                 expected_output_path=layout.result,
                 source_path=validated.processor_path,
             )
-            if task.processing_deadline <= self._now():
+            if processing_deadline <= self._now():
                 self._fail(task, lease_token, "PROCESSING_TIMEOUT", "处理超时")
                 terminal = True
                 return
@@ -220,10 +286,18 @@ class MarkdownCleaningOrchestrator:
                 published = self._publisher.publish(
                     prepared, Path(task.target_path), allow_recovery=False
                 )
-            except MarkdownCleaningProcessorError:
+            except OutputConflictError:
                 self._fail(task, lease_token, "OUTPUT_CONFLICT", "输出目标冲突")
                 terminal = True
                 return
+            except InvalidPreparedOutputError as exc:
+                self._fail(
+                    task, lease_token, "INVALID_PROCESSOR_OUTPUT", exc.safe_message
+                )
+                terminal = True
+                return
+            except PublicationSystemError as exc:
+                raise RetryableWorkerError("发布临时失败") from exc
             try:
                 self._conditional(
                     self._repository.mark_succeeded(
@@ -365,10 +439,18 @@ class MarkdownCleaningRecovery:
                     published = self._publisher.publish(
                         prepared, Path(task.target_path), allow_recovery=True
                     )
-                except Exception:
+                except OutputConflictError:
                     self._repository.reconcile_prepared(
                         task.id, now=now, outcome="output_conflict"
                     )
+                    continue
+                except InvalidPreparedOutputError:
+                    self._repository.reconcile_prepared(
+                        task.id, now=now, outcome="invalid_output"
+                    )
+                    continue
+                except PublicationSystemError:
+                    errors += 1
                     continue
                 self._repository.reconcile_prepared(
                     task.id,

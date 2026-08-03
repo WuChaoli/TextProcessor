@@ -13,9 +13,17 @@ from app.features.markdown_cleaning.processors.errors import (
     MarkdownCleaningProcessorError,
 )
 from app.features.markdown_cleaning.publisher import (
+    InvalidPreparedOutputError,
     MarkdownCleaningResultPublisher,
+    OutputConflictError,
     PreparedMarkdownResult,
+    PublicationSystemError,
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def db() -> None:
+    """Override the backend-wide PostgreSQL fixture for this pure unit module."""
 
 
 def _publish_worker(
@@ -94,7 +102,7 @@ def test_publish_rejects_non_markdown_target_path(
     prepared = publisher.prepare(source)
     target = tmp_path / "result.txt"
 
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
+    with pytest.raises(InvalidPreparedOutputError) as error:
         publisher.publish(prepared, target, allow_recovery=False)
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
@@ -108,7 +116,7 @@ def test_publish_rejects_relative_target_even_if_filename_is_markdown(
     publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path,))
     prepared = publisher.prepare(source)
 
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
+    with pytest.raises(InvalidPreparedOutputError) as error:
         publisher.publish(prepared, Path("result.md"), allow_recovery=False)
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
@@ -127,11 +135,35 @@ def test_publish_rejects_existing_target_without_recovery(
     publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path / "output",))
     prepared = publisher.prepare(source)
 
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
+    with pytest.raises(OutputConflictError) as error:
         publisher.publish(prepared, target, allow_recovery=False)
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
     assert "已存在" in error.value.safe_message
+
+
+def test_prepare_invalid_utf8_has_distinct_deterministic_type(tmp_path: Path) -> None:
+    source = tmp_path / "bad.md"
+    source.write_bytes(b"\xff")
+    publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path,))
+    with pytest.raises(InvalidPreparedOutputError):
+        publisher.prepare(source)
+
+
+def test_publish_filesystem_failure_has_retryable_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("ok", encoding="utf-8")
+    publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path,))
+    prepared = publisher.prepare(source)
+
+    def fail_link(*_args: object) -> None:
+        raise OSError("io")
+
+    monkeypatch.setattr(publisher, "_link_no_replace", fail_link)
+    with pytest.raises(PublicationSystemError):
+        publisher.publish(prepared, tmp_path / "out.md", allow_recovery=False)
 
 
 def test_publish_recovers_only_when_digest_and_size_match(
@@ -262,10 +294,10 @@ def test_publish_fails_when_hardlink_is_unavailable(
     else:
         monkeypatch.setattr(os, "link", _unsupported_link)
 
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
+    with pytest.raises(PublicationSystemError) as error:
         publisher.publish(prepared, target, allow_recovery=False)
 
-    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert error.value.code is MarkdownCleaningErrorCode.INTERNAL_ERROR
 
 
 def test_publish_uses_directory_fd_for_hardlink(
@@ -377,10 +409,10 @@ def test_publish_rejects_target_parent_open_failure(
         _open_directory_no_follow,
     )
 
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
+    with pytest.raises(PublicationSystemError) as error:
         publisher.publish(prepared, target, allow_recovery=False)
 
-    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert error.value.code is MarkdownCleaningErrorCode.INTERNAL_ERROR
 
 
 def test_publish_propagates_unexpected_fsync_failure(
@@ -396,7 +428,7 @@ def test_publish_propagates_unexpected_fsync_failure(
         raise OSError(5, "unexpected fsync failure")
 
     monkeypatch.setattr(publisher_module.os, "fsync", _fail_fsync)
-    with pytest.raises(OSError, match="unexpected fsync failure"):
+    with pytest.raises(PublicationSystemError):
         publisher.publish(prepared, tmp_path / "result.md", allow_recovery=False)
 
 
@@ -456,7 +488,7 @@ def test_publish_rejects_source_tampering_after_prepare(
         return original_copy(*args, **kwargs)
 
     monkeypatch.setattr(publisher, "_copy_to_exclusive_temporary", _tamper_then_copy)
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
+    with pytest.raises(InvalidPreparedOutputError) as error:
         publisher.publish(prepared, output / "result.md", allow_recovery=False)
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
@@ -536,11 +568,11 @@ def test_publish_rejects_junction_swapped_before_first_descendant_open(
         return original_open_child(parent_handle, name)
 
     monkeypatch.setattr(publisher, "_open_child_directory", _swap_before_opening_a)
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
+    with pytest.raises(PublicationSystemError) as error:
         publisher.publish(
             prepared, root / "a" / "b" / "result.md", allow_recovery=False
         )
 
-    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
+    assert error.value.code is MarkdownCleaningErrorCode.INTERNAL_ERROR
     assert not list(outside.iterdir())
     assert not (moved / "b").exists()

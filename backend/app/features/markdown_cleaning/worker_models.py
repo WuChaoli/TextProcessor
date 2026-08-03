@@ -17,7 +17,7 @@ class MarkdownCleaningProcessingPhase(StrEnum):
 class MarkdownCleaningWorkerTask(Protocol):
     id: uuid.UUID
     lease_token: str | None
-    processing_deadline: datetime
+    processing_deadline: datetime | None
     target_path: str
     attempt_count: int
     max_attempts: int

@@ -13,6 +13,12 @@ from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
 from app.features.markdown_cleaning.orchestration import MarkdownCleaningRecovery
+from app.features.markdown_cleaning.processors.errors import MarkdownCleaningErrorCode
+from app.features.markdown_cleaning.publisher import (
+    InvalidPreparedOutputError,
+    OutputConflictError,
+    PublicationSystemError,
+)
 from app.features.markdown_cleaning.repository import MarkdownCleaningTaskRepository
 from app.features.markdown_cleaning.state_machine import MarkdownCleaningTaskStatus
 from app.features.markdown_cleaning.task_models import MarkdownCleaningTask
@@ -86,7 +92,10 @@ class FakePublisher:
     def publish(self, prepared: Any, target: Any, *, allow_recovery: bool) -> Any:
         assert allow_recovery is True
         if "conflict" in str(target):
-            raise RuntimeError("digest mismatch")
+            raise OutputConflictError(
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT,
+                "digest mismatch",
+            )
         return SimpleNamespace(sha256=prepared.sha256)
 
 
@@ -130,6 +139,54 @@ def test_recovery_batches_are_isolated_per_item_and_category(tmp_path: Path) -> 
     assert result.queued_errors == 1
     assert result.running_errors == 0
     assert result.prepared_errors == 0
+
+
+def test_recovery_retries_publication_system_error_without_marking_conflict(
+    tmp_path: Path,
+) -> None:
+    prepared = task(tmp_path, "prepared-system")
+    repository = FakeRecoveryRepository([], [], [prepared])
+
+    class SystemFailurePublisher(FakePublisher):
+        def publish(self, prepared: Any, target: Any, *, allow_recovery: bool) -> Any:
+            raise PublicationSystemError(
+                MarkdownCleaningErrorCode.INTERNAL_ERROR, "filesystem unavailable"
+            )
+
+    result = MarkdownCleaningRecovery(
+        repository=repository,
+        dispatcher=FakeDispatcher(),
+        publisher=SystemFailurePublisher(),
+        queue_recovery_interval_seconds=30,
+        batch_size=10,
+        clock=lambda: NOW,
+    ).recover_batch()
+
+    assert result.prepared_errors == 1
+    assert repository.recovered == []
+
+
+def test_recovery_marks_invalid_prepared_as_invalid_output(tmp_path: Path) -> None:
+    prepared = task(tmp_path, "prepared-invalid")
+    repository = FakeRecoveryRepository([], [], [prepared])
+
+    class InvalidPublisher(FakePublisher):
+        def publish(self, prepared: Any, target: Any, *, allow_recovery: bool) -> Any:
+            raise InvalidPreparedOutputError(
+                MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT, "bad prepared"
+            )
+
+    result = MarkdownCleaningRecovery(
+        repository=repository,
+        dispatcher=FakeDispatcher(),
+        publisher=InvalidPublisher(),
+        queue_recovery_interval_seconds=30,
+        batch_size=10,
+        clock=lambda: NOW,
+    ).recover_batch()
+
+    assert result.prepared_errors == 0
+    assert (prepared.id, "invalid_output", None) in repository.recovered
 
 
 def test_repository_separates_expired_running_from_prepared_recovery(
@@ -184,6 +241,9 @@ def test_repository_reconciles_prepared_only_while_lease_is_expired(
 
 
 def _stored_task(name: str, **values: Any) -> MarkdownCleaningTask:
+    status = values.pop("status", MarkdownCleaningTaskStatus.RUNNING)
+    lease_token = values.pop("lease_token", None)
+    lease_expires_at = values.pop("lease_expires_at", NOW - timedelta(seconds=1))
     return MarkdownCleaningTask(
         caller_id=uuid.uuid4(),
         session_id="session",
@@ -192,9 +252,48 @@ def _stored_task(name: str, **values: Any) -> MarkdownCleaningTask:
         file_storage_path="/input/source.md",
         selected_input_type="local",
         target_path=f"/output/{name}.md",
-        status=MarkdownCleaningTaskStatus.RUNNING,
+        status=status,
         attempt_count=1,
         max_attempts=3,
-        lease_expires_at=NOW - timedelta(seconds=1),
+        lease_token=lease_token,
+        lease_expires_at=lease_expires_at,
         **values,
     )
+
+
+def test_first_claim_persists_deadline_and_reclaim_does_not_extend_it(
+    session: Session,
+) -> None:
+    queued = _stored_task(
+        "deadline",
+        status=MarkdownCleaningTaskStatus.QUEUED,
+        lease_token=None,
+        lease_expires_at=None,
+        processing_deadline=None,
+    )
+    session.add(queued)
+    session.commit()
+    repository = MarkdownCleaningTaskRepository(session)
+    first = repository.acquire_queued(
+        queued.id, now=NOW, lease_seconds=10, processing_timeout_seconds=60
+    )
+    assert first is not None
+    original_deadline = first.processing_deadline
+    assert original_deadline in (
+        NOW + timedelta(seconds=60),
+        (NOW + timedelta(seconds=60)).replace(tzinfo=None),
+    )
+    assert first.lease_token is not None
+    assert repository.recover_expired_running(
+        queued.id,
+        expected_lease_token=first.lease_token,
+        now=NOW + timedelta(seconds=11),
+    )
+    second = repository.acquire_queued(
+        queued.id,
+        now=NOW + timedelta(seconds=12),
+        lease_seconds=10,
+        processing_timeout_seconds=60,
+    )
+    assert second is not None
+    assert second.processing_deadline == original_deadline

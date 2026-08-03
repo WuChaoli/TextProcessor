@@ -209,8 +209,11 @@ class MarkdownCleaningTaskRepository:
         *,
         now: datetime,
         lease_seconds: int,
+        processing_timeout_seconds: int = 300,
     ) -> MarkdownCleaningTask | None:
         _require_aware_utc_datetime(now, field_name="now")
+        if processing_timeout_seconds <= 0:
+            raise ValueError("processing_timeout_seconds 必须大于 0")
         token = str(uuid.uuid7())
         statement = (
             update(MarkdownCleaningTask)
@@ -226,6 +229,10 @@ class MarkdownCleaningTaskRepository:
                 started_at=func.coalesce(col(MarkdownCleaningTask.started_at), now),
                 lease_token=token,
                 lease_expires_at=now + timedelta(seconds=lease_seconds),
+                processing_deadline=func.coalesce(
+                    col(MarkdownCleaningTask.processing_deadline),
+                    now + timedelta(seconds=processing_timeout_seconds),
+                ),
                 processing_phase=MarkdownCleaningProcessingPhase.CLAIMING_TASK,
                 progress_percent=10,
                 updated_at=now,
@@ -555,7 +562,7 @@ class MarkdownCleaningTaskRepository:
         output_sha256: str | None = None,
     ) -> bool:
         _require_aware_utc_datetime(now, field_name="now")
-        if outcome not in {"succeeded", "output_conflict"}:
+        if outcome not in {"succeeded", "output_conflict", "invalid_output"}:
             raise ValueError("不支持的 prepared 恢复结果")
         conditions = [
             col(MarkdownCleaningTask.id) == task_id,
@@ -586,8 +593,14 @@ class MarkdownCleaningTaskRepository:
             values = {
                 "status": MarkdownCleaningTaskStatus.FAILED,
                 "processing_phase": MarkdownCleaningProcessingPhase.FAILED,
-                "error_code": "OUTPUT_CONFLICT",
-                "error_message": "输出目标冲突",
+                "error_code": (
+                    "OUTPUT_CONFLICT"
+                    if outcome == "output_conflict"
+                    else "INVALID_PROCESSOR_OUTPUT"
+                ),
+                "error_message": (
+                    "输出目标冲突" if outcome == "output_conflict" else "待发布结果无效"
+                ),
                 "finished_at": now,
             }
         values.update(lease_token=None, lease_expires_at=None, updated_at=now)

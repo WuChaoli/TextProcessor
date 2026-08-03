@@ -71,6 +71,11 @@ class MarkdownCleaningTask(SQLModel, table=True):
         sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
         index=True,
     )
+    processing_deadline: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+        index=True,
+    )
     staging_path: str | None = Field(default=None, max_length=4096)
     input_sha256: str | None = Field(default=None, max_length=64)
     prepared_output_sha256: str | None = Field(default=None, max_length=64)
