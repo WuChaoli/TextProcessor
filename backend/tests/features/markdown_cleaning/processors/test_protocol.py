@@ -101,10 +101,27 @@ def test_result_and_span_models_are_immutable_and_have_all_summary_fields() -> N
         ProcessorResult(
             output_path=Path("/tmp/output.md"),
             input_sha256="00" * 32,
+            output_sha256="nothex" * 10 + "0",
+            contract_version="markdown_cleaning_v1",
+            summary=summary,
+        )
+    with pytest.raises(ValueError):
+        ProcessorResult(
+            output_path=Path("/tmp/output.md"),
+            input_sha256="00" * 32,
             output_sha256="ff" * 32,
             contract_version="markdown_cleaning_v1",
             summary=summary,
             input_bytes=-1,
+        )
+    with pytest.raises(ValueError):
+        ProcessorResult(
+            output_path=Path("/tmp/output.md"),
+            input_sha256="00" * 32,
+            output_sha256="ff" * 32,
+            contract_version="markdown_cleaning_v1",
+            summary=summary,
+            output_bytes=-1,
         )
 
 
@@ -131,6 +148,11 @@ def test_stable_error_codes_and_exception_mapping() -> None:
 
 
 def test_map_processing_exception_exposes_stage_code_without_leaking_exception_message() -> None:
+    default_invalid_input = map_processing_exception(ValueError("user_secret=abc123"))
+    assert default_invalid_input.code is MarkdownCleaningErrorCode.INVALID_MARKDOWN_INPUT
+    assert "abc123" not in default_invalid_input.safe_message
+    assert "user_secret" not in default_invalid_input.safe_message
+
     secret_exception = ValueError("user_secret=abc123")
     for code in (
         MarkdownCleaningErrorCode.MARKDOWN_PARSE_FAILED,

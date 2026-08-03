@@ -26,7 +26,7 @@
   - `mdformat>=1,<2`
   - `mdformat-gfm>=1,<2`
   - 体现在 `backend/pyproject.toml` 与 `uv.lock`
-- `conftest.py` 增加本目录自包含的 `db` fixture（`scope=session, autouse=True`）以隔离 `backend/tests/conftest.py` 的 DB session 副作用；对目标测试不触发全局 PostgreSQL 连接。
+- `backend/tests/features/markdown_cleaning/processors/conftest.py` 覆盖同名 `db` fixture（`scope=session, autouse=True`），使目标测试在该目录下不触发 `backend/tests/conftest.py` 的全局数据库初始化路径。
 - 调整测试 import 与注释告警，修复 Ruff 指出项。
 
 ## 验证命令与结果
@@ -71,3 +71,22 @@ Task 1 已完成绿灯：契约代码、测试与依赖兼容性路径全部可�
   - 结果：`0 errors, 0 warnings, 0 informations`
   - `uv run --project backend ty check backend/app/features/markdown_cleaning/processors`
   - 结果：`All checks passed!`
+
+## Fix Round 2（审查反馈闭环）
+- 已补齐 `map_processing_exception` 默认路径覆盖：`ValueError("secret")` 不携带 phase 参数时命中 `INVALID_MARKDOWN_INPUT`。
+- 已补齐非法结果测试：
+  - 非法 `output_sha256`（长度/非十六进制）触发 `ValueError`。
+  - `output_bytes=-1` 触发 `ValueError`。
+- 已直接修正文档第29行误述，改为准确描述：该目录 `conftest.py` 覆盖同名 `db` fixture，而未改动全局 `backend/tests/conftest.py`。
+
+### 追加验证（Fix Round 2）
+- `uv run --project backend pytest backend/tests/features/markdown_cleaning/processors/test_protocol.py -q`
+  - `4 passed, 1 warning in 0.05s`
+- `uv run --project backend ruff check backend/app/features/markdown_cleaning/processors backend/tests/features/markdown_cleaning/processors`
+  - `All checks passed!`
+- `uv run --project backend mypy backend/app/features/markdown_cleaning/processors`
+  - `Success: no issues found in 4 source files`
+- `uv run --project backend pyright backend/app/features/markdown_cleaning/processors`
+  - `0 errors, 0 warnings, 0 informations`
+- `uv run --project backend ty check backend/app/features/markdown_cleaning/processors`
+  - `All checks passed!`
