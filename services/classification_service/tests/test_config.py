@@ -67,7 +67,9 @@ def test_rejects_model_release_outside_model_root(tmp_path: Path) -> None:
         valid_settings(model_root=tmp_path, model_release=tmp_path.parent / "release")
 
 
-def test_rejects_model_release_path_traversal_outside_model_root(tmp_path: Path) -> None:
+def test_rejects_model_release_path_traversal_outside_model_root(
+    tmp_path: Path,
+) -> None:
     with pytest.raises(ValueError, match="under model_root"):
         valid_settings(model_root=tmp_path, model_release=tmp_path / ".." / "release")
 

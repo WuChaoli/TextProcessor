@@ -18,7 +18,9 @@ class ClassificationResult:
     def __post_init__(self) -> None:
         object.__setattr__(self, "tags", tuple(self.tags))
         if len(self.tags) != 4 or any(tag == "" for tag in self.tags):
-            raise DomainValidationError("classification result must contain four non-empty tags")
+            raise DomainValidationError(
+                "classification result must contain four non-empty tags"
+            )
         if not self.release_id:
             raise DomainValidationError("release id must not be empty")
         ModelPrediction(self.tags[0], self.top_triple_confidence)

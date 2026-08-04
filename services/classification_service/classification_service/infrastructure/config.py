@@ -22,9 +22,7 @@ class Settings(BaseSettings):
     inference_workers: Literal[1] = 1
     active_inference_limit: Literal[1] = 1
     waiting_queue_limit: int = Field(default=8, gt=0)
-    inference_timeout_seconds: float = Field(
-        default=15.0, gt=0, allow_inf_nan=False
-    )
+    inference_timeout_seconds: float = Field(default=15.0, gt=0, allow_inf_nan=False)
     minimum_free_gpu_mib: int = Field(default=8192, gt=0)
 
     @model_validator(mode="after")
@@ -38,7 +36,9 @@ class Settings(BaseSettings):
         try:
             self.model_release.resolve().relative_to(self.model_root.resolve())
         except ValueError as error:
-            raise ValueError("model_release must be located under model_root") from error
+            raise ValueError(
+                "model_release must be located under model_root"
+            ) from error
         return self
 
 
