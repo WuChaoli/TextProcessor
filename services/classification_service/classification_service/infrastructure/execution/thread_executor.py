@@ -25,5 +25,9 @@ class ThreadInferenceExecutor:
     async def run(self, operation: Callable[[], T]) -> T:
         return await self._admission.run(lambda: self._executor.submit(operation))
 
+    def stop_admission(self) -> None:
+        self._admission.stop_admission()
+
     def shutdown(self) -> None:
+        self.stop_admission()
         self._executor.shutdown(wait=True, cancel_futures=False)

@@ -10,6 +10,12 @@ class InferenceCapacityExceeded(RuntimeError):
     code = "INFERENCE_CAPACITY_EXCEEDED"
 
 
+class InferenceAdmissionClosed(RuntimeError):
+    """Raised when inference admission has stopped for service shutdown."""
+
+    code = "INFERENCE_ADMISSION_CLOSED"
+
+
 class InferenceExecutor(Protocol):
     """Run one complete blocking inference pipeline outside the event loop."""
 

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from classification_service.application.ports.inference_executor import (
+    InferenceAdmissionClosed,
     InferenceCapacityExceeded,
 )
 
@@ -29,8 +30,12 @@ class AdmissionController:
         self._timeout_seconds = timeout_seconds
         self._active: _AdmissionRequest[object] | None = None
         self._waiting: deque[_AdmissionRequest[object]] = deque()
+        self._closed = False
 
     async def run[T](self, submit: Callable[[], Future[T]]) -> T:
+        if self._closed:
+            raise InferenceAdmissionClosed
+
         loop = asyncio.get_running_loop()
         request = _AdmissionRequest(
             submit=submit,
@@ -55,6 +60,16 @@ class AdmissionController:
         except (TimeoutError, asyncio.CancelledError):
             self._abandon(erased_request)
             raise
+
+    def stop_admission(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        while self._waiting:
+            request = self._waiting.popleft()
+            request.state = "finished"
+            if not request.response.done():
+                request.response.set_exception(InferenceAdmissionClosed())
 
     def _start(self, request: _AdmissionRequest[object]) -> None:
         if request.loop.time() >= request.deadline:
@@ -104,6 +119,8 @@ class AdmissionController:
         self._start_next()
 
     def _start_next(self) -> None:
+        if self._closed:
+            return
         while self._active is None and self._waiting:
             request = self._waiting.popleft()
             if request.state == "waiting":

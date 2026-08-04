@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from classification_service.application.ports.inference_executor import (
+    InferenceAdmissionClosed,
     InferenceCapacityExceeded,
 )
 from classification_service.infrastructure.execution.admission_controller import (
@@ -152,6 +153,89 @@ def test_cancelling_queued_request_removes_waiter() -> None:
     _run(scenario())
 
 
+def test_stop_rejects_new_requests_with_a_stable_error() -> None:
+    async def scenario() -> None:
+        controller = AdmissionController(waiting_limit=8, timeout_seconds=1.0)
+        controller.stop_admission()
+
+        with pytest.raises(InferenceAdmissionClosed) as caught:
+            await controller.run(lambda: Future[int]())
+
+        assert caught.value.code == "INFERENCE_ADMISSION_CLOSED"
+
+    _run(scenario())
+
+
+def test_stop_rejects_queued_requests_without_submitting_them() -> None:
+    async def scenario() -> None:
+        controller = AdmissionController(waiting_limit=8, timeout_seconds=1.0)
+        active_future: Future[int] = Future()
+        queued_futures = [Future[int](), Future[int]()]
+        submitted: list[str] = []
+
+        def submit(name: str, future: Future[int]) -> Callable[[], Future[int]]:
+            def controlled_submit() -> Future[int]:
+                submitted.append(name)
+                return future
+
+            return controlled_submit
+
+        active = asyncio.create_task(controller.run(submit("active", active_future)))
+        await asyncio.sleep(0)
+        queued = [
+            asyncio.create_task(controller.run(submit(f"queued-{index}", future)))
+            for index, future in enumerate(queued_futures)
+        ]
+        await asyncio.sleep(0)
+
+        controller.stop_admission()
+
+        for request in queued:
+            with pytest.raises(InferenceAdmissionClosed):
+                await request
+        assert submitted == ["active"]
+
+        active_future.set_result(1)
+        assert await active == 1
+
+    _run(scenario())
+
+
+def test_active_request_can_complete_after_stop() -> None:
+    async def scenario() -> None:
+        controller = AdmissionController(waiting_limit=8, timeout_seconds=1.0)
+        active_future: Future[int] = Future()
+        active = asyncio.create_task(controller.run(lambda: active_future))
+        await asyncio.sleep(0)
+
+        controller.stop_admission()
+        active_future.set_result(42)
+
+        assert await active == 42
+
+    _run(scenario())
+
+
+def test_stop_then_shutdown_never_submits_work_to_the_closed_pool() -> None:
+    async def scenario() -> None:
+        executor = ThreadInferenceExecutor(waiting_limit=8, timeout_seconds=1.0)
+        called = False
+
+        def operation() -> int:
+            nonlocal called
+            called = True
+            return 1
+
+        executor.stop_admission()
+        executor.shutdown()
+
+        with pytest.raises(InferenceAdmissionClosed):
+            await executor.run(operation)
+        assert called is False
+
+    _run(scenario())
+
+
 def test_thread_executor_keeps_event_loop_responsive_while_inference_runs() -> None:
     async def scenario() -> None:
         executor = ThreadInferenceExecutor(waiting_limit=8, timeout_seconds=1.0)
@@ -166,8 +250,12 @@ def test_thread_executor_keeps_event_loop_responsive_while_inference_runs() -> N
 
         inference = asyncio.create_task(executor.run(blocking_inference))
         try:
-            while not started.is_set():
-                await asyncio.sleep(0)
+
+            async def wait_until_started() -> None:
+                while not started.is_set():
+                    await asyncio.sleep(0)
+
+            await asyncio.wait_for(wait_until_started(), timeout=1.0)
 
             event_loop_progressed = False
 
