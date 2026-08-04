@@ -3,6 +3,12 @@ from math import isfinite
 
 from classification_service.domain.errors import DomainValidationError
 
+TOP_TRIPLE_CLASSIFIER_NAME = "top-triple-classifier"
+END_DOC_CLASSIFIER_NAME = "end-doc-classifier"
+CLASSIFIER_NAMES = frozenset(
+    {TOP_TRIPLE_CLASSIFIER_NAME, END_DOC_CLASSIFIER_NAME}
+)
+
 
 @dataclass(frozen=True)
 class ModelPrediction:
@@ -30,5 +36,7 @@ class ModelIdentity:
     release_id: str
 
     def __post_init__(self) -> None:
-        if not self.name or not self.release_id:
+        if self.name not in CLASSIFIER_NAMES:
+            raise DomainValidationError("model identity name is not a supported classifier")
+        if not self.release_id:
             raise DomainValidationError("model identity fields must not be empty")

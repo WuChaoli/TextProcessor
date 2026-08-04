@@ -16,6 +16,7 @@ class ClassificationResult:
     release_id: str
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "tags", tuple(self.tags))
         if len(self.tags) != 4 or any(tag == "" for tag in self.tags):
             raise DomainValidationError("classification result must contain four non-empty tags")
         if not self.release_id:

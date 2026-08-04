@@ -10,6 +10,7 @@ class TopTriplePath:
     levels: tuple[str, str, str]
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "levels", tuple(self.levels))
         if len(self.levels) != 3 or any(level == "" for level in self.levels):
             raise DomainValidationError(
                 "top triple path must contain exactly three non-empty levels"

@@ -5,7 +5,7 @@ import pytest
 from classification_service.domain.classification_result import ClassificationResult
 from classification_service.domain.errors import DomainValidationError
 from classification_service.domain.label_path import TopTriplePath
-from classification_service.domain.model_identity import ModelPrediction
+from classification_service.domain.model_identity import ModelIdentity, ModelPrediction
 
 
 def test_compose_fixed_four_tags() -> None:
@@ -67,3 +67,27 @@ def test_domain_types_are_immutable() -> None:
         path.levels = ("a", "b", "c")  # type: ignore[misc]
     with pytest.raises(AttributeError):
         result.release_id = "release-2"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("name", ["A", "B", "other-classifier"])
+def test_model_identity_rejects_non_production_classifier_name(name: str) -> None:
+    with pytest.raises(DomainValidationError):
+        ModelIdentity(name=name, release_id="release-1")
+
+
+def test_mutating_source_lists_does_not_change_domain_values() -> None:
+    levels = ["应急", "安全生产", "危化品"]
+    tags = [*levels, "法规标准类"]
+    path = TopTriplePath(levels=levels)  # type: ignore[arg-type]
+    result = ClassificationResult(
+        tags=tags,  # type: ignore[arg-type]
+        top_triple_confidence=0.72,
+        end_doc_confidence=0.81,
+        release_id="release-1",
+    )
+
+    levels[0] = "已变更"
+    tags[3] = "已变更"
+
+    assert path.levels == ("应急", "安全生产", "危化品")
+    assert result.tags == ("应急", "安全生产", "危化品", "法规标准类")
