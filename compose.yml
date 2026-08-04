@@ -1,5 +1,37 @@
 services:
 
+  classification-service:
+    image: '${DOCKER_IMAGE_CLASSIFICATION-classification-service}:${TAG-latest}'
+    restart: always
+    build:
+      context: .
+      dockerfile: services/classification_service/Dockerfile
+    environment:
+      - CLASSIFICATION_ENVIRONMENT=${CLASSIFICATION_ENVIRONMENT-development}
+      - CLASSIFICATION_INTERNAL_SERVICE_TOKEN=${CLASSIFICATION_INTERNAL_SERVICE_TOKEN?Variable not set}
+      - CLASSIFICATION_MODEL_ROOT=/models/releases
+      - CLASSIFICATION_MODEL_RELEASE=/models/releases/${CLASSIFICATION_MODEL_RELEASE?Variable not set}
+      - CLASSIFICATION_MODEL_RELEASE_SHA256=${CLASSIFICATION_MODEL_RELEASE_SHA256?Variable not set}
+      - CLASSIFICATION_RELEASE_QUALITY_STATUS=${CLASSIFICATION_RELEASE_QUALITY_STATUS-experimental}
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - NVIDIA_VISIBLE_DEVICES=${CLASSIFICATION_NVIDIA_VISIBLE_DEVICES-0}
+    volumes:
+      - ${CLASSIFICATION_MODEL_ROOT?Variable not set}:/models/releases:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
   redis:
     image: redis:7-alpine
     restart: always
