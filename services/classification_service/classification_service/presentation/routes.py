@@ -7,7 +7,7 @@ from classification_service.application.classify_text import ClassifyTextHandler
 from classification_service.application.dto import ClassifyTextCommand
 from classification_service.presentation.authentication import authenticate_bearer
 from classification_service.presentation.error_mapping import (
-    CudaOutOfMemoryError,
+    is_cuda_out_of_memory,
     map_public_error,
 )
 from classification_service.presentation.schemas import (
@@ -50,9 +50,9 @@ def create_router(
             result = await handler.execute(
                 ClassifyTextCommand(request_id=payload.requestId, text=payload.text)
             )
-        except BaseException as caught:
+        except Exception as caught:
             public = map_public_error(caught)
-            if isinstance(caught, CudaOutOfMemoryError):
+            if is_cuda_out_of_memory(caught):
                 mark_unready()
                 exit_hook()
             return _error(

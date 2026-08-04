@@ -33,6 +33,11 @@ class FakeTopClassifier:
             raise TimeoutError
         if marker == "oom":
             raise CudaOutOfMemoryError
+        if marker == "torch-oom":
+            torch_error = type(
+                "OutOfMemoryError", (RuntimeError,), {"__module__": "torch.cuda"}
+            )
+            raise torch_error
         if marker == "secret C:\\models\\release":
             raise RuntimeError(marker)
         return ModelPrediction("应急 > 安全生产 > 危化品", 0.72)
@@ -191,6 +196,6 @@ def test_cuda_oom_marks_unready_and_triggers_exit(
     client: tuple[TestClient, list[str], list[bool]],
 ) -> None:
     http, _, exited = client
-    assert request(http, "oom").status_code == 503
+    assert request(http, "torch-oom").status_code == 503
     assert http.get("/health/ready").status_code == 503
     assert exited == [True]

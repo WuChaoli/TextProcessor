@@ -1,3 +1,5 @@
+import os
+import signal
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import cast
@@ -23,11 +25,15 @@ from classification_service.presentation.schemas import ErrorDetail, ErrorRespon
 RuntimeLoader = Callable[..., LoadedClassificationRuntime]
 
 
+def terminate_process() -> None:
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
 def create_app(
     *,
     settings: Settings | None = None,
     runtime_loader: RuntimeLoader = load_classification_runtime,
-    exit_hook: Callable[[], None] = lambda: None,
+    exit_hook: Callable[[], None] = terminate_process,
 ) -> FastAPI:
     configured = settings or get_settings()
     health = HealthState()
