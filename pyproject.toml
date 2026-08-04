@@ -10,7 +10,7 @@ github-actions = [
 
 [tool.uv.workspace]
 members = ["backend"]
-exclude = ["services/datajuicer_service"]
+exclude = ["services/datajuicer_service", "services/classification_service"]
 
 [tool.typos.files]
 extend-exclude = [
