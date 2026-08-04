@@ -39,3 +39,40 @@ def test_inference_capacity_is_fixed() -> None:
     assert settings.waiting_queue_limit == 8
     assert settings.inference_timeout_seconds == 15
     assert settings.max_text_chars == 500_000
+
+
+def test_rejects_empty_internal_service_token() -> None:
+    with pytest.raises(ValueError):
+        valid_settings(internal_service_token=SecretStr(""))
+
+
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("max_text_chars", 0),
+        ("waiting_queue_limit", -1),
+        ("inference_timeout_seconds", float("nan")),
+        ("minimum_free_gpu_mib", 0),
+    ],
+)
+def test_rejects_non_positive_or_non_finite_capacity_limits(
+    field_name: str, invalid_value: object
+) -> None:
+    with pytest.raises(ValueError):
+        valid_settings(**{field_name: invalid_value})
+
+
+def test_rejects_model_release_outside_model_root(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="under model_root"):
+        valid_settings(model_root=tmp_path, model_release=tmp_path.parent / "release")
+
+
+def test_rejects_model_release_path_traversal_outside_model_root(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="under model_root"):
+        valid_settings(model_root=tmp_path, model_release=tmp_path / ".." / "release")
+
+
+def test_accepts_model_release_under_model_root(tmp_path: Path) -> None:
+    settings = valid_settings(model_root=tmp_path, model_release=tmp_path / "release")
+
+    assert settings.model_release == tmp_path / "release"
