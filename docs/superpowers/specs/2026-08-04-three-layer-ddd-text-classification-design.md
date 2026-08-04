@@ -217,29 +217,53 @@ Celery task 只读取任务消息、从 PostgreSQL 获取完整参数、调用 a
 ```text
 services/classification_service/
 |-- pyproject.toml
+|-- uv.lock
+|-- Dockerfile
 |-- src/classification_service/
 |   |-- main.py
 |   |-- domain/
+|   |   |-- classification_result.py
 |   |   |-- label_path.py
-|   |   |-- prediction.py
+|   |   |-- model_identity.py
 |   |   `-- errors.py
 |   |-- application/
 |   |   |-- classify_text.py
 |   |   |-- dto.py
-|   |   `-- ports/classifier.py
+|   |   `-- ports/
+|   |       |-- classifier.py
+|   |       |-- inference_executor.py
+|   |       `-- text_chunker.py
 |   |-- infrastructure/
-|   |   |-- model/model_loader.py
-|   |   |-- model/tokenizer_adapter.py
-|   |   |-- model/classifier_adapter.py
+|   |   |-- model/
+|   |   |   |-- setfit_loader.py
+|   |   |   |-- tokenizer_chunker.py
+|   |   |   |-- score_aggregator.py
+|   |   |   |-- top_triple_classifier.py
+|   |   |   `-- end_doc_classifier.py
+|   |   |-- release/
+|   |   |   |-- manifest.py
+|   |   |   |-- validator.py
+|   |   |   `-- checksum.py
+|   |   |-- execution/
+|   |   |   |-- admission_controller.py
+|   |   |   `-- thread_executor.py
 |   |   `-- config.py
 |   |-- presentation/
 |   |   |-- routes.py
 |   |   |-- schemas.py
+|   |   |-- authentication.py
+|   |   |-- error_mapping.py
 |   |   `-- health.py
 |   `-- bootstrap.py
+|-- tools/
+|   |-- package_release.py
+|   `-- validate_release.py
 `-- tests/
-    |-- unit/
+    |-- domain/
+    |-- application/
+    |-- infrastructure/
     |-- contract/
+    |-- integration/
     `-- real_integration/
 ```
 
@@ -298,22 +322,17 @@ Content-Type: application/json
 ```json
 {
   "fileId": "11",
-  "tags": ["法律法规", "九小"]
+  "tags": ["应急", "安全生产", "危化品", "法规标准类"],
+  "confidence": {
+    "topTripleClassifier": 0.72,
+    "endDocClassifier": 0.81
+  }
 }
 ```
 
-`tags` 是唯一最佳层级路径，严格按照父级到子级排列，不表示多个并列标签。
+`tags` 固定为四项：前三项来自 `top-triple-classifier` 的三级主题路径，严格按照父级到子级排列；最后一项来自 `end-doc-classifier` 的文档类型。两个模型均始终返回最高分结果，不按置信度阈值过滤。
 
-低置信度仍视为成功：
-
-```json
-{
-  "fileId": "11",
-  "tags": []
-}
-```
-
-置信度阈值由 Classification Service 根据具体模型版本配置。公开接口不返回置信度、模型地址或模型版本。
+`confidence.topTripleClassifier` 和 `confidence.endDocClassifier` 分别是两个模型对各片段执行 `predict_proba` 后，预测类别的文档级算术平均概率。它们不是经过额外校准的真实概率。公开接口不返回模型地址、release 或内部运行信息。
 
 ### 4.2 Gateway 调用 Classification Service
 
@@ -339,18 +358,27 @@ Authorization: Bearer <internal-service-token>
 {
   "schemaVersion": "1",
   "requestId": "019...",
-  "prediction": {
-    "path": ["法律法规", "九小"],
-    "confidence": 0.93
-  },
-  "model": {
-    "name": "hierarchical-text-classifier",
-    "version": "2026-08-01"
+  "result": {
+    "tags": ["应急", "安全生产", "危化品", "法规标准类"],
+    "confidence": {
+      "topTripleClassifier": 0.72,
+      "endDocClassifier": 0.81
+    },
+    "models": {
+      "topTripleClassifier": {
+        "name": "top-triple-classifier",
+        "releaseId": "20260729T093134Z-321175f0"
+      },
+      "endDocClassifier": {
+        "name": "end-doc-classifier",
+        "releaseId": "20260729T093134Z-321175f0"
+      }
+    }
   }
 }
 ```
 
-Classification Service 负责应用阈值；低于阈值时 `path` 为 `[]`。`path` 中不能出现空字符串、非字符串元素或重复相邻层级。
+Classification Service 分别验证两个模型的概率矩阵、标签和置信度，再按固定顺序组合四项 `tags`。两个模型任一失败时整个请求失败，不返回部分结果。
 
 ## 5. 资源与超时边界
 
@@ -418,9 +446,9 @@ Gateway -> Capability Service: independent internal token + X-Request-ID
 
 - Access Layer：`requestId`、`callerId`、route、statusCode、durationMs。
 - Gateway：`requestId`、`callerId`、`fileId`、selectedInputType、capability、statusCode、errorCode、durationMs。
-- Classification Service：`requestId`、modelName、modelVersion、inputChars、inferenceDurationMs、confidenceBucket、outcome。
+- Classification Service：`requestId`、releaseId、两个正式模型名称、inputChars、inferenceDurationMs、两个 confidenceBucket、outcome。
 
-所有层都不记录正文。核心指标包括吞吐量、成功率、各错误码、P50/P95/P99 延迟、并发拒绝、低置信度空标签、协议错误、模型版本调用量、readiness 和模型加载失败。
+所有层都不记录正文。核心指标包括吞吐量、成功率、各错误码、P50/P95/P99 延迟、并发拒绝、两个模型的置信度分布、协议错误、release 调用量、readiness 和模型加载失败。
 
 各服务提供：
 
@@ -460,7 +488,8 @@ redis
 
 - 本地路径优先，失败不回退 OSS。
 - 扩展名、UTF-8、空正文、字节数和字符数边界。
-- 唯一最佳路径、父子顺序、阈值边界和非法层级。
+- 三级主题路径、父子顺序、文档类型、固定四项组合和非法层级。
+- 两个模型均保留最高分结果和独立置信度，不执行阈值过滤。
 
 ### 9.2 Application 用例测试
 
@@ -475,7 +504,7 @@ redis
 - Access API 与 Gateway 的公开协议。
 - Gateway 与 Classification Service 的内部 v1 协议。
 - 错误 envelope、`schemaVersion` 和 `requestId`。
-- `tags` 类型及单路径语义。
+- 四项 `tags` 的固定组合语义及两个独立 confidence 字段。
 
 跨服务可以共享 JSON fixture，不共享领域实体。
 
@@ -509,3 +538,278 @@ PostgreSQL 与 Redis/Celery 集成只用于重型任务链路。
 9. 所有消费者切换并验证后，才删除旧入口兼容代码。
 
 该顺序允许接口3先形成可运行闭环，同时逐步落实三层目标架构，避免大爆炸式重构。
+
+## 11. SetFit 双模型实现
+
+Classification Service 参考 `DatasetTechTest/experiments/setfit-chinese-roberta-wwm-ext` 的真实训练与评估实现，但生产代码不得导入或依赖该实验项目。
+
+实验任务名与生产名称的映射为：
+
+| 实验任务 | 生产模型名称 | 语义 |
+|---|---|---|
+| A | `top-triple-classifier` | 18 个主题叶子标签，每个标签是三级路径 |
+| B | `end-doc-classifier` | 6 个独立文档类型标签 |
+
+Python 标识符分别使用 `TopTripleClassifier`、`EndDocClassifier`、`top_triple_classifier` 和 `end_doc_classifier`。生产文件、配置、指标和 API 字段不再使用 A/B 命名。
+
+### 11.1 单服务双模型
+
+首版使用一个 Classification Service 同时加载两个模型：
+
+```text
+Classification Service
+  |-- shared tokenizer and chunking policy
+  |-- top-triple-classifier
+  `-- end-doc-classifier
+```
+
+- 一个服务实例只绑定一张 GPU。
+- 每个请求只规范化和切片一次。
+- 两个模型按 `top-triple-classifier -> end-doc-classifier` 串行推理，降低瞬时显存峰值。
+- 两个模型均成功后才能组合结果；任一失败时不返回部分结果。
+- 不拆分两个 Runtime，也不在首版重训共享编码器多头模型。
+
+### 11.2 确定性推理流水线
+
+```text
+text
+  -> normalize
+  -> tokenize once
+  -> sliding-window chunks
+  -> uniformly select at most 16 chunks
+  |-> top-triple-classifier.predict_proba
+  `-> end-doc-classifier.predict_proba
+  -> arithmetic mean per model
+  -> argmax per model
+  -> compose tags and confidence
+```
+
+正文规范化只去除 UTF-8 BOM、统一 `CRLF`/`CR` 为 `LF` 并去除首尾空白；不修改正文内部空格、标点和标题顺序，不做摘要、关键词抽取或额外分词。
+
+切片参数与 baseline 评估保持一致：
+
+```text
+maxLength = 256
+overlap = 32
+maxChunksPerDocument = 16
+selection = uniform
+aggregation = arithmetic_mean
+```
+
+内容 token 预算必须扣除 tokenizer 的 special token 数量。窗口超过 16 个时，按确定性均匀索引覆盖首、中、尾区域。
+
+每个模型输出 `(chunkCount, labelCount)` 概率矩阵。服务验证形状、有限值和 `0..1` 范围，对各类别片段概率取算术平均，再按 manifest 标签顺序执行确定性 argmax。`top-triple-classifier` 的叶子标签按 ` > ` 拆成恰好三级，最终组合：
+
+```python
+tags = [*top_triple_path, end_doc_label]
+```
+
+两个 confidence 是各自预测类别的文档级平均概率，不做阈值过滤。未来若增加概率校准，必须发布新模型 release 并显式更新元数据，不能静默改变 confidence 语义。
+
+## 12. 模型 Release
+
+### 12.1 不可变目录
+
+```text
+/models/releases/<release-id>/
+|-- manifest.json
+|-- checksums.sha256
+|-- tokenizer/
+|-- top-triple-classifier/
+|   `-- model/
+`-- end-doc-classifier/
+    `-- model/
+```
+
+服务通过以下配置选择唯一 release：
+
+```text
+CLASSIFICATION_MODEL_RELEASE=/models/releases/<release-id>
+CLASSIFICATION_MODEL_RELEASE_SHA256=<manifest digest>
+```
+
+启动时不自动选择“最新”目录，不允许请求指定模型版本，不在线下载模型，不运行中覆盖文件或热切换。新版本通过启动新实例、通过 readiness、切换流量、停止旧实例发布。
+
+### 12.2 Manifest 内容
+
+manifest schema version 固定为 `1`，至少包含：
+
+- `releaseId`、`qualityStatus`、`createdAt`。
+- 来源项目和训练 run id。
+- Python、SetFit、Sentence Transformers、Transformers、Torch 和 scikit-learn 版本。
+- 完整 chunking 与 aggregation 配置。
+- 两个正式模型名称、相对路径、完整有序标签列表、标签数量和离线指标。
+- tokenizer 身份和文件摘要。
+
+`top-triple-classifier` 必须有 18 个完整三级叶子标签；`end-doc-classifier` 必须有 6 个非空文档类型标签。manifest 标签顺序必须与模型分类头完全一致。
+
+### 12.3 开发与生产门禁
+
+当前 baseline `20260729T093134Z-321175f0` 的已知指标为：
+
+| 模型 | accuracy | macro-F1 |
+|---|---:|---:|
+| `top-triple-classifier` | 0.5441 | 0.5643 |
+| `end-doc-classifier` | 0.7714 | 0.7732 |
+
+该 baseline 存在分类头 `lbfgs max_iter=100` 未完全收敛警告，只能打包为 `qualityStatus=experimental`，用于开发联调，不得作为生产模型。
+
+- `development` 允许加载 `experimental` 和 `production-approved`。
+- `staging` 默认只允许 `production-approved`；专用模型验证环境可以显式放开。
+- `production` 只允许 `production-approved`。
+- Classification Service 在生产环境拒绝加载非 `production-approved` release。
+
+模型质量审批属于训练和评测流程，不由 Classification Service 自行决定。离线打包工具不能仅凭命令参数把模型提升为生产批准状态。
+
+### 12.4 完整性与来源安全
+
+- release 必须位于配置的只读模型根目录下。
+- 禁止路径和符号链接逃逸。
+- `checksums.sha256` 覆盖所有模型和 tokenizer 文件。
+- 缺失文件、未登记文件、摘要不符或 release 目录可写时启动失败。
+- 配置的 manifest digest 必须匹配。
+- SetFit/scikit-learn 产物可能包含 pickle 类序列化数据，只允许加载受信任内部流程产生的 release；禁止加载调用方上传或任意下载的模型。
+
+### 12.5 离线工具
+
+`tools/package_release.py` 接收两个受信任模型目录、tokenizer、release id、质量状态和全新目标目录，将实验产物映射到正式模型名称，生成 manifest 和 checksums，且不覆盖已有 release、不联网、不硬编码 DatasetTechTest 路径。
+
+`tools/validate_release.py` 离线验证目录结构、摘要、标签、版本和安全路径，不加载 GPU 模型。真实加载验证由服务启动和 `real_integration` 测试完成。
+
+## 13. 独立 Python 与 CUDA 环境
+
+Classification Service 拥有独立 `pyproject.toml`、`uv.lock` 和容器，不与 Python 3.14 的 TextProcessor backend 混装依赖。
+
+```text
+Python >=3.12,<3.13
+setfit == 1.1.3
+sentence-transformers == 5.6.1
+transformers == 4.49.0
+torch == 2.13.0
+scikit-learn == 1.9.0
+numpy == 1.26.4
+```
+
+CUDA wheel 使用已经验证的 `torch 2.13.0+cu130` 构建。目标 CUDA runtime 镜像必须在实施时通过真实安装和 RTX 3090 smoke 验证，不能仅凭版本字符串声称兼容。
+
+生产运行规则：
+
+- 强制 CUDA，不允许自动回退 CPU。
+- 通过 `CUDA_VISIBLE_DEVICES` 限制为一张物理 GPU，服务内部只使用逻辑 `cuda:0`。
+- 以 RTX 3090、模型加载前至少 8 GiB 可用显存作为首版基线。
+- CUDA 不可用或显存不足时启动失败。
+- `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`。
+- tokenizer 和模型全部来自已校验的只读 release。
+- 容器使用独立锁文件构建，不包含训练、数据集制作、Docling、MinerU 或 Data-Juicer 代码。
+
+CPU 只用于 fake classifier 单元测试，不作为生产后备。
+
+## 14. 启动、并发和故障恢复
+
+### 14.1 启动状态机
+
+```text
+starting
+  -> validating_release
+  -> loading_tokenizer
+  -> loading_top_triple_classifier
+  -> loading_end_doc_classifier
+  -> smoke_testing
+  -> ready
+```
+
+readiness 只有在 release、tokenizer、两个模型和 smoke 全部成功后才通过。smoke 至少验证非空 token/chunk、最多 16 chunks、两模型形状 `(chunks,18)`/`(chunks,6)`、有限概率、行概率和允许浮点误差以及最终四项 tags 和两个 confidence。
+
+任一步骤失败时记录阶段、releaseId和稳定错误码，进程退出，由容器平台退避重启；不回退其他 release。
+
+### 14.2 单线程推理
+
+SetFit/PyTorch 是阻塞调用，不能直接在 FastAPI 事件循环中执行。首版固定：
+
+```text
+Uvicorn workers = 1
+ThreadPoolExecutor max_workers = 1
+active inference = 1
+waiting queue = 8
+service budget = 15 seconds
+```
+
+tokenizer、NumPy和两个 SetFit 推理作为一个整体提交到专用 executor，不能把两个模型拆成并发线程。使用 `torch.inference_mode()`，不构建梯度。
+
+第 10 个同时到达的请求立即返回 429。排队时间计入 15 秒预算。客户端排队期间断开时移出等待队列。若请求超时时底层推理已经开始，HTTP 请求可以结束，但 semaphore 必须等真实推理结束后释放，禁止在 GPU 工作未结束时启动下一项推理。
+
+15 秒是请求软超时；Python 不能安全强制终止正在执行 GPU 推理的线程。底层永久卡死通过健康检查和容器重启恢复。首版不增加推理子进程 IPC。
+
+### 14.3 CUDA OOM
+
+CUDA OOM 时当前请求返回 `503 INFERENCE_FAILED`，实例立即取消 readiness、记录不含正文的 OOM 指标并退出，由容器平台重启。服务不在同一进程内清缓存后继续接收流量。
+
+## 15. Classification Service 内部 HTTP
+
+```http
+POST /internal/v1/classify
+Authorization: Bearer <internal-service-token>
+X-Request-ID: 019...
+Content-Type: application/json
+```
+
+请求禁止额外字段，只接受 schema version `1`。Header 与 body 的 `requestId` 必须一致。正文去除首尾空白后不能为空，最多 500,000 字符。接口不接收 `fileId`、文件路径、URL、模型版本或超时参数。
+
+内部错误使用同一 envelope：
+
+| HTTP | error code | 场景 |
+|---:|---|---|
+| 400 | `REQUEST_INVALID` | schema、requestId或正文不合法 |
+| 401 | `SERVICE_UNAUTHENTICATED` | 内部服务令牌缺失或错误 |
+| 413 | `TEXT_TOO_LARGE` | 正文超过字符上限 |
+| 429 | `INFERENCE_CAPACITY_EXCEEDED` | active 与 waiting 容量已满 |
+| 500 | `INFERENCE_OUTPUT_INVALID` | 分数、形状或标签违反模型契约 |
+| 503 | `MODEL_NOT_READY` | 模型尚未加载完成 |
+| 503 | `INFERENCE_FAILED` | SetFit、Torch或 CUDA推理失败 |
+| 504 | `INFERENCE_TIMEOUT` | 排队与推理总预算耗尽 |
+
+`GET /health/live` 只表示进程存活。`GET /health/ready` 在内部返回状态、releaseId、qualityStatus 和逻辑设备 `cuda:0`，不返回物理 GPU编号、绝对路径、令牌或文件摘要。
+
+## 16. 生产代码迁移与验证
+
+### 16.1 允许迁入
+
+从实验项目重新实现以下最小算法：
+
+- `training_chunks.py` 的 tokenizer 滑动窗口、重叠和均匀抽样。
+- `training_evaluation.py` 的片段概率算术平均和文档级 argmax。
+- `setfit_training.py` 的 `SetFitModel.from_pretrained` 和 `predict_proba` 薄适配逻辑。
+- `labels.py` 的两个完整有序标签集合，只用于首个 release 校验。
+
+迁入后不保留实验项目 import。
+
+### 16.2 禁止迁入
+
+不迁入训练编排、数据集构建和抽样、Docling/MinerU提取、目录标签推断、训练指标、checkpoint 管理、实验报表、训练正文、缓存、绝对路径或 A/B 命名。
+
+### 16.3 详细验证
+
+默认测试使用 fake tokenizer、classifier 和 executor，覆盖：
+
+- 切片边界、special tokens、32 overlap、16窗口均匀抽样及确定性。
+- 概率矩阵形状、NaN/Inf、范围、算术平均、argmax和并列分数标签顺序。
+- 三级路径、文档类型、固定四项 tags 和两个 confidence。
+- 只切片一次、两个模型固定串行、任一失败不返回部分结果。
+- 超时后底层工作未结束时不释放容量。
+- 协议额外字段、requestId不一致、认证、正文上限、429、503和健康状态。
+- release 摘要、未登记文件、路径/符号链接逃逸、标签数、运行时版本及环境质量门禁。
+
+真实模型一致性测试使用非敏感固定中文文本，在参考实现和新服务中比较 chunks、两组片段概率、文档级平均分、argmax标签和 confidence。该测试标记为 `real_integration`，记录 releaseId、GPU型号、锁文件摘要和结果摘要，不提交正文。
+
+### 16.4 首版验收
+
+- 三层调用链真实运行，Classification Service 不依赖 DatasetTechTest。
+- 两个模型从不可变 development release 加载。
+- RTX 3090 上只使用一张逻辑 GPU。
+- 单请求返回固定四项 tags 和两个 confidence。
+- 新服务输出与参考实验推理在规定浮点容差内一致。
+- P95 位于 Gateway 20 秒预算内，Classification Service 不超过 15 秒软预算。
+- 过载返回429，不阻塞 FastAPI事件循环。
+- CUDA OOM使实例退出并由容器恢复。
+- 正文、绝对路径和服务凭据不出现在日志中。
+- 当前 experimental baseline 只用于开发联调，不得部署到 production。
