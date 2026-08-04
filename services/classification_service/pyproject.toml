@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "受控的文本分类推理服务"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "fastapi>=0.116,<1",
     "numpy==1.26.4",
     "pydantic>=2.11,<3",
     "pydantic-settings>=2.10,<3",
@@ -16,6 +17,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28,<1",
     "mypy>=1.17,<3",
     "pytest>=8.4,<10",
     "ruff>=0.12,<1",

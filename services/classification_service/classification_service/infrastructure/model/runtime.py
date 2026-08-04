@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from importlib import import_module
@@ -83,10 +84,15 @@ def _check_cuda(torch: TorchRuntime, minimum_free_gpu_mib: int) -> None:
 
 
 def load_classification_runtime(
-    release: ValidatedRelease, *, minimum_free_gpu_mib: int = 8192
+    release: ValidatedRelease,
+    *,
+    minimum_free_gpu_mib: int = 8192,
+    stage_changed: Callable[[str], None] | None = None,
 ) -> LoadedClassificationRuntime:
     """Load and smoke-test one immutable release without a CPU fallback."""
     release_id = release.release_id
+    notify = stage_changed or (lambda _stage: None)
+    notify("loading_tokenizer")
     try:
         torch = cast(TorchRuntime, import_module("torch"))
         setfit = import_module("setfit")
@@ -110,6 +116,7 @@ def load_classification_runtime(
     except Exception:
         raise _model_load_error("loading_tokenizer", release_id) from None
 
+    notify("loading_top_triple_classifier")
     top_release = release.models[TOP_TRIPLE_CLASSIFIER_NAME]
     try:
         top_model = load_setfit_model(setfit, top_release.path, device=CUDA_DEVICE)
@@ -117,7 +124,9 @@ def load_classification_runtime(
     except Exception:
         raise _model_load_error("loading_top_triple_classifier", release_id) from None
 
+    notify("loading_end_doc_classifier")
     end_release = release.models[END_DOC_CLASSIFIER_NAME]
+    notify("smoke_testing")
     try:
         end_model = load_setfit_model(setfit, end_release.path, device=CUDA_DEVICE)
         end_classifier = EndDocClassifier(end_model, end_release.labels)
