@@ -21,3 +21,5 @@ baseline `20260729T093134Z-321175f0` 仅为 `experimental`，禁止作为 produc
 ## 验收边界
 
 本地 CPU 只运行 fake 和静态测试。必须在授权 RTX 3090、真实 release 与 CUDA 环境中运行 real integration、容器 build/up 和验证脚本后，才能声明 GPU 部署验收通过。未运行时统一记录 `real_integration not run`。
+
+真实验收记录必须包含 releaseId、qualityStatus、GPU 型号、`uv.lock` SHA256、加载显存、单请求峰值显存、P50/P95/P99 与参考一致性结果；不得记录 fixture 正文。参考 fixture 通过 `CLASSIFICATION_REFERENCE_FIXTURE` 指定，比较容差固定为 `rtol=1e-6, atol=1e-8`。

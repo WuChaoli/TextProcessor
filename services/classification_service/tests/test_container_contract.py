@@ -1,11 +1,12 @@
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_dockerfile_contract() -> None:
-    content = (ROOT / "services/classification_service/Dockerfile").read_text(encoding="utf-8")
+    content = (ROOT / "services/classification_service/Dockerfile").read_text(
+        encoding="utf-8"
+    )
     assert "nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04" in content
     assert "uv sync --locked --no-dev" in content
     assert "HF_HUB_OFFLINE=1" in content
