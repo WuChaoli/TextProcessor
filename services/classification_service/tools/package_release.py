@@ -1,4 +1,5 @@
 import argparse
+import ctypes
 import os
 import shutil
 import stat
@@ -6,10 +7,14 @@ import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from classification_service.domain.model_identity import CLASSIFIER_NAMES
 from classification_service.infrastructure.release.checksum import write_checksums
-from classification_service.infrastructure.release.manifest import ReleaseManifest
+from classification_service.infrastructure.release.manifest import (
+    ReleaseManifest,
+    validate_relative_posix_path,
+)
 from classification_service.infrastructure.release.validator import _release_files
 
 
@@ -20,11 +25,27 @@ def _is_link_like(path: Path) -> bool:
     return path.is_symlink() or bool(file_attributes & reparse_attribute)
 
 
-def _copy_tree(source: Path, target: Path) -> None:
+def _validate_source_tree(source: Path) -> None:
     if not source.exists() or not source.is_dir():
         raise FileNotFoundError(f"release source directory does not exist: {source}")
     if _is_link_like(source):
         raise ValueError("release source must not be a symbolic link or reparse point")
+    with os.scandir(source) as entries:
+        for entry in entries:
+            source_path = Path(entry.path)
+            if _is_link_like(source_path):
+                raise ValueError(
+                    "release source contains a symbolic link or reparse point"
+                )
+            validate_relative_posix_path(source_path.relative_to(source).as_posix())
+            if entry.is_dir(follow_symlinks=False):
+                _validate_source_tree(source_path)
+            elif not entry.is_file(follow_symlinks=False):
+                raise ValueError("release source contains an unsupported file type")
+
+
+def _copy_tree(source: Path, target: Path, *, source_root: Path | None = None) -> None:
+    source_root = source if source_root is None else source_root
     target.mkdir(parents=True)
     with os.scandir(source) as entries:
         for entry in entries:
@@ -33,13 +54,56 @@ def _copy_tree(source: Path, target: Path) -> None:
                 raise ValueError(
                     "release source contains a symbolic link or reparse point"
                 )
+            relative_path = source_path.relative_to(source_root).as_posix()
+            validate_relative_posix_path(relative_path)
             target_path = target / entry.name
             if entry.is_dir(follow_symlinks=False):
-                _copy_tree(source_path, target_path)
+                _copy_tree(source_path, target_path, source_root=source_root)
             elif entry.is_file(follow_symlinks=False):
                 shutil.copyfile(source_path, target_path)
             else:
                 raise ValueError("release source contains an unsupported file type")
+
+
+def atomic_publish_directory_no_replace(source: Path, target: Path) -> None:
+    """Atomically publish a sibling directory without ever replacing target."""
+    if source.parent.resolve() != target.parent.resolve():
+        raise ValueError("atomic release publication requires sibling directories")
+
+    if sys.platform == "win32":
+        os.rename(source, target)
+        return
+
+    if sys.platform.startswith("linux"):
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2: Any = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise NotImplementedError(
+                "atomic no-replace directory publication is unavailable"
+            )
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            -100,
+            os.fsencode(source),
+            -100,
+            os.fsencode(target),
+            1,
+        )
+        if result != 0:
+            error_number = ctypes.get_errno()
+            raise OSError(error_number, os.strerror(error_number), target)
+        return
+
+    raise NotImplementedError(
+        "atomic no-replace directory publication is unavailable on this platform"
+    )
 
 
 def package_release(
@@ -56,6 +120,10 @@ def package_release(
             "model_sources keys must contain exactly the supported classifiers"
         )
 
+    _validate_source_tree(tokenizer_source)
+    for source in model_sources.values():
+        _validate_source_tree(source)
+
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
     published = False
@@ -71,7 +139,7 @@ def package_release(
         )
         files = _release_files(temporary)
         write_checksums(temporary, files)
-        temporary.rename(target)
+        atomic_publish_directory_no_replace(temporary, target)
         published = True
         return target
     finally:

@@ -1,4 +1,5 @@
 import json
+import unicodedata
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
@@ -23,6 +24,8 @@ def validate_relative_posix_path(value: str) -> str:
         or "\\" in value
         or path.is_absolute()
         or value != path.as_posix()
+        or value.splitlines(keepends=True) != [value]
+        or any(unicodedata.category(character) == "Cc" for character in value)
         or any(part in {"", ".", ".."} for part in path.parts)
     ):
         raise ValueError("path must use canonical POSIX form and remain relative")

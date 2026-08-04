@@ -1,10 +1,11 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from classification_service.infrastructure.release.manifest import ReleaseManifest
-from tools.package_release import package_release
+from tools import package_release as release_packager
 
 TOP_MODEL = "top-triple-classifier"
 END_MODEL = "end-doc-classifier"
@@ -73,7 +74,7 @@ def test_package_release_refuses_existing_target(tmp_path: Path) -> None:
     marker.write_text("keep", encoding="utf-8")
 
     with pytest.raises(FileExistsError):
-        package_release(
+        release_packager.package_release(
             target=target,
             tokenizer_source=tokenizer,
             model_sources=model_sources,
@@ -97,7 +98,7 @@ def test_package_release_uses_complete_sibling_before_atomic_publish(
     tokenizer, model_sources = _sources(tmp_path)
     target = tmp_path / "release"
 
-    packaged = package_release(
+    packaged = release_packager.package_release(
         target=target,
         tokenizer_source=tokenizer,
         model_sources=model_sources,
@@ -128,7 +129,7 @@ def test_failed_packaging_leaves_no_target_or_temporary_sibling(tmp_path: Path) 
     target = tmp_path / "release"
 
     with pytest.raises(FileNotFoundError):
-        package_release(
+        release_packager.package_release(
             target=target,
             tokenizer_source=tokenizer,
             model_sources=model_sources,
@@ -144,3 +145,55 @@ def test_failed_packaging_leaves_no_target_or_temporary_sibling(tmp_path: Path) 
         )
         == []
     )
+
+
+def test_atomic_publish_primitive_never_replaces_existing_target(
+    tmp_path: Path,
+) -> None:
+    completed_release = tmp_path / ".release.complete"
+    completed_release.mkdir()
+    (completed_release / "new.txt").write_text("new", encoding="utf-8")
+    concurrent_target = tmp_path / "release"
+    concurrent_target.mkdir()
+
+    with pytest.raises(FileExistsError):
+        release_packager.atomic_publish_directory_no_replace(
+            completed_release, concurrent_target
+        )
+
+    assert list(concurrent_target.iterdir()) == []
+    assert (completed_release / "new.txt").read_text(encoding="utf-8") == "new"
+
+
+def test_package_release_rejects_line_separator_in_source_filename(
+    tmp_path: Path,
+) -> None:
+    tokenizer, model_sources = _sources(tmp_path)
+    invalid_file = model_sources[TOP_MODEL] / "invalid\u2028name.txt"
+    invalid_file.write_text("invalid", encoding="utf-8")
+    target = tmp_path / "release"
+
+    with pytest.raises(ValueError, match="canonical POSIX"):
+        release_packager.package_release(
+            target=target,
+            tokenizer_source=tokenizer,
+            model_sources=model_sources,
+            manifest=_manifest(),
+        )
+
+    assert not target.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows treats backslash as a separator")
+def test_package_release_rejects_backslash_in_source_filename(tmp_path: Path) -> None:
+    tokenizer, model_sources = _sources(tmp_path)
+    invalid_file = model_sources[TOP_MODEL] / "invalid\\name.txt"
+    invalid_file.write_text("invalid", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="canonical POSIX"):
+        release_packager.package_release(
+            target=tmp_path / "release",
+            tokenizer_source=tokenizer,
+            model_sources=model_sources,
+            manifest=_manifest(),
+        )
