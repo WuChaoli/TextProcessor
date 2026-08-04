@@ -32,6 +32,9 @@ packages = ["classification_service"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "real_integration: requires a mounted validated release and one RTX 3090 CUDA device",
+]
 
 [tool.ruff]
 target-version = "py312"
