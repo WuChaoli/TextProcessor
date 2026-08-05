@@ -34,6 +34,35 @@ services:
       retries: 12
       start_period: 120s
 
+  datajuicer:
+    image: '${DOCKER_IMAGE_DATAJUICER-datajuicer-service}:${TAG-latest}'
+    restart: always
+    build:
+      context: .
+      dockerfile: services/datajuicer_service/Dockerfile
+    networks:
+      - default
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      redis:
+        condition: service_healthy
+        restart: true
+    environment:
+      - DATAJUICER_DATABASE_URL=postgresql+psycopg://${POSTGRES_USER?Variable not set}:${POSTGRES_PASSWORD?Variable not set}@db:5432/${POSTGRES_DB}
+      - DATAJUICER_CELERY_BROKER_URL=redis://redis:6379/2
+      - DATAJUICER_CELERY_QUEUE=datajuicer.jobs
+      - DATAJUICER_WORKER_CONCURRENCY=1
+    volumes:
+      - datajuicer-work:/data/textprocessor/global-deduplication
+    healthcheck:
+      test: ["CMD", "python", "-m", "datajuicer_service.healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
   redis:
     image: redis:7-alpine
     restart: always
@@ -217,12 +246,14 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling-api:5001}
       - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
+      - GLOBAL_DEDUP_WORKER__DATAJUICER_BASE_URL=http://datajuicer:8000
       - CLASSIFICATION_BASE_URL=http://classification-service:8000
       - CLASSIFICATION_API_TOKEN=${CLASSIFICATION_INTERNAL_SERVICE_TOKEN?Variable not set}
       - CLASSIFICATION_STAGING_ROOT=/data/textprocessor/classification
     volumes:
       - celery-beat-data:/var/lib/celery
       - classification-staging:/data/textprocessor/classification
+      - datajuicer-work:/data/textprocessor/global-deduplication
     healthcheck:
       test: ["CMD", "python", "-m", "app.task_runner.healthcheck"]
       interval: 15s
@@ -263,6 +294,7 @@ volumes:
   app-db-data:
   celery-beat-data:
   classification-staging:
+  datajuicer-work:
   textprocessor-redis-data:
 
 networks:

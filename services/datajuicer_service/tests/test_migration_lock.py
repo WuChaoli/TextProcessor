@@ -33,6 +33,9 @@ def test_migration_releases_advisory_lock_after_upgrade(
         connection.execute.call_args_list[1].args[0]
     )
     upgrade.assert_called_once()
+    assert upgrade.call_args.args[0].get_main_option("script_location") == str(
+        tmp_path / "migrations"
+    )
     engine.dispose.assert_called_once_with()
 
 

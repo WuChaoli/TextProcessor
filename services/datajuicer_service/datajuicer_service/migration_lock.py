@@ -15,6 +15,8 @@ def run_migrations(
     upgrade: Callable[[Config, str], None] = command.upgrade,
 ) -> None:
     engine = create_engine(database_url)
+    config = Config(str(alembic_ini))
+    config.set_main_option("script_location", str(alembic_ini.parent / "migrations"))
     try:
         with engine.connect() as connection:
             connection.execute(
@@ -22,7 +24,7 @@ def run_migrations(
                 {"key": _MIGRATION_LOCK_KEY},
             )
             try:
-                upgrade(Config(str(alembic_ini)), "head")
+                upgrade(config, "head")
             finally:
                 connection.execute(
                     text("SELECT pg_advisory_unlock(:key)"),
