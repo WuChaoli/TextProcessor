@@ -102,7 +102,6 @@ $healthcheckedServices = @(
     "backend",
     "extraction-worker",
     "extraction-beat",
-    "docling-redis",
     "docling-api"
 )
 foreach ($service in $healthcheckedServices) {
@@ -110,10 +109,6 @@ foreach ($service in $healthcheckedServices) {
         Assert-ServiceState -Service $service -RequireHealthcheck $true
     }
 }
-Invoke-VerificationStage "Service state: docling-worker" {
-    Assert-ServiceState -Service "docling-worker" -RequireHealthcheck $false
-}
-
 Invoke-VerificationStage "Backend health endpoint" {
     $response = Invoke-WebRequest -Uri "$BackendBaseUrl/api/v1/utils/health-check/" -TimeoutSec 10
     if ($response.StatusCode -ne 200) {
@@ -131,7 +126,7 @@ Invoke-VerificationStage "MinerU health endpoint" {
     }
 }
 
-Invoke-VerificationStage "Docling API, RQ worker, and Redis" {
+Invoke-VerificationStage "Docling combined API/RQ service and shared Redis" {
     $doclingParameters = @{
         ComposeFiles = $ComposeFiles
         ComposeProjectName = $ComposeProjectName
@@ -176,9 +171,13 @@ print(task_id)
         if ([string]::IsNullOrWhiteSpace($smokeTaskId)) {
             throw "Unique smoke task was not dispatched."
         }
-        $envelopeText = @(Invoke-Compose exec -T redis redis-cli --raw LINDEX $smokeQueue 0)[0]
+        $envelopeText = @(Invoke-Compose exec -T redis redis-cli -n 0 --raw LINDEX $smokeQueue 0)[0]
         if ([string]::IsNullOrWhiteSpace($envelopeText)) {
             throw "No Celery message was observed in the unique smoke queue."
+        }
+        $doclingDbEnvelope = @(Invoke-Compose exec -T redis redis-cli -n 1 --raw LINDEX $smokeQueue 0)[0]
+        if (-not [string]::IsNullOrWhiteSpace($doclingDbEnvelope)) {
+            throw "Celery smoke message leaked into Docling Redis logical database 1."
         }
         $envelope = $envelopeText | ConvertFrom-Json
         $headers = $envelope.headers
@@ -209,7 +208,7 @@ print(task_id)
         ) | Out-Null
         $consumed = $false
         for ($attempt = 0; $attempt -lt 20; $attempt++) {
-            $queueDepth = @(Invoke-Compose exec -T redis redis-cli LLEN $smokeQueue)[-1]
+            $queueDepth = @(Invoke-Compose exec -T redis redis-cli -n 0 LLEN $smokeQueue)[-1]
             $workerLog = @(& docker logs $smokeWorkerName 2>&1) -join "`n"
             if ($queueDepth -eq "0" -and $workerLog -match "Task structured_extraction.submit") {
                 $consumed = $true
@@ -231,7 +230,8 @@ print(task_id)
             Write-Warning "Unable to remove temporary smoke worker: $($_.Exception.Message)"
         }
         try {
-            Invoke-Compose exec -T redis redis-cli DEL $smokeQueue | Out-Null
+            Invoke-Compose exec -T redis redis-cli -n 0 DEL $smokeQueue | Out-Null
+            Invoke-Compose exec -T redis redis-cli -n 1 DEL $smokeQueue | Out-Null
         }
         catch {
             Write-Warning "Unable to remove temporary smoke queue: $($_.Exception.Message)"

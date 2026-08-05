@@ -75,7 +75,10 @@ def test_stack_verifier_observes_real_broker_message_and_running_task_recovery()
     assert "--queues" in verifier
     assert "LLEN $smokeQueue" in verifier
     assert "docker rm -f $smokeWorkerName" in verifier
-    assert "redis-cli DEL $smokeQueue" in verifier
+    assert "redis-cli -n 0 DEL $smokeQueue" in verifier
+    assert "redis-cli -n 1 DEL $smokeQueue" in verifier
+    assert "redis-cli -n 0 --raw LINDEX $smokeQueue 0" in verifier
+    assert "redis-cli -n 1 --raw LINDEX $smokeQueue 0" in verifier
     assert "task10-mineru" in verifier
     assert "--signal=KILL" in verifier
     assert "running:polling:task10-mineru" in verifier
