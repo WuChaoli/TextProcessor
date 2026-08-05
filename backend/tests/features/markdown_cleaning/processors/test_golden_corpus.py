@@ -11,7 +11,7 @@ from app.features.markdown_cleaning.processors import (
     MarkdownCleaningSummary,
 )
 
-_ROOT = Path("backend/tests/fixtures/markdown_cleaning/v1")
+_ROOT = Path(__file__).resolve().parents[3] / "fixtures" / "markdown_cleaning" / "v1"
 
 
 def test_markdown_cleaning_golden_corpus_bytes_summary_and_idempotency(

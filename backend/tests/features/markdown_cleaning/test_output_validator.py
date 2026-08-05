@@ -154,7 +154,11 @@ def test_validator_rejects_input_hash_mismatch(
     assert "输入摘要与处理结果不一致" in error.value.safe_message
 
 
-def test_validator_rejects_relative_output_path(tmp_path: Path) -> None:
+def test_validator_rejects_relative_output_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
     source = tmp_path / "source.md"
     source.write_text("input", encoding="utf-8")
     relative_path = Path("result.md")
