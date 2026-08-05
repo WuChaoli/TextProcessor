@@ -35,5 +35,10 @@ celery_app.conf.update(
             "schedule": settings.MARKDOWN_CLEANING_WORKER.queue_recovery_interval_seconds,
             "options": {"queue": "markdown_cleaning"},
         },
+        "recover-text-classification-tasks": {
+            "task": "text_classification.recover",
+            "schedule": settings.CLASSIFICATION_RECOVERY_INTERVAL_SECONDS,
+            "options": {"queue": "text_classification"},
+        },
     },
 )

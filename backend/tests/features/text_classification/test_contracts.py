@@ -37,6 +37,8 @@ def test_preparer_copies_to_task_scoped_staging(tmp_path: Path) -> None:
     assert prepared.size_bytes == len("待分类文本".encode())
     prepared_path = Path(url2pathname(urlsplit(prepared.local_uri).path))
     assert prepared_path.read_text(encoding="utf-8") == "待分类文本"
+    repeated = preparer.prepare("task-1", source.as_uri())
+    assert repeated == prepared
 
 
 def test_preparer_rejects_local_path_outside_allowlist(tmp_path: Path) -> None:
@@ -82,3 +84,26 @@ def test_adapter_sends_only_internal_uri_contract() -> None:
         '{"schemaVersion":"1","requestId":"task-1",'
         '"inputUri":"file:///staging/task-1/input.txt"}'
     )
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"schemaVersion": "1", "requestId": "task-1", "tags": ["a"]},
+        {
+            "schemaVersion": "1",
+            "requestId": "task-1",
+            "tags": ["a", "b", "c", "d"],
+            "confidence": {"topTriple": 1.5, "endDoc": 0.8},
+            "releaseId": "release-1",
+        },
+    ],
+)
+def test_adapter_rejects_malformed_classification_result(response: dict[str, object]) -> None:
+    client = ClassificationClient(
+        base_url="http://classification:8000",
+        transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=response)),
+    )
+
+    with pytest.raises(ValueError, match="contract mismatch"):
+        client.classify("task-1", "file:///staging/task-1/input.txt")

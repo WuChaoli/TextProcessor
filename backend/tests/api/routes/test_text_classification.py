@@ -60,3 +60,17 @@ def test_changed_uri_conflicts_with_idempotency_key(context: tuple[TestClient, R
     changed = {**base, "inputUri": "file:///input/b.txt"}
     response = client.post("/api/v1/text-classification/tasks", json=changed)
     assert response.status_code == 409
+
+
+def test_task_is_hidden_from_another_caller(context: tuple[TestClient, RecordingDispatcher]) -> None:
+    client, _ = context
+    created = client.post(
+        "/api/v1/text-classification/tasks",
+        json={"sessionId": "s-private", "fileId": "f-private", "inputUri": "file:///input/a.txt"},
+    ).json()
+    other = User(id=uuid.uuid4(), email="other@example.com", hashed_password="unused")
+    app.dependency_overrides[get_current_user] = lambda: other
+
+    response = client.get(f"/api/v1/text-classification/tasks/{created['taskId']}")
+
+    assert response.status_code == 404

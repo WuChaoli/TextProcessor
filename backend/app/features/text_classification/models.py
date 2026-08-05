@@ -12,7 +12,7 @@ def utc_now() -> datetime:
 
 
 class ClassificationTask(SQLModel, table=True):
-    __tablename__ = "classification_task"
+    __tablename__ = "classification_task"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (UniqueConstraint("caller_id", "session_id", "file_id", name="uq_classification_task_caller_session_file"),)
 
     id: uuid.UUID = Field(default_factory=uuid.uuid7, primary_key=True)
@@ -22,6 +22,13 @@ class ClassificationTask(SQLModel, table=True):
     request_fingerprint: str = Field(max_length=64)
     input_uri: str = Field(max_length=4096)
     status: TaskStatus = Field(sa_type=Enum(TaskStatus, native_enum=False, values_callable=lambda values: [value.value for value in values], length=16), index=True)  # type: ignore[call-overload]
+    attempt_count: int = Field(default=0, ge=0)
+    max_attempts: int = Field(default=3, gt=0)
+    lease_expires_at: datetime | None = Field(
+        default=None,
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]
+        index=True,
+    )
     staging_uri: str | None = Field(default=None, max_length=4096)
     input_sha256: str | None = Field(default=None, max_length=64)
     input_size_bytes: int | None = Field(default=None, ge=0, sa_type=BigInteger)  # type: ignore[call-overload]

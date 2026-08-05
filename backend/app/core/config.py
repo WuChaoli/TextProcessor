@@ -298,6 +298,8 @@ class Settings(BaseSettings):
     CLASSIFICATION_BASE_URL: str = "http://classification:8000"
     CLASSIFICATION_API_TOKEN: str | None = Field(default=None, repr=False)
     CLASSIFICATION_TIMEOUT_SECONDS: float = Field(default=300, gt=0)
+    CLASSIFICATION_RECOVERY_INTERVAL_SECONDS: int = Field(default=30, gt=0)
+    CLASSIFICATION_RECOVERY_BATCH_SIZE: int = Field(default=100, gt=0)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

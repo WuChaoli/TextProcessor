@@ -35,6 +35,18 @@ class ClassificationInputPreparer:
         task_dir.mkdir(parents=True, exist_ok=True)
         destination = task_dir / "input.txt"
         digest = hashlib.sha256()
+        if destination.exists():
+            with source.open("rb") as input_file:
+                while chunk := input_file.read(1024 * 1024):
+                    digest.update(chunk)
+            existing_digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+            if existing_digest != digest.hexdigest() or destination.stat().st_size != size:
+                raise ValueError("staged input conflicts with existing task input")
+            return PreparedClassificationInput(
+                destination.as_uri(),
+                existing_digest,
+                size,
+            )
         with source.open("rb") as input_file, destination.open("xb") as output_file:
             while chunk := input_file.read(1024 * 1024):
                 digest.update(chunk)
