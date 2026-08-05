@@ -142,3 +142,6 @@ from app.features.markdown_cleaning.task_models import (  # noqa: E402
 from app.features.structured_extraction.models import (  # noqa: E402
     ExtractionTask as ExtractionTask,
 )
+from app.features.text_classification.models import (  # noqa: E402
+    ClassificationTask as ClassificationTask,
+)

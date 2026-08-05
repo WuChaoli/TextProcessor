@@ -292,6 +292,12 @@ class Settings(BaseSettings):
         default_factory=GlobalDeduplicationWorkerSettings
     )
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
+    CLASSIFICATION_INPUT_ROOTS: list[Path] = []
+    CLASSIFICATION_STAGING_ROOT: Path = Path("/data/textprocessor/classification")
+    CLASSIFICATION_MAX_INPUT_BYTES: int = Field(default=2_000_000, gt=0)
+    CLASSIFICATION_BASE_URL: str = "http://classification:8000"
+    CLASSIFICATION_API_TOKEN: str | None = Field(default=None, repr=False)
+    CLASSIFICATION_TIMEOUT_SECONDS: float = Field(default=300, gt=0)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

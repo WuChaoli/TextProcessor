@@ -9,6 +9,7 @@ celery_app = Celery(
         "app.features.structured_extraction.celery_tasks",
         "app.features.global_deduplication.celery_tasks",
         "app.features.markdown_cleaning.celery_tasks",
+        "app.features.text_classification.celery_tasks",
     ],
 )
 celery_app.conf.update(
