@@ -65,7 +65,7 @@
 - Consumes: current `dev` task APIs and Celery application.
 - Produces: registered Markdown Cleaning `POST /api/v1/markdown-cleaning/tasks`, GET by task ID, Celery tasks and Alembic revisions `20260803_01` through `20260803_03`.
 
-- [ ] **Step 1: Create the execution worktree and record the baseline**
+- [x] **Step 1: Create the execution worktree and record the baseline**
 
 Run:
 
@@ -77,7 +77,7 @@ uv run --directory backend pytest tests/features/structured_extraction tests/fea
 
 Expected: existing feature tests pass; unrelated untracked files are recorded and left untouched.
 
-- [ ] **Step 2: Merge the completed Markdown branch without flattening its evidence**
+- [x] **Step 2: Merge the completed Markdown branch without flattening its evidence**
 
 Run:
 
@@ -87,7 +87,7 @@ git merge --no-ff feat/markdown-cleaning-api -m "合并：接入Markdown清洗�
 
 Resolve only genuine conflicts. `api_router` must include structured extraction, global deduplication, and Markdown Cleaning; `celery_app.include` and `beat_schedule` must retain all three features. When conflicts occur, stage the resolved files and finish the pending merge with `git commit --no-edit`.
 
-- [ ] **Step 3: Verify the merged Markdown contract**
+- [x] **Step 3: Verify the merged Markdown contract**
 
 Run:
 
@@ -97,7 +97,7 @@ uv run --directory backend pytest tests/features/markdown_cleaning tests/api/rou
 
 Expected: all Markdown unit and API tests pass.
 
-- [ ] **Step 4: Verify migration continuity**
+- [x] **Step 4: Verify migration continuity**
 
 Run against an isolated PostgreSQL database:
 
@@ -108,7 +108,7 @@ uv run --directory backend alembic current
 
 Expected: head is `20260803_03`; no divergent migration heads.
 
-- [ ] **Step 5: Verify the merge boundary**
+- [x] **Step 5: Verify the merge boundary**
 
 ```powershell
 git status --short --untracked-files=all
@@ -139,7 +139,7 @@ Expected: the merge is complete, only approved Markdown files were introduced, a
 - Produces: `TaskStatus` enum and `ensure_transition(current: TaskStatus, target: TaskStatus) -> None`.
 - Produces: `RecoverableTaskRepository` and `TaskDispatcher` protocols consumed by feature-specific recovery adapters.
 
-- [ ] **Step 1: Write failing envelope tests**
+- [x] **Step 1: Write failing envelope tests**
 
 ```python
 def test_envelope_round_trip() -> None:
@@ -159,13 +159,13 @@ def test_envelope_rejects_invalid_payload(payload: object) -> None:
         TaskEnvelope.parse(payload, expected_type="x", expected_schema_version=1)
 ```
 
-- [ ] **Step 2: Run the envelope tests and verify RED**
+- [x] **Step 2: Run the envelope tests and verify RED**
 
 Run: `uv run --directory backend pytest tests/tasking/test_envelope.py -q`
 
 Expected: collection fails because `app.tasking.envelope` does not exist.
 
-- [ ] **Step 3: Implement the immutable envelope**
+- [x] **Step 3: Implement the immutable envelope**
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -184,7 +184,7 @@ class TaskEnvelope:
 
 `parse` must reject booleans as schema versions, unknown task types, schema mismatch, missing fields and extra fields.
 
-- [ ] **Step 4: Write and implement shared state transition tests**
+- [x] **Step 4: Write and implement shared state transition tests**
 
 ```python
 def test_terminal_state_cannot_transition() -> None:
@@ -194,7 +194,7 @@ def test_terminal_state_cannot_transition() -> None:
 
 Allowed transitions are exactly `pending -> queued -> running -> succeeded|failed|cancelled`, plus `pending|queued -> cancelled`.
 
-- [ ] **Step 5: Write and implement generic recovery protocol tests**
+- [x] **Step 5: Write and implement generic recovery protocol tests**
 
 ```python
 def test_recover_dispatches_each_due_task_once() -> None:
@@ -206,11 +206,11 @@ def test_recover_dispatches_each_due_task_once() -> None:
 
 The helper must continue after one dispatch failure and only mark successfully dispatched tasks.
 
-- [ ] **Step 6: Migrate the three existing features to TaskEnvelope**
+- [x] **Step 6: Migrate the three existing features to TaskEnvelope**
 
 Replace feature-local payload parsing with `TaskEnvelope.parse`; retain feature-specific task type constants and public API aliases. Do not change database schemas in this step.
 
-- [ ] **Step 7: Run shared and affected feature tests**
+- [x] **Step 7: Run shared and affected feature tests**
 
 Run:
 
@@ -221,7 +221,7 @@ uv run --directory backend ruff check app/tasking app/features
 
 Expected: all tests and Ruff pass.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add backend/app/tasking backend/app/features backend/tests/tasking backend/tests/features
@@ -248,7 +248,7 @@ git commit -m "重构：建立共享任务可靠性内核"
 - Consumes: Classification `POST /internal/v1/classify` through `ClassificationHttpAdapter.classify(input_uri: str) -> ClassificationResult`.
 - Produces: Celery task type `text_classification`, schema version `1`.
 
-- [ ] **Step 1: Write failing public API contract tests**
+- [x] **Step 1: Write failing public API contract tests**
 
 ```python
 def test_create_classification_task_returns_202(client: TestClient, token: str) -> None:
@@ -263,17 +263,17 @@ def test_create_classification_task_returns_202(client: TestClient, token: str) 
 
 Also test duplicate idempotency, cross-caller GET denial, input size limits, stable error codes and absence of result text in logs.
 
-- [ ] **Step 2: Run contract tests and verify RED**
+- [x] **Step 2: Run contract tests and verify RED**
 
 Run: `uv run --directory backend pytest tests/features/text_classification/test_api_contract.py -q`
 
 Expected: import or route registration failure.
 
-- [ ] **Step 3: Add the task table and migration**
+- [x] **Step 3: Add the task table and migration**
 
 Create fields for UUID ID, caller identity, `(caller_id, session_id, file_id)` unique key, validated source URI, input digest, staging URI, status, dispatch markers, attempt count, result JSON/reference, error code/summary and lifecycle timestamps. PostgreSQL does not store the document body.
 
-- [ ] **Step 4: Implement repository, state machine and service**
+- [x] **Step 4: Implement repository, state machine and service**
 
 ```python
 class TextClassificationTaskService:
@@ -289,7 +289,7 @@ class TextClassificationTaskService:
 
 Use Task Kernel envelope and transitions. Commit the task record before dispatch; on broker failure retain a recoverable pending/queued state and return a stable `QUEUE_SUBMISSION_FAILED` response.
 
-- [ ] **Step 5: Implement the Classification adapter contract**
+- [x] **Step 5: Implement the Classification adapter contract**
 
 ```python
 class ClassificationHttpAdapter:
@@ -304,15 +304,15 @@ class ClassificationHttpAdapter:
 
 Task Runner first downloads the validated source through `fsspec` into a task-specific staging directory and passes only its shared `file://` URI. Send the configured internal service token, set connect/read/pool timeouts, reject oversized or malformed responses, and map OOM/unavailable/timeout errors to stable codes. Classification resolves only files below its read-only staging root, enforces byte and UTF-8 limits, and does not persist input or output.
 
-- [ ] **Step 6: Implement Celery execution and recovery**
+- [x] **Step 6: Implement Celery execution and recovery**
 
 The Worker loads input from PostgreSQL, marks the task running, calls the adapter once per attempt, validates labels/scores, persists the result and marks succeeded. Configure finite retry and Beat recovery for undispatched or expired running tasks.
 
-- [ ] **Step 7: Register routes and Celery tasks**
+- [x] **Step 7: Register routes and Celery tasks**
 
 Add the router to `backend/app/api/main.py`, the task module to `celery_app.include`, and a recovery schedule to `beat_schedule`.
 
-- [ ] **Step 8: Run unit and real-boundary integration tests**
+- [x] **Step 8: Run unit and real-boundary integration tests**
 
 Run:
 
@@ -324,7 +324,7 @@ uv run --directory backend ruff check app/features/text_classification tests/fea
 
 Expected: duplicate messages produce one result, worker loss is recoverable, and cross-caller GET is rejected.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add backend/app/features/text_classification backend/app/alembic backend/app/api/main.py backend/app/core backend/tests .env.example
@@ -351,7 +351,7 @@ git commit -m "功能：将文本分类接入后台任务接口"
 - Produces state file `/var/run/textprocessor/task-runner.json` containing exact keys `worker` and `beat` with positive PIDs.
 - Produces health command `python -m app.task_runner.healthcheck`.
 
-- [ ] **Step 1: Write failing supervisor tests**
+- [x] **Step 1: Write failing supervisor tests**
 
 ```python
 def test_child_failure_terminates_sibling_and_returns_nonzero(tmp_path: Path) -> None:
@@ -361,13 +361,13 @@ def test_child_failure_terminates_sibling_and_returns_nonzero(tmp_path: Path) ->
 
 Also cover SIGTERM forwarding, exact state keys, atomic state writes and clean startup failure.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `uv run --directory backend pytest tests/task_runner/test_process_manager.py -q`
 
 Expected: module not found.
 
-- [ ] **Step 3: Implement the Python PID 1 supervisor**
+- [x] **Step 3: Implement the Python PID 1 supervisor**
 
 Start these independent commands:
 
@@ -378,15 +378,15 @@ celery -A app.core.celery_app:celery_app beat --loglevel=INFO --pidfile=/var/run
 
 Forward SIGTERM/SIGINT, terminate the sibling on unexpected exit, wait with a bounded grace period, and return nonzero on child failure.
 
-- [ ] **Step 4: Implement health checks**
+- [x] **Step 4: Implement health checks**
 
 Health must verify both PIDs are alive, Redis DB 0 responds, and the Beat schedule path exists after startup. Reject missing, malformed or extra state keys.
 
-- [ ] **Step 5: Replace Compose services**
+- [x] **Step 5: Replace Compose services**
 
 Remove `extraction-worker` and `extraction-beat`; add `task-runner` using the backend image, supervisor command, Redis/PostgreSQL dependencies, the Beat volume and the new healthcheck. Update override files and all contract tests to reject the removed service names.
 
-- [ ] **Step 6: Build and exercise fault recovery**
+- [x] **Step 6: Build and exercise fault recovery**
 
 Run:
 
@@ -398,7 +398,7 @@ docker compose up -d db redis task-runner
 
 Kill the Worker child, assert the container restart count increases and health returns; repeat for Beat.
 
-- [ ] **Step 7: Run tests and commit**
+- [x] **Step 7: Run tests and commit**
 
 ```powershell
 uv run --directory backend pytest tests/task_runner tests/features/structured_extraction/test_deployment_stack.py -q
@@ -424,7 +424,7 @@ git commit -m "部署：合并Celery Worker与Beat容器"
 - Consumes shared Redis using an isolated DB/prefix and Data-Juicer's existing database configuration.
 - Exposes only the internal `/v1/jobs`, `/v1/jobs/{job_id}`, `/health` and `/ready` API.
 
-- [ ] **Step 1: Write failing container contract tests**
+- [x] **Step 1: Write failing container contract tests**
 
 ```python
 def test_compose_has_one_datajuicer_service() -> None:
@@ -436,19 +436,19 @@ def test_compose_has_one_datajuicer_service() -> None:
 
 Also assert there is no public Traefik label or production host port.
 
-- [ ] **Step 2: Implement a three-process supervisor**
+- [x] **Step 2: Implement a three-process supervisor**
 
 Supervise Uvicorn API, Data-Juicer Celery Worker and Beat using the same signal, atomic state and sibling-termination rules as Task Runner. State keys are exactly `api`, `worker`, `beat`.
 
-- [ ] **Step 3: Build the Data-Juicer image**
+- [x] **Step 3: Build the Data-Juicer image**
 
 Install the locked service dependencies and vendored Data-Juicer runtime, run as a non-root user, use the supervisor as entrypoint, and provide a healthcheck that verifies all three processes plus `/ready` and Redis connectivity.
 
-- [ ] **Step 4: Add the production Compose service**
+- [x] **Step 4: Add the production Compose service**
 
 Use one service, internal network only, explicit model/data/cache volumes, shared Redis isolation, PostgreSQL readiness, finite restart policy and no published port.
 
-- [ ] **Step 5: Verify current Data-Juicer behavior is preserved**
+- [x] **Step 5: Verify current Data-Juicer behavior is preserved**
 
 Run:
 
@@ -460,7 +460,7 @@ docker compose up -d db redis datajuicer
 
 Submit one authorized small real job only when its configured fixture exists; otherwise report real capability validation as incomplete.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add services/datajuicer_service/Dockerfile services/datajuicer_service/process_manager.py services/datajuicer_service/healthcheck.py services/datajuicer_service/tests compose.yml .env.example
@@ -487,25 +487,25 @@ git commit -m "部署：将Data-Juicer封装为单容器服务"
 - Produces `debug` profile for Adminer and development/test-only services in override files.
 - Produces release ordering: pull/build -> migrate once -> start/update -> verify.
 
-- [ ] **Step 1: Write failing Compose contract assertions**
+- [x] **Step 1: Write failing Compose contract assertions**
 
 Assert default config excludes `adminer`, `prestart`, `extraction-worker` and `extraction-beat`; assert exactly the eight target services; assert only `frontend` and `backend-api` join `traefik-public`. Rename existing Compose service keys `backend`, `docling-api` and `classification-service` to `backend-api`, `docling` and `classification`, then update internal URLs, dependencies, labels, scripts and workflow service lists atomically.
 
 Add an AST-based architecture test that fails when a production Route imports `BackgroundTasks` or directly imports a processor/algorithm implementation. The allowed dependency direction is `routes -> service/dependencies -> processor|adapter`.
 
-- [ ] **Step 2: Move Adminer and auxiliary services to profiles**
+- [x] **Step 2: Move Adminer and auxiliary services to profiles**
 
 Set `profiles: [debug]` for Adminer. Keep Mailcatcher, Playwright and local Proxy in development/test overrides; do not duplicate production service definitions.
 
-- [ ] **Step 3: Remove the prestart service**
+- [x] **Step 3: Remove the prestart service**
 
 Remove Compose dependency on `prestart`. Deployment workflows must run the backend image once with `bash scripts/prestart.sh` after database health and before application services are updated.
 
-- [ ] **Step 4: Update deployment workflows**
+- [x] **Step 4: Update deployment workflows**
 
 Both staging and production workflows must load the same base Compose and capability overlays, run migration once, start all eight services and execute the single-node verifier. Keep shell interpolation in environment variables rather than GitHub expression interpolation inside scripts.
 
-- [ ] **Step 5: Validate Compose and workflows**
+- [x] **Step 5: Validate Compose and workflows**
 
 Run:
 
@@ -518,7 +518,7 @@ uv run --directory backend pytest tests/features/structured_extraction/test_depl
 
 Expected: default output has eight target services; debug adds Adminer; no workflow findings beyond documented suppressions.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add compose.yml compose.override.yml compose.traefik.yml .github/workflows deployment.md backend/tests/features/structured_extraction/test_deployment_stack.py
@@ -543,23 +543,23 @@ git commit -m "发布：收敛单机生产服务与迁移流程"
 - Produces one release verifier that checks service count, health, network exposure, Redis isolation, API/Task Runner independent failure and cleanup.
 - Preserves capability-specific real verification scripts for Docling, Classification and Data-Juicer.
 
-- [ ] **Step 1: Write static verifier contract tests**
+- [x] **Step 1: Write static verifier contract tests**
 
 Tests must assert the verifier names all eight services, rejects removed service names, inspects child PIDs, checks no capability host ports, and performs cleanup in `finally`.
 
-- [ ] **Step 2: Implement Task Runner verification**
+- [x] **Step 2: Implement Task Runner verification**
 
 Verify exact `worker` and `beat` state keys, Redis DB 0 ping, Beat schedule, Worker ping, container health and restart count changes after separately killing each child.
 
-- [ ] **Step 3: Implement full-stack failure scenarios**
+- [x] **Step 3: Implement full-stack failure scenarios**
 
 Create one task, kill Backend API and confirm the task completes; create another task, kill Task Runner and confirm API can still create/query tasks while Redis/PostgreSQL are healthy, then confirm recovery after Task Runner restart.
 
-- [ ] **Step 4: Verify capability isolation**
+- [x] **Step 4: Verify capability isolation**
 
 Assert Docling, Classification and Data-Juicer have no published production ports and remain healthy across Backend API restart. Run real samples only when their explicit environment variables are present.
 
-- [ ] **Step 5: Run the complete quality gate**
+- [x] **Step 5: Run the complete quality gate**
 
 ```powershell
 $env:PYTHONPATH="$(Get-Location);$(Get-Location)\backend"
@@ -572,7 +572,7 @@ pwsh -NoProfile -File scripts/verify-single-node-stack.ps1
 
 Expected: all fast suites pass; verifier exits 0 and removes its temporary containers, networks, volumes and files. Missing real fixtures remain explicitly incomplete.
 
-- [ ] **Step 6: Update runbooks and commit**
+- [x] **Step 6: Update runbooks and commit**
 
 ```powershell
 git add scripts docs/runbooks
@@ -592,11 +592,11 @@ git commit -m "验证：覆盖单机架构与独立故障恢复"
 - Consumes all prior task deliverables.
 - Produces a clean, reviewable branch whose Compose topology, API contracts, tests and documentation agree with ADR-0001.
 
-- [ ] **Step 1: Reconcile every Spec requirement with current evidence**
+- [x] **Step 1: Reconcile every Spec requirement with current evidence**
 
 Check eight default services, four task APIs, Task Kernel usage, API/Task Runner isolation, profiles, migration ordering, stable error handling and real-test boundaries. Any unmet item remains an open implementation item; do not convert it into documentation-only success.
 
-- [ ] **Step 2: Run final repository checks**
+- [x] **Step 2: Run final repository checks**
 
 ```powershell
 git diff --check
@@ -606,11 +606,11 @@ git log --oneline --decorate -12
 
 Review staged and unstaged changes, preserve unrelated user files and ensure each commit contains one approved task boundary.
 
-- [ ] **Step 3: Run the release gate again from the final tree**
+- [x] **Step 3: Run the release gate again from the final tree**
 
 Run the full fast test, lint, Compose, workflow and single-node verifier commands from Task 7. Record exact pass/deselect/warning counts and list every unrun real integration test.
 
-- [ ] **Step 4: Commit evidence-only corrections**
+- [x] **Step 4: Commit evidence-only corrections**
 
 ```powershell
 git add docs deployment.md
