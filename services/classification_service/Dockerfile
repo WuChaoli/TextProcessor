@@ -17,6 +17,7 @@ RUN uv sync --locked --no-dev --no-install-project
 COPY services/classification_service/classification_service ./classification_service
 RUN uv sync --locked --no-dev
 
+ENV UV_CACHE_DIR=/tmp/uv-cache
 USER 65532:65532
 EXPOSE 8000
 CMD ["uv", "run", "uvicorn", "classification_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

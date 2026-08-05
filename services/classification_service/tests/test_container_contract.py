@@ -11,6 +11,7 @@ def test_dockerfile_contract() -> None:
     assert "uv sync --locked --no-dev" in content
     assert "HF_HUB_OFFLINE=1" in content
     assert "TRANSFORMERS_OFFLINE=1" in content
+    assert "UV_CACHE_DIR=/tmp/uv-cache" in content
     assert '"--workers", "1"' in content
 
 
