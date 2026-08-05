@@ -55,8 +55,10 @@ Traefik 是宿主机共享基础设施，不计入项目业务容器。Adminer �
 
 - Docling 负责文档解析，第一阶段保留现有单容器 API + RQ Worker 和共享 Redis 独立 DB。
 - Classification 负责 GPU 模型加载和推理，不保存 TextProcessor 权威任务状态。
+- Backend API 只接收并校验调用方输入 URI；Task Runner 通过受控 `fsspec` 下载文本到任务独立 staging 目录，再将共享只读 `file://` URI 交给 Classification。Classification 不保存任务、正文或结果。
 - Data-Juicer 负责全局去重等重型数据处理，并正式纳入生产 Compose。
 - 能力服务只暴露内部网络，通过稳定 adapter 与 Task Runner 连接。
+- Task Runner 以读写方式挂载 Classification staging，Classification 仅以只读方式挂载；内部 URI 必须限制在该根目录并拒绝路径逃逸。
 - 能力内部队列只用于资源隔离，不复制 TextProcessor 完整业务状态机。
 
 ### 4.4 数据与基础设施

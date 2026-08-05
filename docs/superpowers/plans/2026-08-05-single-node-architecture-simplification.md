@@ -245,7 +245,7 @@ git commit -m "重构：建立共享任务可靠性内核"
 **Interfaces:**
 - Produces: `POST /api/v1/text-classification/tasks` returning `202` and camel-case `taskId`, `status`, `createdAt`.
 - Produces: `GET /api/v1/text-classification/tasks/{task_id}` with caller isolation.
-- Consumes: Classification `POST /internal/v1/classify` through `ClassificationHttpAdapter.classify(text: str) -> ClassificationResult`.
+- Consumes: Classification `POST /internal/v1/classify` through `ClassificationHttpAdapter.classify(input_uri: str) -> ClassificationResult`.
 - Produces: Celery task type `text_classification`, schema version `1`.
 
 - [ ] **Step 1: Write failing public API contract tests**
@@ -271,7 +271,7 @@ Expected: import or route registration failure.
 
 - [ ] **Step 3: Add the task table and migration**
 
-Create fields for UUID ID, caller identity, `(caller_id, session_id, file_id)` unique key, validated input URI, input digest, status, dispatch markers, attempt count, result JSON/reference, error code/summary and lifecycle timestamps. The Worker reads bounded text through the existing URI policy before calling Classification; PostgreSQL does not store the document body.
+Create fields for UUID ID, caller identity, `(caller_id, session_id, file_id)` unique key, validated source URI, input digest, staging URI, status, dispatch markers, attempt count, result JSON/reference, error code/summary and lifecycle timestamps. PostgreSQL does not store the document body.
 
 - [ ] **Step 4: Implement repository, state machine and service**
 
@@ -293,13 +293,16 @@ Use Task Kernel envelope and transitions. Commit the task record before dispatch
 
 ```python
 class ClassificationHttpAdapter:
-    def classify(self, text: str) -> ClassificationResult:
-        response = self._client.post("/internal/v1/classify", json={"text": text})
+    def classify(self, input_uri: str) -> ClassificationResult:
+        response = self._client.post(
+            "/internal/v1/classify",
+            json={"schemaVersion": "1", "requestId": self._request_id, "inputUri": input_uri},
+        )
         response.raise_for_status()
         return ClassificationResult.model_validate(response.json())
 ```
 
-Send the configured internal service token, set connect/read/pool timeouts, reject oversized or malformed responses, and map OOM/unavailable/timeout errors to stable codes.
+Task Runner first downloads the validated source through `fsspec` into a task-specific staging directory and passes only its shared `file://` URI. Send the configured internal service token, set connect/read/pool timeouts, reject oversized or malformed responses, and map OOM/unavailable/timeout errors to stable codes. Classification resolves only files below its read-only staging root, enforces byte and UTF-8 limits, and does not persist input or output.
 
 - [ ] **Step 6: Implement Celery execution and recovery**
 
