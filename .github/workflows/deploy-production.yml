@@ -28,10 +28,23 @@ jobs:
       EMAILS_FROM_EMAIL: ${{ secrets.EMAILS_FROM_EMAIL }}
       POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+      DOCLING_BASE_IMAGE: ${{ vars.DOCLING_BASE_IMAGE }}
+      DOCKER_IMAGE_DOCLING: ${{ vars.DOCKER_IMAGE_DOCLING }}
+      DOCLING_SERVE_API_KEY: ${{ secrets.DOCLING_SERVE_API_KEY }}
+      EXTRACTION_DOCLING_API_KEY: ${{ secrets.DOCLING_SERVE_API_KEY }}
+      DOCKER_IMAGE_CLASSIFICATION: ${{ vars.DOCKER_IMAGE_CLASSIFICATION }}
+      CLASSIFICATION_ENVIRONMENT: production
+      CLASSIFICATION_INTERNAL_SERVICE_TOKEN: ${{ secrets.CLASSIFICATION_INTERNAL_SERVICE_TOKEN }}
+      CLASSIFICATION_MODEL_ROOT: ${{ vars.CLASSIFICATION_MODEL_ROOT }}
+      CLASSIFICATION_MODEL_RELEASE: ${{ vars.CLASSIFICATION_MODEL_RELEASE }}
+      CLASSIFICATION_MODEL_RELEASE_SHA256: ${{ vars.CLASSIFICATION_MODEL_RELEASE_SHA256 }}
+      CLASSIFICATION_RELEASE_QUALITY_STATUS: ${{ vars.CLASSIFICATION_RELEASE_QUALITY_STATUS }}
+      CLASSIFICATION_NVIDIA_VISIBLE_DEVICES: ${{ vars.CLASSIFICATION_NVIDIA_VISIBLE_DEVICES }}
+      TAG: ${{ github.event.release.tag_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - run: docker compose -f compose.yml --project-name ${{ secrets.STACK_NAME_PRODUCTION }} build
-      - run: docker compose -f compose.yml --project-name ${{ secrets.STACK_NAME_PRODUCTION }} up -d
+      - run: docker compose -f compose.yml -f compose.docling.yml --project-name "$STACK_NAME" build backend frontend classification-service docling-api
+      - run: docker compose -f compose.yml -f compose.docling.yml --project-name "$STACK_NAME" up -d --wait --remove-orphans
