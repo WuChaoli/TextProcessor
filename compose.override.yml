@@ -6,6 +6,7 @@ services:
   # etc. To enable it, update .env, set:
   # DOMAIN=localhost.tiangolo.com
   proxy:
+    profiles: [debug]
     image: traefik:3.6
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -58,7 +59,7 @@ services:
     ports:
       - "8080:8080"
 
-  backend:
+  backend-api:
     restart: "no"
     ports:
       - "8000:8000"
@@ -106,12 +107,13 @@ services:
         - path: ./backend/pyproject.toml
           action: rebuild
 
-  docling-api:
+  docling:
     restart: "no"
     ports:
       - "5001:5001"
 
   mailcatcher:
+    profiles: [debug]
     image: schickling/mailcatcher
     ports:
       - "1080:1080"
@@ -129,20 +131,21 @@ services:
         - NODE_ENV=development
 
   playwright:
+    profiles: [debug]
     build:
       context: .
       dockerfile: frontend/Dockerfile.playwright
       args:
-        - VITE_API_URL=http://backend:8000
+        - VITE_API_URL=http://backend-api:8000
         - NODE_ENV=production
     ipc: host
     depends_on:
-      - backend
+      - backend-api
       - mailcatcher
     env_file:
       - .env
     environment:
-      - VITE_API_URL=http://backend:8000
+      - VITE_API_URL=http://backend-api:8000
       - MAILCATCHER_HOST=http://mailcatcher:1080
       # For the reports when run locally
       - PLAYWRIGHT_HTML_HOST=0.0.0.0

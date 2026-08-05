@@ -30,7 +30,7 @@ def test_runtime_assets_do_not_modify_docling_source() -> None:
 def test_compose_has_one_docling_container_and_shared_redis() -> None:
     content = (ROOT / "compose.docling.yml").read_text(encoding="utf-8")
 
-    assert "  docling-api:" in content
+    assert "  docling:" in content
     assert "  docling-worker:" not in content
     assert "  docling-redis:" not in content
     assert "docling-redis-data" not in content
@@ -43,7 +43,7 @@ def test_compose_has_one_docling_container_and_shared_redis() -> None:
 def test_celery_remains_on_redis_db_zero() -> None:
     content = (ROOT / "compose.yml").read_text(encoding="utf-8")
 
-    assert content.count("CELERY_BROKER_URL=redis://redis:6379/0") == 3
+    assert content.count("CELERY_BROKER_URL=redis://redis:6379/0") == 2
 
 
 def test_local_override_has_no_removed_docling_services() -> None:

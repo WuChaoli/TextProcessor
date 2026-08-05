@@ -17,7 +17,7 @@ def test_dockerfile_contract() -> None:
 
 def test_compose_service_is_internal_gpu_only() -> None:
     content = (ROOT / "compose.yml").read_text(encoding="utf-8")
-    section = content.split("  classification-service:", 1)[1].split("\n  redis:", 1)[0]
+    section = content.split("  classification:", 1)[1].split("\n  datajuicer:", 1)[0]
     assert "ports:" not in section
     assert "traefik" not in section.lower()
     assert "depends_on:" not in section

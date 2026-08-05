@@ -46,5 +46,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - run: docker compose -f compose.yml -f compose.docling.yml --project-name "$STACK_NAME" build backend frontend classification-service docling-api
+          submodules: recursive
+      - run: docker compose -f compose.yml -f compose.docling.yml --project-name "$STACK_NAME" build backend-api task-runner frontend classification docling datajuicer
+      - run: docker compose -f compose.yml -f compose.docling.yml --project-name "$STACK_NAME" up -d --wait db redis
+      - run: docker compose -f compose.yml -f compose.docling.yml --project-name "$STACK_NAME" run --rm --no-deps backend-api bash scripts/prestart.sh
       - run: docker compose -f compose.yml -f compose.docling.yml --project-name "$STACK_NAME" up -d --wait --remove-orphans
+      - run: pwsh -NoProfile -File scripts/verify-single-node-stack.ps1 -ComposeProjectName "$STACK_NAME"
