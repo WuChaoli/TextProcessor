@@ -35,3 +35,34 @@ def test_routes_do_not_use_background_tasks_or_import_processors() -> None:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert forbidden_parts.isdisjoint(alias.name.split(".")), route_file
+
+
+def test_single_node_verifier_covers_topology_isolation_and_cleanup() -> None:
+    verifier = (ROOT / "scripts" / "verify-single-node-stack.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    for service in EXPECTED:
+        assert f'"{service}"' in verifier
+    for removed in ("backend", "docling-api", "classification-service", "prestart"):
+        assert f'"{removed}"' in verifier
+    assert "Compare-Object" in verifier
+    assert "HostConfig.PortBindings" in verifier
+    assert "finally" in verifier
+    assert '"down", "--volumes", "--remove-orphans"' in verifier
+    assert "API-independent task completion" in verifier
+    assert "Task Runner-independent API and recovery" in verifier
+
+
+def test_task_runner_verifier_checks_children_broker_and_fault_restarts() -> None:
+    verifier = (ROOT / "scripts" / "verify-task-runner.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    assert '@("worker", "beat")' in verifier
+    assert "task-runner.json" in verifier
+    assert "redis-cli" in verifier and '"-n", "0", "PING"' in verifier
+    assert '"celery"' in verifier and '"inspect", "ping"' in verifier
+    assert "beat-schedule" in verifier
+    assert "RestartCount" in verifier
+    assert "docker kill" in verifier

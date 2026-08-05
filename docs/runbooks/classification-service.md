@@ -7,8 +7,8 @@
 1. 从 `.env.example` 复制所需的 `CLASSIFICATION_*` 配置到受控 `.env`，令牌不得提交。
 2. `CLASSIFICATION_MODEL_ROOT` 指向宿主机 release 根目录；`CLASSIFICATION_MODEL_RELEASE` 是该根目录下的 release 目录名。
 3. 用 `tools/validate_release.py` 离线校验 release，并把 `manifest.json` 的 SHA256 写入配置。
-4. 运行 `docker compose build classification-service` 和 `docker compose up -d classification-service`。
-5. 在目标 GPU 主机运行 `powershell -File scripts/verify-classification-service.ps1`。
+4. 运行 `docker compose build classification` 和 `docker compose up -d classification`。
+5. 在目标 GPU 主机运行 `pwsh -NoProfile -File scripts/verify-classification-service.ps1`。
 
 baseline `20260729T093134Z-321175f0` 仅为 `experimental`，禁止作为 production release。
 

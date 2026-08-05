@@ -2,7 +2,7 @@
 
 ## 用途与边界
 
-`scripts/verify-markdown-cleaning-stack.ps1` 验证 Markdown 清洗 API、PostgreSQL、Redis、Celery worker 与 Celery beat 的真实协作。脚本不使用 mock、eager mode 或 `TestClient`，也不依赖 Docling/DataJuicer；Markdown 清洗由仓库内已验证 processor 执行。
+`scripts/verify-markdown-cleaning-stack.ps1` 是 Markdown 清洗能力的隔离真实验收；生产八容器拓扑统一由 `scripts/verify-single-node-stack.ps1` 验收。隔离脚本验证 Markdown 清洗 API、PostgreSQL、Redis、Celery worker 与 Celery beat 的真实协作，不使用 mock、eager mode 或 `TestClient`，也不依赖 Docling/DataJuicer。
 
 脚本仅面向本地或 CI 验收。它创建带随机后缀的 PostgreSQL/Redis 容器、随机端口、临时输入/输出/staging 根和测试超级用户。`finally` 仅终止本次脚本记录的进程、删除本次容器和临时目录，不操作共享容器、数据库或业务文件。
 

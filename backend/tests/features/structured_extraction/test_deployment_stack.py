@@ -55,42 +55,12 @@ def test_docling_verifier_accepts_explicit_compose_project_and_files() -> None:
     assert "@script:composeArguments" in verifier
 
 
-def test_stack_verifier_observes_real_broker_message_and_running_task_recovery() -> (
-    None
-):
+def test_extraction_verifier_delegates_to_unified_single_node_verifier() -> None:
     verifier = (REPOSITORY_ROOT / "scripts" / "verify-extraction-stack.ps1").read_text(
         encoding="utf-8"
     )
 
-    assert "DEL celery" not in verifier
-    assert "LINDEX celery 0" not in verifier
-    assert "textprocessor-smoke-" in verifier
-    assert "from celery import Celery" in verifier
-    assert (
-        "CeleryExtractionTaskDispatcher(smoke_app).enqueue_submit(task_id)" in verifier
-    )
-    assert "task_default_queue=queue_name" in verifier
-    assert "submit_extraction_task.apply_async(" not in verifier
-    assert "LINDEX $smokeQueue 0" in verifier
-    assert "FromBase64String" in verifier
-    assert "$headers.task" in verifier
-    assert "$kwargs.task_id -ne $smokeTaskId" in verifier
-    assert '$kwargs.task_type -ne "structured_extraction"' in verifier
-    assert "$kwargs.schema_version -ne 1" in verifier
-    assert "--queues" in verifier
-    assert "LLEN $smokeQueue" in verifier
-    assert "docker rm -f $smokeWorkerName" in verifier
-    assert "redis-cli -n 0 DEL $smokeQueue" in verifier
-    assert "redis-cli -n 1 DEL $smokeQueue" in verifier
-    assert "redis-cli -n 0 --raw LINDEX $smokeQueue 0" in verifier
-    assert "redis-cli -n 1 --raw LINDEX $smokeQueue 0" in verifier
-    assert "task10-mineru" in verifier
-    assert "--signal=KILL" in verifier
-    assert "running:polling:task10-mineru" in verifier
-    assert "succeeded::task10-mineru" in verifier
-    assert "Get-ChildItem" in verifier
-    assert "EXTRACTION_WORKER__PRODUCTION_FORMATS: '[\"pdf\"]'" in verifier
-    assert "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: 5" in verifier
-    assert "[Text.Encoding]::ASCII.GetBytes" in verifier
-    assert '"up", "-d", "--force-recreate"' in verifier
-    assert '"rm", "-sf", "task10-mineru"' in verifier
+    assert "verify-single-node-stack.ps1" in verifier
+    assert "ComposeProjectName" in verifier
+    assert "ComposeFiles" in verifier
+    assert "SkipFaultInjection" in verifier

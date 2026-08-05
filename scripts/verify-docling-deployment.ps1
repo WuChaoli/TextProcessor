@@ -34,7 +34,7 @@ if ($ComposeFiles.Count -eq 0) {
 }
 
 $script:composeArguments = Get-ComposeArguments
-$expectedServices = @("redis", "docling-api")
+$expectedServices = @("redis", "docling")
 $removedServices = @("docling-redis", "docling-worker")
 $runningServices = @(Invoke-Compose ps --services --status running)
 foreach ($service in $expectedServices) {
@@ -49,7 +49,7 @@ foreach ($service in $removedServices) {
     }
 }
 
-$doclingContainerId = @(Invoke-Compose ps -q docling-api | Select-Object -First 1)[0]
+$doclingContainerId = @(Invoke-Compose ps -q docling | Select-Object -First 1)[0]
 $doclingInspection = @(& docker inspect $doclingContainerId) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $doclingInspection.Count -ne 1) {
     throw "Unable to inspect the Docling API container."
@@ -103,7 +103,7 @@ for path in (
 '@
 
 if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-    Invoke-Compose exec -T docling-api python -c $containerProbe | Out-Null
+    Invoke-Compose exec -T docling python -c $containerProbe | Out-Null
 }
 else {
     if ([string]::IsNullOrWhiteSpace($ApiKey)) {
