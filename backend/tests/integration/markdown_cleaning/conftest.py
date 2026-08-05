@@ -118,7 +118,14 @@ def _run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) ->
 def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     database_name = f"tp_md_{uuid.uuid4().hex}"
     container_name = f"tp-md-redis-{uuid.uuid4().hex}"
-    admin_dsn = "postgresql://postgres:changethis@127.0.0.1:5433/postgres"
+    postgres_host = os.getenv("POSTGRES_SERVER", "127.0.0.1")
+    postgres_port = int(os.getenv("POSTGRES_PORT", "5433"))
+    postgres_user = os.getenv("POSTGRES_USER", "postgres")
+    postgres_password = os.getenv("POSTGRES_PASSWORD", "changethis")
+    admin_dsn = (
+        f"host={postgres_host} port={postgres_port} dbname=postgres "
+        f"user={postgres_user} password={postgres_password} connect_timeout=5"
+    )
     backend_root = Path(__file__).parents[3]
     input_root = tmp_path / "input"
     output_root = tmp_path / "output"
@@ -167,10 +174,10 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         env = os.environ.copy()
         env.update(
             {
-                "POSTGRES_SERVER": "127.0.0.1",
-                "POSTGRES_PORT": "5433",
-                "POSTGRES_USER": "postgres",
-                "POSTGRES_PASSWORD": "changethis",
+                "POSTGRES_SERVER": postgres_host,
+                "POSTGRES_PORT": str(postgres_port),
+                "POSTGRES_USER": postgres_user,
+                "POSTGRES_PASSWORD": postgres_password,
                 "POSTGRES_DB": database_name,
                 "CELERY_BROKER_URL": redis_url,
                 "MARKDOWN_CLEANING_INPUT_ROOTS": json.dumps([str(input_root)]),
@@ -191,7 +198,8 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             ["uv", "run", "alembic", "heads"], cwd=backend_root, env=env
         ).split()[0]
         database_url = (
-            f"postgresql+psycopg://postgres:changethis@127.0.0.1:5433/{database_name}"
+            f"postgresql+psycopg://{postgres_user}:{postgres_password}"
+            f"@{postgres_host}:{postgres_port}/{database_name}"
         )
         engine = create_engine(database_url, pool_pre_ping=True)
         with engine.connect() as connection:
@@ -211,8 +219,8 @@ def markdown_cleaning_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         )
         from app.main import app
 
-        settings.POSTGRES_SERVER = "127.0.0.1"
-        settings.POSTGRES_PORT = 5433
+        settings.POSTGRES_SERVER = postgres_host
+        settings.POSTGRES_PORT = postgres_port
         settings.POSTGRES_DB = database_name
         settings.CELERY_BROKER_URL = redis_url
         settings.MARKDOWN_CLEANING_INPUT_ROOTS = [input_root]

@@ -45,6 +45,7 @@ def test_create_and_get_are_task_id_contracts(context: tuple[TestClient, Recordi
 
     assert first.status_code == 202
     assert first.json() == second.json()
+    assert set(first.json()) == {"taskId", "sessionId", "fileId", "status", "createdAt"}
     assert first.json()["status"] == "queued"
     assert len(dispatcher.task_ids) == 1
     fetched = client.get(f"/api/v1/text-classification/tasks/{first.json()['taskId']}")

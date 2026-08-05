@@ -48,7 +48,7 @@ def create_task(request: ClassificationTaskCreate, current_user: CurrentUser, se
         raise HTTPException(409, detail={"code": str(error), "message": "幂等键对应的请求参数不一致"}) from error
     except Exception as error:
         raise HTTPException(503, detail={"code": "QUEUE_SUBMISSION_FAILED", "message": "任务提交失败"}) from error
-    return ClassificationTaskAccepted(task_id=task.id, session_id=task.session_id, file_id=task.file_id, status=task.status)
+    return ClassificationTaskAccepted(task_id=task.id, session_id=task.session_id, file_id=task.file_id, status=task.status, created_at=task.created_at)
 
 
 @router.get("/{task_id}", response_model=ClassificationTaskPublic)

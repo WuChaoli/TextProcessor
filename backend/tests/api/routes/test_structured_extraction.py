@@ -91,7 +91,13 @@ def test_create_returns_202_camel_case_and_is_idempotent(
 
     assert first.status_code == 202
     assert first.json() == second.json()
-    assert set(first.json()) == {"taskId", "sessionId", "fileId", "status"}
+    assert set(first.json()) == {
+        "taskId",
+        "sessionId",
+        "fileId",
+        "status",
+        "createdAt",
+    }
     assert first.json()["status"] == "queued"
     assert len(dispatcher.task_ids) == 1
 

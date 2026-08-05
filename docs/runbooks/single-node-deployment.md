@@ -42,3 +42,5 @@ Task Runner 不健康时读取 `/var/run/textprocessor/task-runner.json`，键�
 ## 真实模型边界
 
 统一验证器证明编排和故障恢复，不证明大型模型、GPU 或真实外部服务质量。仅在显式提供经过授权的 fixture、模型 release 和目标硬件时运行各能力 real integration。未运行项必须在发布记录中逐项标为 `not run`，不得用快速测试替代。
+
+仓库中的 `tests/fixtures/compose/classification-stub.yml` 仅用于没有 GPU/批准模型的环境验证八容器编排与故障隔离。它会替换 Classification 进程，不得用于生产部署，也不得作为 Classification 推理、模型质量或 GPU 验收证据。

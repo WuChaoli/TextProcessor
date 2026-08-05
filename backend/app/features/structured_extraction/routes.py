@@ -144,6 +144,7 @@ def create_extraction_task(
         session_id=task.session_id,
         file_id=task.file_id,
         status=task.status,
+        created_at=task.created_at,
     )
 
 

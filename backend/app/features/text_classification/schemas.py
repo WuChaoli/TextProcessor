@@ -22,10 +22,10 @@ class ClassificationTaskAccepted(CamelModel):
     session_id: str
     file_id: str
     status: TaskStatus
+    created_at: datetime
 
 
 class ClassificationTaskPublic(ClassificationTaskAccepted):
-    created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
     result: dict[str, object] | None = None

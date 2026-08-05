@@ -2,6 +2,7 @@ import json
 import os
 import uuid
 
+import pytest
 from celery import Celery
 from kombu import Connection
 from sqlmodel import Session
@@ -18,6 +19,8 @@ from app.features.text_classification.service import ClassificationTaskService
 from app.models import User
 from app.tasking.envelope import TaskEnvelope
 from app.tasking.state import TaskStatus
+
+pytestmark = pytest.mark.real_integration
 
 
 def test_real_postgres_and_redis_pipeline_contains_only_task_envelope(monkeypatch) -> None:

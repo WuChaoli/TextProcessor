@@ -8,3 +8,5 @@ node_modules/
 assets/
 .superpowers/
 .worktrees/
+__pycache__/
+*.py[cod]

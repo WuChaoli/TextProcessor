@@ -20,3 +20,11 @@ def test_container_runs_three_process_supervisor_as_non_root() -> None:
     assert "USER datajuicer" in dockerfile
     assert 'CMD ["python", "-m", "datajuicer_service.process_manager"]' in dockerfile
     assert "HEALTHCHECK" in dockerfile
+
+
+def test_datajuicer_uses_an_independent_alembic_version_table() -> None:
+    migration_env = (
+        ROOT / "services" / "datajuicer_service" / "migrations" / "env.py"
+    ).read_text(encoding="utf-8")
+
+    assert migration_env.count('version_table="datajuicer_alembic_version"') == 2

@@ -49,6 +49,7 @@ strict = true
 exclude = ["venv", ".venv", "alembic"]
 
 [tool.pytest.ini_options]
+addopts = ["--import-mode=importlib"]
 markers = [
     "real_integration: requires a reachable explicitly configured external service",
 ]
