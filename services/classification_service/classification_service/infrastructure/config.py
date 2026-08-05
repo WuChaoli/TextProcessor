@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     model_release: Path
     model_release_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     release_quality_status: QualityStatus
+    input_root: Path
+    max_input_bytes: int = Field(default=2_000_000, gt=0)
     max_text_chars: int = Field(default=500_000, gt=0)
     inference_workers: Literal[1] = 1
     active_inference_limit: Literal[1] = 1
@@ -39,6 +41,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "model_release must be located under model_root"
             ) from error
+        if not self.input_root.is_absolute():
+            raise ValueError("input_root must be absolute")
         return self
 
 

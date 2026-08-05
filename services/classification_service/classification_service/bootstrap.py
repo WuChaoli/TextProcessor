@@ -13,6 +13,9 @@ from classification_service.infrastructure.config import Settings, get_settings
 from classification_service.infrastructure.execution.thread_executor import (
     ThreadInferenceExecutor,
 )
+from classification_service.infrastructure.input.local_text_reader import (
+    LocalTextReader,
+)
 from classification_service.infrastructure.model.runtime import (
     LoadedClassificationRuntime,
     load_classification_runtime,
@@ -66,6 +69,10 @@ def create_app(
             app.include_router(
                 create_router(
                     handler=handler,
+                    input_reader=LocalTextReader(
+                        configured.input_root,
+                        max_input_bytes=configured.max_input_bytes,
+                    ),
                     token=configured.internal_service_token.get_secret_value(),
                     max_text_chars=configured.max_text_chars,
                     mark_unready=lambda: transition("failed"),
@@ -73,6 +80,7 @@ def create_app(
                 )
             )
             app.state.executor = executor
+            app.state.classification_input_root = configured.input_root
             transition("ready")
             yield
         except BaseException:

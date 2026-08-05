@@ -51,6 +51,8 @@ class FakeEndClassifier:
 def settings(tmp_path: Path) -> Settings:
     release = tmp_path / "release"
     release.mkdir()
+    input_root = tmp_path / "staging"
+    input_root.mkdir()
     return Settings(
         environment="development",
         internal_service_token=SecretStr("token"),
@@ -58,6 +60,7 @@ def settings(tmp_path: Path) -> Settings:
         model_release=release,
         model_release_sha256="a" * 64,
         release_quality_status="experimental",
+        input_root=input_root,
     )
 
 
@@ -99,7 +102,15 @@ def client(
 
 
 def request(client: TestClient, text: str = "text", **overrides: object):
-    body = {"schemaVersion": "1", "requestId": "req-1", "text": text, **overrides}
+    input_root = Path(client.app.state.classification_input_root)
+    source = input_root / "request.txt"
+    source.write_text(text, encoding="utf-8")
+    body = {
+        "schemaVersion": "1",
+        "requestId": "req-1",
+        "inputUri": source.as_uri(),
+        **overrides,
+    }
     return client.post(
         "/internal/v1/classify",
         headers={"Authorization": "Bearer token", "X-Request-ID": "req-1"},
@@ -139,7 +150,7 @@ def test_authentication_is_required(
     response = client[0].post(
         "/internal/v1/classify",
         headers=headers,
-        json={"schemaVersion": "1", "requestId": "req-1", "text": "text"},
+        json={"schemaVersion": "1", "requestId": "req-1", "inputUri": "file:///forbidden.txt"},
     )
     assert response.status_code == 401
 
@@ -147,9 +158,9 @@ def test_authentication_is_required(
 @pytest.mark.parametrize(
     ("payload", "status"),
     [
-        ({"schemaVersion": "2", "requestId": "req-1", "text": "x"}, 400),
-        ({"schemaVersion": "1", "requestId": "req-1", "text": "x", "extra": True}, 400),
-        ({"schemaVersion": "1", "requestId": "req-1", "text": ""}, 400),
+        ({"schemaVersion": "2", "requestId": "req-1", "inputUri": "file:///x"}, 400),
+        ({"schemaVersion": "1", "requestId": "req-1", "inputUri": "file:///x", "extra": True}, 400),
+        ({"schemaVersion": "1", "requestId": "req-1", "inputUri": ""}, 400),
     ],
 )
 def test_request_validation(
@@ -172,7 +183,7 @@ def test_size_and_request_id_limits(
     response = client[0].post(
         "/internal/v1/classify",
         headers={"Authorization": "Bearer token", "X-Request-ID": "other"},
-        json={"schemaVersion": "1", "requestId": "req-1", "text": "x"},
+        json={"schemaVersion": "1", "requestId": "req-1", "inputUri": "file:///x"},
     )
     assert response.status_code == 400
 

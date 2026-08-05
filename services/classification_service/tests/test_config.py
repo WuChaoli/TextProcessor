@@ -14,6 +14,7 @@ def valid_settings(**overrides: object) -> Settings:
         "model_release": Path("/models/release"),
         "model_release_sha256": "a" * 64,
         "release_quality_status": "production-approved",
+        "input_root": Path("C:/classification-staging"),
     }
     values.update(overrides)
     return Settings(**values)
@@ -28,6 +29,7 @@ def test_production_rejects_experimental_release(tmp_path: Path) -> None:
             model_release=tmp_path / "release",
             model_release_sha256="a" * 64,
             release_quality_status="experimental",
+            input_root=tmp_path,
         )
 
 
@@ -39,6 +41,7 @@ def test_inference_capacity_is_fixed() -> None:
     assert settings.waiting_queue_limit == 8
     assert settings.inference_timeout_seconds == 15
     assert settings.max_text_chars == 500_000
+    assert settings.max_input_bytes == 2_000_000
 
 
 def test_rejects_empty_internal_service_token() -> None:
@@ -50,6 +53,7 @@ def test_rejects_empty_internal_service_token() -> None:
     ("field_name", "invalid_value"),
     [
         ("max_text_chars", 0),
+        ("max_input_bytes", 0),
         ("waiting_queue_limit", -1),
         ("inference_timeout_seconds", float("nan")),
         ("minimum_free_gpu_mib", 0),

@@ -7,7 +7,7 @@ class ClassifyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schemaVersion: Literal["1"]
     requestId: str = Field(min_length=1, max_length=128)
-    text: str
+    inputUri: str = Field(min_length=1, max_length=2048)
 
 
 class ConfidenceResponse(BaseModel):

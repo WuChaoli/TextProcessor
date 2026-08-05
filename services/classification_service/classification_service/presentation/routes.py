@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 
 from fastapi import APIRouter, Header
@@ -5,6 +6,11 @@ from fastapi.responses import JSONResponse
 
 from classification_service.application.classify_text import ClassifyTextHandler
 from classification_service.application.dto import ClassifyTextCommand
+from classification_service.infrastructure.input.local_text_reader import (
+    InputTooLarge,
+    InvalidInputUri,
+    LocalTextReader,
+)
 from classification_service.presentation.authentication import authenticate_bearer
 from classification_service.presentation.error_mapping import (
     is_cuda_out_of_memory,
@@ -22,6 +28,7 @@ from classification_service.presentation.schemas import (
 def create_router(
     *,
     handler: ClassifyTextHandler,
+    input_reader: LocalTextReader,
     token: str,
     max_text_chars: int,
     mark_unready: Callable[[], None],
@@ -40,15 +47,21 @@ def create_router(
             return _error(
                 400, payload.requestId, "REQUEST_ID_MISMATCH", "request id mismatch"
             )
-        if not payload.text.strip():
+        try:
+            text = await asyncio.to_thread(input_reader.read, payload.inputUri)
+        except InputTooLarge:
+            return _error(413, payload.requestId, "TEXT_TOO_LARGE", "text is too large")
+        except InvalidInputUri:
+            return _error(400, payload.requestId, "INVALID_INPUT_URI", "input URI is invalid")
+        if not text.strip():
             return _error(
                 400, payload.requestId, "INVALID_TEXT", "text must not be empty"
             )
-        if len(payload.text) > max_text_chars:
+        if len(text) > max_text_chars:
             return _error(413, payload.requestId, "TEXT_TOO_LARGE", "text is too large")
         try:
             result = await handler.execute(
-                ClassifyTextCommand(request_id=payload.requestId, text=payload.text)
+                ClassifyTextCommand(request_id=payload.requestId, text=text)
             )
         except Exception as caught:
             public = map_public_error(caught)

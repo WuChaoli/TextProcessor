@@ -123,6 +123,7 @@ def _settings(
         model_release=root,
         model_release_sha256=_sha256(manifest_path),
         release_quality_status=release_quality_status,
+        input_root=root.parent,
     )
 
 
