@@ -27,4 +27,3 @@ def test_terminal_state_cannot_transition(status: TaskStatus) -> None:
         return
     with pytest.raises(IllegalTaskTransition):
         ensure_transition(status, TaskStatus.RUNNING)
-

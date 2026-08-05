@@ -56,4 +56,3 @@ def test_envelope_accepts_exact_legacy_camel_case_payload() -> None:
 def test_envelope_rejects_invalid_payload(payload: object) -> None:
     with pytest.raises(ValueError, match="INVALID_TASK_ENVELOPE"):
         TaskEnvelope.parse(payload, expected_type="x", expected_schema_version=1)
-
