@@ -13,11 +13,13 @@ services:
       - CLASSIFICATION_MODEL_RELEASE=/models/releases/${CLASSIFICATION_MODEL_RELEASE?Variable not set}
       - CLASSIFICATION_MODEL_RELEASE_SHA256=${CLASSIFICATION_MODEL_RELEASE_SHA256?Variable not set}
       - CLASSIFICATION_RELEASE_QUALITY_STATUS=${CLASSIFICATION_RELEASE_QUALITY_STATUS-experimental}
+      - CLASSIFICATION_INPUT_ROOT=/data/textprocessor/classification
       - HF_HUB_OFFLINE=1
       - TRANSFORMERS_OFFLINE=1
       - NVIDIA_VISIBLE_DEVICES=${CLASSIFICATION_NVIDIA_VISIBLE_DEVICES-0}
     volumes:
       - ${CLASSIFICATION_MODEL_ROOT?Variable not set}:/models/releases:ro
+      - classification-staging:/data/textprocessor/classification:ro
     deploy:
       resources:
         reservations:
@@ -186,7 +188,7 @@ services:
       # Enable redirection for HTTP and HTTPS
       - traefik.http.routers.${STACK_NAME?Variable not set}-backend-http.middlewares=https-redirect
 
-  extraction-worker:
+  task-runner:
     image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
     restart: always
     networks:
@@ -201,11 +203,9 @@ services:
       prestart:
         condition: service_completed_successfully
     command:
-      - celery
-      - -A
-      - app.core.celery_app:celery_app
-      - worker
-      - --loglevel=INFO
+      - python
+      - -m
+      - app.task_runner.process_manager
     env_file:
       - .env
     environment:
@@ -217,52 +217,14 @@ services:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling-api:5001}
       - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - celery -A app.core.celery_app:celery_app inspect ping --destination=celery@$$HOSTNAME --timeout=5 | grep -q pong
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  extraction-beat:
-    image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
-    restart: always
-    networks:
-      - default
-    depends_on:
-      db:
-        condition: service_healthy
-        restart: true
-      redis:
-        condition: service_healthy
-        restart: true
-      prestart:
-        condition: service_completed_successfully
-    command:
-      - celery
-      - -A
-      - app.core.celery_app:celery_app
-      - beat
-      - --loglevel=INFO
-      - --pidfile=/var/run/celery/beat.pid
-      - --schedule=/var/lib/celery/beat-schedule
-    env_file:
-      - .env
-    environment:
-      - POSTGRES_SERVER=db
-      - POSTGRES_PORT=${POSTGRES_PORT}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER?Variable not set}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CLASSIFICATION_BASE_URL=http://classification-service:8000
+      - CLASSIFICATION_API_TOKEN=${CLASSIFICATION_INTERNAL_SERVICE_TOKEN?Variable not set}
+      - CLASSIFICATION_STAGING_ROOT=/data/textprocessor/classification
     volumes:
       - celery-beat-data:/var/lib/celery
+      - classification-staging:/data/textprocessor/classification
     healthcheck:
-      test:
-        - CMD-SHELL
-        - test -s /var/run/celery/beat.pid && kill -0 "$$(cat /var/run/celery/beat.pid)" && test -e /var/lib/celery/beat-schedule
+      test: ["CMD", "python", "-m", "app.task_runner.healthcheck"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -300,6 +262,7 @@ services:
 volumes:
   app-db-data:
   celery-beat-data:
+  classification-staging:
   textprocessor-redis-data:
 
 networks:

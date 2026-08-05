@@ -90,23 +90,7 @@ services:
       SMTP_TLS: "false"
       EMAILS_FROM_EMAIL: "noreply@example.com"
 
-  extraction-worker:
-    restart: "no"
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    develop:
-      watch:
-        - path: ./backend
-          action: sync+restart
-          target: /app/backend
-          ignore:
-            - ./backend/.venv
-            - .venv
-        - path: ./backend/pyproject.toml
-          action: rebuild
-
-  extraction-beat:
+  task-runner:
     restart: "no"
     build:
       context: .

@@ -8,11 +8,12 @@ def test_celery_runtime_stack_uses_durable_broker_and_health_checks() -> None:
 
     assert "textprocessor-redis-data:/data" in compose
     assert "--appendonly" in compose
-    assert "celery -A app.core.celery_app:celery_app inspect ping" in compose
+    assert "python" in compose and "app.task_runner.process_manager" in compose
     assert "condition: service_healthy" in compose
-    assert "extraction-worker:" in compose
-    assert "extraction-beat:" in compose
-    assert compose.count("redis:\n        condition: service_healthy") >= 3
+    assert "task-runner:" in compose
+    assert "extraction-worker:" not in compose
+    assert "extraction-beat:" not in compose
+    assert compose.count("redis:\n        condition: service_healthy") >= 2
 
 
 def test_celery_uses_configurable_redis_visibility_timeout() -> None:
@@ -34,10 +35,14 @@ def test_beat_uses_controlled_pid_and_schedule_paths() -> None:
         encoding="utf-8"
     )
 
-    assert "--pidfile=/var/run/celery/beat.pid" in compose
-    assert "--schedule=/var/lib/celery/beat-schedule" in compose
+    process_manager = (
+        REPOSITORY_ROOT / "backend" / "app" / "task_runner" / "process_manager.py"
+    ).read_text(encoding="utf-8")
+
+    assert "--pidfile=/var/run/celery/beat.pid" in process_manager
+    assert "--schedule=/var/lib/celery/beat-schedule" in process_manager
     assert "celery-beat-data:/var/lib/celery" in compose
-    assert "mkdir -p /var/run/celery /var/lib/celery" in dockerfile
+    assert "mkdir -p /var/run/celery /var/run/textprocessor /var/lib/celery" in dockerfile
 
 
 def test_docling_verifier_accepts_explicit_compose_project_and_files() -> None:
