@@ -1,7 +1,9 @@
 import uuid
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.tasking.envelope import TaskEnvelope
 
 
 class InvalidGlobalDeduplicationMessage(ValueError):
@@ -18,8 +20,17 @@ class GlobalDeduplicationMessage(BaseModel):
     @classmethod
     def parse(cls, payload: object) -> Self:
         try:
-            return cls.model_validate(payload)
-        except ValidationError as error:
+            envelope = TaskEnvelope.parse(
+                payload,
+                expected_type="global_deduplication",
+                expected_schema_version=1,
+            )
+            return cls(
+                taskId=envelope.task_id,
+                taskType=envelope.task_type,
+                schemaVersion=envelope.schema_version,
+            )
+        except ValueError as error:
             raise InvalidGlobalDeduplicationMessage(
                 "INVALID_GLOBAL_DEDUPLICATION_MESSAGE"
             ) from error

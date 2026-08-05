@@ -1,7 +1,9 @@
 import uuid
 from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.tasking.envelope import TaskEnvelope
 
 
 class InvalidMarkdownCleaningMessage(ValueError):
@@ -18,8 +20,17 @@ class MarkdownCleaningMessage(BaseModel):
     @classmethod
     def parse(cls, payload: object) -> Self:
         try:
-            return cls.model_validate(payload)
-        except ValidationError as error:
+            envelope = TaskEnvelope.parse(
+                payload,
+                expected_type="markdown_cleaning",
+                expected_schema_version=1,
+            )
+            return cls(
+                taskId=envelope.task_id,
+                taskType=envelope.task_type,
+                schemaVersion=envelope.schema_version,
+            )
+        except ValueError as error:
             raise InvalidMarkdownCleaningMessage(
                 "INVALID_MARKDOWN_CLEANING_MESSAGE"
             ) from error
