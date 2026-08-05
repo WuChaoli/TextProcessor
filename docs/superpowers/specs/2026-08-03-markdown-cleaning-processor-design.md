@@ -86,6 +86,7 @@ blank
 - parser 必须保留 block 和 inline 的源码区间；处理后按区间重建文档。
 - fenced code 的 fence 行、info string 和内部内容为强保护区：不去重、不脱敏、不格式化内部内容。
 - inline code 内容不脱敏；周围普通文本仍处理。
+- inline link/image、`<mailto:...>`/`<https://...>` autolink 与 reference definition 只保护 destination source span；link label 和普通显示文本仍参与脱敏。
 - HTML block 不去重、不脱敏、不执行。
 - 标题、列表项、引用、表格和 thematic break 不参与段落去重。
 - 标题、列表项、引用和表格中的普通文本参与脱敏。
@@ -211,9 +212,21 @@ class MarkdownCleaningResult:
     output_sha256: str
     contract_version: Literal["markdown_cleaning_v1"]
     summary: MarkdownCleaningSummary
+
+
+class MarkdownCleaningProcessor(Protocol):
+    def process(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        deadline: datetime | None = None,
+    ) -> MarkdownCleaningResult: ...
 ```
 
 输出文件不嵌入统计、注释或 provenance。Processor 不直接写业务 targetPath。
+
+`deadline` 必须是 timezone-aware UTC `datetime`。不传时仍受 Processor 内部 `processing_timeout_seconds` 限制；传入时，有效 deadline 取调用方绝对 deadline 与内部最大处理时长计算出的 deadline 中较早者。调用时已经过期须在访问 source 前立即返回 `PROCESSING_TIMEOUT`，隔离子进程的 `communicate(timeout=...)` 始终使用当前剩余时间。
 
 ## 10. 不变量
 
@@ -248,6 +261,7 @@ INTERNAL_ERROR
 ## 12. 资源与安全
 
 - 文件大小、段落数、单段长度、token 数、PII 候选数和总处理时间均设上限。
+- Worker 必须传任务级 UTC deadline；内部最大处理秒数始终作为更早上限，Celery hard time limit 只作为外层第二道兜底。
 - 正则避免灾难性回溯，自定义 recognizer 使用预编译模式和线性校验。
 - Presidio 仅使用本地运行时；不调用 Azure 或其他远程服务。
 - 依赖、模型或插件不得在请求期间自动下载或安装。
@@ -259,6 +273,7 @@ INTERNAL_ERROR
 ### 13.1 Parser 与段落去重
 
 - CommonMark/GFM 混合 block 的类型、顺序和 source span。
+- inline/autolink/reference definition destination 受保护，link label 与普通显示文本不受保护。
 - 完全相同及 softbreak/空白差异段落只保留第一次。
 - 大小写、标点、全半角或 inline Markdown 不同则保留。
 - 摘要碰撞时完整 key 不同不误删。

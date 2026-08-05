@@ -1,0 +1,9 @@
+{
+  "duplicate_paragraphs_removed": 1,
+  "phone_redactions": 1,
+  "id_card_redactions": 1,
+  "bank_card_redactions": 1,
+  "email_redactions": 2,
+  "ipv4_redactions": 2,
+  "formatting_changes": 2
+}
