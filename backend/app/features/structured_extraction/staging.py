@@ -27,6 +27,10 @@ class StagingLayout:
         )
 
     def prepare(self) -> None:
+        # Resolve safety checks against a stable shared ancestor.  If the staging
+        # root is created concurrently while Path.resolve() is walking it, the
+        # before/after paths can differ even though neither path escapes the root.
+        self.staging_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._assert_safe()
         for directory in (
             self.root,
