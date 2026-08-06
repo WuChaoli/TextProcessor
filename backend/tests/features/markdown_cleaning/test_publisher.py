@@ -408,7 +408,7 @@ def test_publish_calls_fsync_for_output_and_parent(
     finally:
         monkeypatch.undo()
 
-    assert len(calls) == 2
+    assert len(calls) == (1 if os.name == "nt" else 2)
 
 
 def test_publish_rejects_target_escape_via_output_symlink(
