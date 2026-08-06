@@ -140,7 +140,6 @@ class MarkdownCleaningResultPublisher:
                     existing_fd,
                     allow_recovery=allow_recovery,
                 )
-            self._fsync_fd(temporary_fd)
             self._fsync_directory(parent_handle)
             return PublishedMarkdownResult(
                 path=normalized_target,
