@@ -1,6 +1,6 @@
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
-from urllib.request import url2pathname
+from urllib.request import url2pathname  # ty: ignore[deprecated]
 
 
 class InvalidInputUri(ValueError):
@@ -26,7 +26,7 @@ class LocalTextReader:
         ):
             raise InvalidInputUri("input URI must be a local file URI")
         try:
-            path = Path(url2pathname(unquote(parsed.path))).resolve(strict=True)
+            path = Path(url2pathname(unquote(parsed.path))).resolve(strict=True)  # ty: ignore[deprecated]
             path.relative_to(self._root)
         except (OSError, ValueError) as error:
             raise InvalidInputUri("input URI is outside the staging root") from error

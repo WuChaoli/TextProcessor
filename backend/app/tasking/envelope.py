@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 _SNAKE_KEYS = frozenset({"task_id", "task_type", "schema_version"})
@@ -49,17 +49,18 @@ class TaskEnvelope:
 def _normalized_payload(payload: object) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise ValueError
-    keys = frozenset(payload.keys())
+    values = cast(Mapping[str, object], payload)
+    keys = frozenset(values.keys())
     if keys == _SNAKE_KEYS:
         return {
-            "task_id": payload["task_id"],
-            "task_type": payload["task_type"],
-            "schema_version": payload["schema_version"],
+            "task_id": values["task_id"],
+            "task_type": values["task_type"],
+            "schema_version": values["schema_version"],
         }
     if keys == _CAMEL_KEYS:
         return {
-            "task_id": payload["taskId"],
-            "task_type": payload["taskType"],
-            "schema_version": payload["schemaVersion"],
+            "task_id": values["taskId"],
+            "task_type": values["taskType"],
+            "schema_version": values["schemaVersion"],
         }
     raise ValueError

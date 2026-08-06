@@ -27,8 +27,8 @@ class GlobalDeduplicationMessage(BaseModel):
             )
             return cls(
                 taskId=envelope.task_id,
-                taskType=envelope.task_type,
-                schemaVersion=envelope.schema_version,
+                taskType="global_deduplication",
+                schemaVersion=1,
             )
         except ValueError as error:
             raise InvalidGlobalDeduplicationMessage(

@@ -27,8 +27,8 @@ class MarkdownCleaningMessage(BaseModel):
             )
             return cls(
                 taskId=envelope.task_id,
-                taskType=envelope.task_type,
-                schemaVersion=envelope.schema_version,
+                taskType="markdown_cleaning",
+                schemaVersion=1,
             )
         except ValueError as error:
             raise InvalidMarkdownCleaningMessage(

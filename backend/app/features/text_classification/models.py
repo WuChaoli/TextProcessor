@@ -21,12 +21,12 @@ class ClassificationTask(SQLModel, table=True):
     file_id: str = Field(max_length=128)
     request_fingerprint: str = Field(max_length=64)
     input_uri: str = Field(max_length=4096)
-    status: TaskStatus = Field(sa_type=Enum(TaskStatus, native_enum=False, values_callable=lambda values: [value.value for value in values], length=16), index=True)  # type: ignore[call-overload]
+    status: TaskStatus = Field(sa_type=Enum(TaskStatus, native_enum=False, values_callable=lambda values: [value.value for value in values], length=16), index=True)  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
     attempt_count: int = Field(default=0, ge=0)
     max_attempts: int = Field(default=3, gt=0)
     lease_expires_at: datetime | None = Field(
         default=None,
-        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]
+        sa_type=DateTime(timezone=True),  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
         index=True,
     )
     staging_uri: str | None = Field(default=None, max_length=4096)
@@ -35,9 +35,9 @@ class ClassificationTask(SQLModel, table=True):
     result: dict[str, object] | None = Field(default=None, sa_type=JSON)
     error_code: str | None = Field(default=None, max_length=64)
     error_message: str | None = Field(default=None, max_length=512)
-    created_at: datetime = Field(default_factory=utc_now, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]
-    queued_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]
-    last_dispatched_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]
-    started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]
-    finished_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]
-    updated_at: datetime = Field(default_factory=utc_now, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]
+    created_at: datetime = Field(default_factory=utc_now, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    queued_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    last_dispatched_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    finished_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+    updated_at: datetime = Field(default_factory=utc_now, sa_type=DateTime(timezone=True))  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
