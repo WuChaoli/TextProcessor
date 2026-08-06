@@ -41,6 +41,15 @@
 - API、PostgreSQL、Redis、Celery 与 `fsspec` 边界使用集成测试；任务相关改动必须覆盖重复消息、入队失败、worker 中断、路径逃逸、输出冲突和恢复。
 - 真实大型模型或外部服务测试与默认快速测试集分离，未实际运行的验证不得声称通过。
 
+## Apifox CLI 项目关联
+
+- Apifox 权威项目为 `TextProcessor API`，Team ID `4055426`，Project ID `8681977`。
+- 局域网环境为 `生产环境（局域网）`，Environment ID `48037649`；端到端冒烟场景 ID 为 `8601238`。
+- API 契约以当前代码和 FastAPI OpenAPI 为事实来源；接口契约变化后使用 `apifox` CLI 同步接口、中文字段说明和相关测试用例。
+- 创建或更新复杂资源前先执行对应的 `apifox cli-schema get` 和 `apifox cli-schema validate`，写入后通过 `get` 或 `list` 回读验证。
+- 环境变量只写入目标 Apifox 环境，不创建同名项目全局变量；测试提取器使用 `environment` 作用域。
+- 不在 AGENTS.md、README、Git 或命令输出中记录 Apifox Access Token、生产密码或其他真实凭据。
+
 ## 非目标
 
 - 不建设模型训练、数据集管理、实验管理或模型评测平台。

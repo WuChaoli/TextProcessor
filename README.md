@@ -1,4 +1,51 @@
-# Full Stack FastAPI Template
+# TextProcessor
+
+TextProcessor 是面向内部调用方的异步文本处理服务，目前提供以下四项能力：
+
+- Markdown 清洗；
+- 文档结构化提取；
+- JSON 数据全局去重；
+- 文本分类。
+
+每项能力均提供 `POST` 创建任务和 `GET` 查询任务接口。业务接口使用 Bearer Token 鉴权，先通过 `/api/v1/login/access-token` 获取访问令牌。
+
+### 局域网访问
+
+当前生产源码服务在局域网监听：
+
+```text
+http://192.168.1.137:18100
+```
+
+服务器局域网地址应配置为静态地址或 DHCP 固定租约。数据库、Redis、分类推理服务和 DataJuicer 仍为内部服务，不应直接向局域网开放。
+
+### Apifox
+
+接口定义和自动化测试维护在 Apifox 项目 `TextProcessor API`：
+
+| 配置 | 值 |
+| --- | --- |
+| Team ID | `4055426` |
+| Project ID | `8681977` |
+| Environment | `生产环境（局域网）` |
+| Environment ID | `48037649` |
+| Base URL | `http://192.168.1.137:18100` |
+| Smoke scenario | `四项能力端到端冒烟` |
+| Scenario ID | `8601238` |
+
+项目包含登录接口、四项业务能力的 8 个 POST/GET 接口、单接口正向用例以及端到端冒烟场景。环境变量仅维护在 `生产环境（局域网）` 中，不使用同名项目全局变量。
+
+使用 Apifox CLI 前先登录并确认项目：
+
+```powershell
+apifox auth status
+apifox project get 8681977
+apifox endpoint list --project 8681977 --page-size 50
+apifox test-case list --project 8681977 --page-size 50
+apifox test-scenario get 8601238 --project 8681977 --with-case-detail
+```
+
+生产账号密码不得写入仓库或提交到 Git。请在 Apifox 的目标环境中以敏感变量方式维护 `password`；登录用例会把响应中的 Token 写入同一环境的 `accessToken`。
 
 <a href="https://github.com/fastapi/full-stack-fastapi-template/actions?query=workflow%3A%22Test+Docker+Compose%22" target="_blank"><img src="https://github.com/fastapi/full-stack-fastapi-template/workflows/Test%20Docker%20Compose/badge.svg" alt="Test Docker Compose"></a>
 <a href="https://github.com/fastapi/full-stack-fastapi-template/actions?query=workflow%3A%22Test+Backend%22" target="_blank"><img src="https://github.com/fastapi/full-stack-fastapi-template/workflows/Test%20Backend/badge.svg" alt="Test Backend"></a>
