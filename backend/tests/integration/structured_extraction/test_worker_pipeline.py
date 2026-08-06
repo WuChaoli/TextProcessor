@@ -339,6 +339,36 @@ def test_two_tasks_for_one_target_have_one_atomic_success(
     assert target.read_text(encoding="utf-8") == "同一目标\n"
 
 
+def test_many_tasks_for_one_target_report_only_output_conflicts(
+    api_context: ApiContext,
+) -> None:
+    source = api_context.input_root / "race-many.txt"
+    source.write_text("同一目标高并发\n", encoding="utf-8")
+    target = api_context.output_root / "race-many.md"
+    tasks = [
+        create_queued_task(api_context, source=source, target=target)
+        for _ in range(12)
+    ]
+
+    def submit(task_id: uuid.UUID) -> None:
+        worker = make_orchestrator(api_context)
+        try:
+            worker.submit(task_id)
+        finally:
+            worker._session.close()  # noqa: SLF001 - integration lifecycle ownership
+
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        list(executor.map(submit, (task.id for task in tasks)))
+
+    completed = [task_status(task.id) for task in tasks]
+    assert sum(task.status is ExtractionTaskStatus.SUCCEEDED for task in completed) == 1
+    assert {
+        task.error_code
+        for task in completed
+        if task.status is ExtractionTaskStatus.FAILED
+    } == {ExtractionErrorCode.OUTPUT_CONFLICT}
+
+
 def test_published_external_result_recovers_after_database_transition_crash(
     api_context: ApiContext,
     monkeypatch: pytest.MonkeyPatch,

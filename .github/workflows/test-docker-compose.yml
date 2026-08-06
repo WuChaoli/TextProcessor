@@ -17,9 +17,12 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-      - run: docker compose build
+          submodules: recursive
+      - run: docker compose -f compose.yml -f compose.docling.yml build backend-api frontend
       - run: docker compose down -v --remove-orphans
-      - run: docker compose up -d --wait backend frontend adminer
+      - run: docker compose up -d --wait db redis
+      - run: docker compose run --rm --no-deps backend-api bash scripts/prestart.sh
+      - run: docker compose --profile debug up -d --wait backend-api frontend adminer
       - name: Test backend is up
         run: curl http://localhost:8000/api/v1/utils/health-check
       - name: Test frontend is up

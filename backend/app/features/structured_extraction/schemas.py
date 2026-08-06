@@ -39,6 +39,7 @@ class ExtractionTaskAccepted(CamelModel):
     session_id: str
     file_id: str
     status: ExtractionTaskStatus
+    created_at: datetime
 
 
 class ProcessorPublic(CamelModel):

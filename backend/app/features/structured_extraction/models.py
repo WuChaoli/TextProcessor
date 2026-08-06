@@ -90,7 +90,7 @@ class ExtractionTask(SQLModel, table=True):
     input_size_bytes: int | None = Field(
         default=None,
         ge=0,
-        sa_type=BigInteger,  # type: ignore[call-overload]  # ty: ignore[invalid-argument-type]
+        sa_type=BigInteger,  # type: ignore[call-overload]
     )
     output_sha256: str | None = Field(default=None, max_length=64)
     error_code: str | None = Field(default=None, max_length=64)

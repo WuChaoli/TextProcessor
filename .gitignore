@@ -7,3 +7,6 @@ node_modules/
 /playwright/.cache/
 assets/
 .superpowers/
+.worktrees/
+__pycache__/
+*.py[cod]

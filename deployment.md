@@ -189,6 +189,38 @@ You can set several other environment variables:
 * `POSTGRES_DB`: The database name to use for this application. You can leave the default of `app`.
 * `SENTRY_DSN`: The DSN for Sentry, if you are using it.
 
+### 单机服务拓扑
+
+生产默认栈固定为八个服务：`frontend`、`backend-api`、`task-runner`、
+`docling`、`classification`、`datajuicer`、`redis` 和 `db`。只有 Frontend 与
+Backend API 加入 `traefik-public`；能力服务、队列和数据库只使用内部网络。
+Adminer 仅在显式启用 `debug` profile 时启动。
+
+### Docling、Classification 与 DataJuicer 配置
+
+生产与预发布环境必须同时部署 `compose.yml` 和 `compose.docling.yml`。Docling
+包装镜像与 Backend、Frontend、Classification Service 使用相同的 `TAG`，其基础
+镜像通过 `DOCLING_BASE_IMAGE` 固定到明确版本和 digest。
+
+Docling API 与 RQ Worker 在一个容器内运行。Celery 使用共享 Redis 的 DB 0，
+Docling RQ 使用 DB 1，DataJuicer Celery 使用 DB 2。logical DB 只隔离键空间；这些队列仍共享 Redis 的资源、
+持久化和故障域。生产服务器不得发布 Redis `6379` 或 Docling `5001`，对外只开放
+Traefik 的 `80/443`。
+
+部署环境需要配置：
+
+* `DOCLING_BASE_IMAGE`: 固定 digest 的 Docling Serve 基础镜像。
+* `DOCKER_IMAGE_DOCLING`: 合并 Docling 包装镜像名称。
+* `DOCLING_SERVE_API_KEY`: Docling 内部 HTTP API secret。
+* `DOCKER_IMAGE_CLASSIFICATION`: Classification Service 镜像名称。
+* `CLASSIFICATION_INTERNAL_SERVICE_TOKEN`: Classification Service 内部 token。
+* `CLASSIFICATION_MODEL_ROOT`: 宿主机模型 release 根目录。
+* `CLASSIFICATION_MODEL_RELEASE`: 当前不可变模型 release 名称。
+* `CLASSIFICATION_MODEL_RELEASE_SHA256`: 当前 release manifest SHA-256。
+* `CLASSIFICATION_RELEASE_QUALITY_STATUS`: 生产必须为 `production-approved`。
+* `CLASSIFICATION_NVIDIA_VISIBLE_DEVICES`: 分配给分类服务的 GPU 编号。
+* `DOCKER_IMAGE_DATAJUICER`: DataJuicer API、Worker 与 Beat 合并镜像名称。
+
 ## GitHub Actions Environment Variables
 
 There are some environment variables only used by GitHub Actions that you can configure:
@@ -202,9 +234,14 @@ With the environment variables in place, you can deploy with Docker Compose:
 
 ```bash
 cd /root/code/app/
-docker compose -f compose.yml build
-docker compose -f compose.yml up -d
+docker compose -f compose.yml -f compose.docling.yml build
+docker compose -f compose.yml -f compose.docling.yml up -d --wait db redis
+docker compose -f compose.yml -f compose.docling.yml run --rm --no-deps backend-api bash scripts/prestart.sh
+docker compose -f compose.yml -f compose.docling.yml up -d --wait --remove-orphans
+pwsh -NoProfile -File scripts/verify-single-node-stack.ps1 -ComposeProjectName "$STACK_NAME"
 ```
+
+数据库迁移只在应用服务启动前执行一次；不再保留常驻 `prestart` 容器。
 
 For production you wouldn't want to have the overrides in `compose.override.yml`, that's why we explicitly specify `compose.yml` as the file to use.
 
@@ -309,8 +346,21 @@ The current Github Actions workflows expect these secrets:
 * `FIRST_SUPERUSER_PASSWORD`
 * `POSTGRES_PASSWORD`
 * `SECRET_KEY`
+* `DOCLING_SERVE_API_KEY`
+* `CLASSIFICATION_INTERNAL_SERVICE_TOKEN`
 * `LATEST_CHANGES`
 * `SMOKESHOW_AUTH_KEY`
+
+The deployment workflows also expect these GitHub Environment variables:
+
+* `DOCLING_BASE_IMAGE`
+* `DOCKER_IMAGE_DOCLING`
+* `DOCKER_IMAGE_CLASSIFICATION`
+* `CLASSIFICATION_MODEL_ROOT`
+* `CLASSIFICATION_MODEL_RELEASE`
+* `CLASSIFICATION_MODEL_RELEASE_SHA256`
+* `CLASSIFICATION_RELEASE_QUALITY_STATUS`
+* `CLASSIFICATION_NVIDIA_VISIBLE_DEVICES`
 
 ## GitHub Action Deployment Workflows
 
@@ -320,6 +370,10 @@ There are GitHub Action workflows in the `.github/workflows` directory already c
 * `production`: after publishing a release.
 
 Both workflows are associated with their respective GitHub Environments, so deployments will be visible in the repository's **Environments** section and will respect any protection rules you configure.
+
+部署后必须运行 `scripts/verify-docling-deployment.ps1` 和结构化提取完整栈 smoke。
+只有进程、API、Redis DB 隔离和真实异步转换证据均通过时，才能将本次发布标记为
+ready；单纯容器 healthy 不构成发布通过证据。
 
 If you need to add extra environments you could use those as a starting point.
 

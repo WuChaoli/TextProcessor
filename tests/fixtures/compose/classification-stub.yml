@@ -1,0 +1,14 @@
+services:
+  classification:
+    image: python:3.14-alpine
+    build: !reset null
+    command: ["python", "-c", "import time; time.sleep(86400)"]
+    environment: !reset []
+    volumes: !reset []
+    deploy: !reset null
+    healthcheck:
+      test: ["CMD", "python", "-c", "raise SystemExit(0)"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+      start_period: 1s

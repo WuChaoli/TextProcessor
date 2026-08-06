@@ -59,13 +59,17 @@ def verify_datajuicer_runtime() -> DataJuicerRuntime:
     if not import_path.is_relative_to(source_root):
         raise RuntimeError("DATAJUICER_NOT_LOADED_FROM_PINNED_SOURCE")
 
-    result = subprocess.run(
-        ["git", "-C", str(source_root), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    commit = result.stdout.strip()
+    commit_marker = source_root / ".textprocessor-commit"
+    if commit_marker.is_file():
+        commit = commit_marker.read_text(encoding="utf-8").strip()
+    else:
+        result = subprocess.run(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        commit = result.stdout.strip()
     if commit != PINNED_COMMIT:
         raise RuntimeError("DATAJUICER_COMMIT_MISMATCH")
 

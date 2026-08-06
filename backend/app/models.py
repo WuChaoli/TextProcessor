@@ -136,6 +136,12 @@ class NewPassword(SQLModel):
 from app.features.global_deduplication.task_models import (  # noqa: E402
     GlobalDeduplicationTask as GlobalDeduplicationTask,
 )
+from app.features.markdown_cleaning.task_models import (  # noqa: E402
+    MarkdownCleaningTask as MarkdownCleaningTask,
+)
 from app.features.structured_extraction.models import (  # noqa: E402
     ExtractionTask as ExtractionTask,
+)
+from app.features.text_classification.models import (  # noqa: E402
+    ClassificationTask as ClassificationTask,
 )

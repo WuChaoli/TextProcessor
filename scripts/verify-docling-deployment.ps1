@@ -34,29 +34,53 @@ if ($ComposeFiles.Count -eq 0) {
 }
 
 $script:composeArguments = Get-ComposeArguments
-$expectedServices = @("docling-redis", "docling-api", "docling-worker")
+$expectedServices = @("redis", "docling")
+$removedServices = @("docling-redis", "docling-worker")
 $runningServices = @(Invoke-Compose ps --services --status running)
 foreach ($service in $expectedServices) {
     if ($runningServices -notcontains $service) {
         throw "Docling service is not running: $service"
     }
 }
-
-$publishedPort = @(& docker compose @script:composeArguments port docling-api 5001 2>$null)
-if ($LASTEXITCODE -notin @(0, 1)) {
-    throw "Unable to inspect the Docling API port mapping."
+$configuredServices = @(Invoke-Compose config --services)
+foreach ($service in $removedServices) {
+    if ($configuredServices -contains $service) {
+        throw "Removed Docling service is still configured: $service"
+    }
 }
-if (-not $AllowPublishedPort -and $publishedPort.Count -gt 0) {
+
+$doclingContainerId = @(Invoke-Compose ps -q docling | Select-Object -First 1)[0]
+$doclingInspection = @(& docker inspect $doclingContainerId) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0 -or $doclingInspection.Count -ne 1) {
+    throw "Unable to inspect the Docling API container."
+}
+$publishedPort = $doclingInspection[0].NetworkSettings.Ports.'5001/tcp'
+if (-not $AllowPublishedPort -and $null -ne $publishedPort) {
     throw "Docling API must not publish host port 5001 outside an explicit local override."
 }
 
 $containerProbe = @'
+import json
+import os
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+state = json.loads(
+    Path("/run/textprocessor-docling/processes.json").read_text(encoding="utf-8")
+)
+if set(state) != {"api", "worker"}:
+    raise SystemExit(1)
+for pid in state.values():
+    os.kill(int(pid), 0)
 
 base_url = "http://localhost:5001"
 try:
-    urllib.request.urlopen(base_url + "/v1/convert/file/async", timeout=5)
+    unauthorized_request = urllib.request.Request(
+        base_url + "/v1/convert/file/async",
+        method="POST",
+    )
+    urllib.request.urlopen(unauthorized_request, timeout=5)
 except urllib.error.HTTPError as error:
     if error.code not in (401, 403):
         raise SystemExit(1)
@@ -79,7 +103,7 @@ for path in (
 '@
 
 if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
-    Invoke-Compose exec -T docling-api python -c $containerProbe | Out-Null
+    Invoke-Compose exec -T docling python -c $containerProbe | Out-Null
 }
 else {
     if ([string]::IsNullOrWhiteSpace($ApiKey)) {
@@ -109,10 +133,9 @@ else {
     }
 }
 
-$apiImage = Invoke-Compose images --format json docling-api | ConvertFrom-Json
-$workerImage = Invoke-Compose images --format json docling-worker | ConvertFrom-Json
-if ($apiImage.ID -ne $workerImage.ID) {
-    throw "Docling API and worker do not use the same image."
+$redisPing = @(Invoke-Compose exec -T redis redis-cli -n 1 PING)[-1]
+if ($redisPing -ne "PONG") {
+    throw "Docling Redis logical database 1 did not respond to PING."
 }
 
 Write-Host "Docling deployment verification passed."

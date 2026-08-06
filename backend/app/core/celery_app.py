@@ -8,6 +8,8 @@ celery_app = Celery(
     include=[
         "app.features.structured_extraction.celery_tasks",
         "app.features.global_deduplication.celery_tasks",
+        "app.features.markdown_cleaning.celery_tasks",
+        "app.features.text_classification.celery_tasks",
     ],
 )
 celery_app.conf.update(
@@ -27,6 +29,16 @@ celery_app.conf.update(
         "recover-global-deduplication-tasks": {
             "task": "global_deduplication.recover",
             "schedule": settings.GLOBAL_DEDUP_WORKER.recovery_interval_seconds,
-        }
+        },
+        "recover-markdown-cleaning-tasks": {
+            "task": "markdown_cleaning.recover",
+            "schedule": settings.MARKDOWN_CLEANING_WORKER.queue_recovery_interval_seconds,
+            "options": {"queue": "markdown_cleaning"},
+        },
+        "recover-text-classification-tasks": {
+            "task": "text_classification.recover",
+            "schedule": settings.CLASSIFICATION_RECOVERY_INTERVAL_SECONDS,
+            "options": {"queue": "text_classification"},
+        },
     },
 )

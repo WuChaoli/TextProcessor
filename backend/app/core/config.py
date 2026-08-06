@@ -1,3 +1,4 @@
+import ipaddress
 import secrets
 import warnings
 from pathlib import Path
@@ -23,6 +24,10 @@ def parse_cors(v: Any) -> list[str] | str:
     elif isinstance(v, list | str):
         return v
     raise ValueError(v)
+
+
+def _has_parent_or_child_overlap(left: Path, right: Path) -> bool:
+    return left == right or left in right.parents or right in left.parents
 
 
 class MinerUProfile(BaseModel):
@@ -108,6 +113,68 @@ class ExtractionWorkerSettings(BaseModel):
                 raise ValueError("结构化提取 staging 与输出根目录不能重叠")
         self.staging_root = staging_root
         self.output_roots = output_roots
+        return self
+
+
+class MarkdownCleaningWorkerSettings(BaseModel):
+    staging_root: Path = Path("/data/textprocessor/markdown-cleaning")
+    output_roots: tuple[Path, ...] = (Path("/data/textprocessor/output"),)
+    allowed_http_hosts: tuple[str, ...] = ()
+    allowed_http_cidrs: tuple[str, ...] = ()
+    max_input_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    copy_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
+    max_output_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    connect_timeout_seconds: float = Field(default=10, gt=0)
+    read_timeout_seconds: float = Field(default=60, gt=0)
+    max_http_redirects: int = Field(default=3, ge=0)
+    queue_lease_seconds: int = Field(default=120, gt=0)
+    queue_recovery_interval_seconds: int = Field(default=30, gt=0)
+    queue_recovery_batch_size: int = Field(default=100, gt=0)
+    processing_soft_timeout_seconds: int = Field(default=300, gt=0)
+    processing_hard_timeout_seconds: int = Field(default=3600, gt=0)
+    max_attempts: int = Field(default=3, gt=0)
+    max_in_flight_tasks: int = Field(default=4, gt=0)
+    allowed_stale_grace_seconds: int = Field(default=300, ge=0)
+
+    @model_validator(mode="after")
+    def _normalize_and_validate_limits(self) -> Self:
+        self.staging_root = self.staging_root.resolve(strict=False)
+        self.output_roots = tuple(
+            sorted({path.resolve(strict=False) for path in self.output_roots}, key=str)
+        )
+        if not self.output_roots:
+            raise ValueError("至少配置一个 Markdown 清洗输出根目录")
+        for output_root in self.output_roots:
+            if (
+                self.staging_root == output_root
+                or self.staging_root in output_root.parents
+                or output_root in self.staging_root.parents
+            ):
+                raise ValueError("Markdown 清洗 staging 与输出根目录不能重叠")
+        if self.processing_hard_timeout_seconds <= self.processing_soft_timeout_seconds:
+            raise ValueError(
+                "Markdown 清洗 worker 的硬超时必须大于软超时"
+            )
+        self.allowed_http_hosts = tuple(
+            sorted(
+                {
+                    host.rstrip(".").lower()
+                    for host in self.allowed_http_hosts
+                    if isinstance(host, str) and host.strip()
+                }
+            )
+        )
+        validated_networks = []
+        for cidr in self.allowed_http_cidrs:
+            if not isinstance(cidr, str) or not cidr.strip():
+                raise ValueError("allowed_http_cidrs 必须是有效 CIDR 字符串")
+            try:
+                validated_networks.append(ipaddress.ip_network(cidr, strict=False))
+            except ValueError as exc:
+                raise ValueError("allowed_http_cidrs 必须是有效 CIDR 字符串") from exc
+        self.allowed_http_cidrs = tuple(
+            sorted({str(network) for network in validated_networks})
+        )
         return self
 
 
@@ -210,6 +277,13 @@ class Settings(BaseSettings):
     GLOBAL_DEDUP_INPUT_ROOTS: list[Path] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS: list[str] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS: list[str] = []
+    MARKDOWN_CLEANING_INPUT_ROOTS: list[Path] = []
+    MARKDOWN_CLEANING_OUTPUT_ROOTS: list[Path] = []
+    MARKDOWN_CLEANING_HTTP_ALLOWED_HOSTS: list[str] = []
+    MARKDOWN_CLEANING_HTTP_ALLOWED_CIDRS: list[str] = []
+    MARKDOWN_CLEANING_WORKER: MarkdownCleaningWorkerSettings = Field(
+        default_factory=MarkdownCleaningWorkerSettings
+    )
     CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: int = Field(default=3660, gt=0)
     EXTRACTION_WORKER: ExtractionWorkerSettings = Field(
         default_factory=ExtractionWorkerSettings
@@ -218,6 +292,14 @@ class Settings(BaseSettings):
         default_factory=GlobalDeduplicationWorkerSettings
     )
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
+    CLASSIFICATION_INPUT_ROOTS: list[Path] = []
+    CLASSIFICATION_STAGING_ROOT: Path = Path("/data/textprocessor/classification")
+    CLASSIFICATION_MAX_INPUT_BYTES: int = Field(default=2_000_000, gt=0)
+    CLASSIFICATION_BASE_URL: str = "http://classification:8000"
+    CLASSIFICATION_API_TOKEN: str | None = Field(default=None, repr=False)
+    CLASSIFICATION_TIMEOUT_SECONDS: float = Field(default=300, gt=0)
+    CLASSIFICATION_RECOVERY_INTERVAL_SECONDS: int = Field(default=30, gt=0)
+    CLASSIFICATION_RECOVERY_BATCH_SIZE: int = Field(default=100, gt=0)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -296,6 +378,34 @@ class Settings(BaseSettings):
         if global_input_roots & set(self.GLOBAL_DEDUP_WORKER.output_roots):
             raise ValueError("全局去重输入根目录和输出根目录不能重叠")
         self.GLOBAL_DEDUP_INPUT_ROOTS = sorted(global_input_roots, key=str)
+        markdown_input_roots = {
+            path.resolve(strict=False) for path in self.MARKDOWN_CLEANING_INPUT_ROOTS
+        }
+        markdown_output_roots = {
+            path.resolve(strict=False) for path in self.MARKDOWN_CLEANING_OUTPUT_ROOTS
+        }
+        if markdown_input_roots & markdown_output_roots:
+            raise ValueError("Markdown 清洗输入根目录和输出根目录不能重叠")
+        if any(
+            _has_parent_or_child_overlap(root, self.MARKDOWN_CLEANING_WORKER.staging_root)
+            for root in markdown_input_roots
+        ):
+            raise ValueError("Markdown 清洗输入根目录和 worker 根目录不能重叠")
+        if any(
+            _has_parent_or_child_overlap(root, self.MARKDOWN_CLEANING_WORKER.staging_root)
+            for root in markdown_output_roots
+        ):
+            raise ValueError("Markdown 清洗输出根目录和 worker 根目录不能重叠")
+        if any(
+            _has_parent_or_child_overlap(
+                root, worker_output_root
+            )
+            for root in markdown_input_roots
+            for worker_output_root in self.MARKDOWN_CLEANING_WORKER.output_roots
+        ):
+            raise ValueError("Markdown 清洗输入根目录和输出任务根目录不能重叠")
+        self.MARKDOWN_CLEANING_INPUT_ROOTS = sorted(markdown_input_roots, key=str)
+        self.MARKDOWN_CLEANING_OUTPUT_ROOTS = sorted(markdown_output_roots, key=str)
         return self
 
 

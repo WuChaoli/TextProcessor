@@ -20,6 +20,7 @@ from app.features.structured_extraction.orchestration import (
     is_retryable_processor_http_error,
 )
 from app.features.structured_extraction.repository import ExtractionTaskRepository
+from app.tasking.envelope import TaskEnvelope
 
 logger = logging.getLogger(__name__)
 _TASK_TYPE = "structured_extraction"
@@ -269,6 +270,16 @@ def _validate_message(
     task_type: str,
     schema_version: int,
 ) -> uuid.UUID:
-    if task_type != _TASK_TYPE or schema_version != _SCHEMA_VERSION:
-        raise ValueError("不支持的结构化提取任务消息")
-    return uuid.UUID(task_id)
+    try:
+        envelope = TaskEnvelope.parse(
+            {
+                "task_id": task_id,
+                "task_type": task_type,
+                "schema_version": schema_version,
+            },
+            expected_type=_TASK_TYPE,
+            expected_schema_version=_SCHEMA_VERSION,
+        )
+    except ValueError as error:
+        raise ValueError("不支持的结构化提取任务消息") from error
+    return envelope.task_id

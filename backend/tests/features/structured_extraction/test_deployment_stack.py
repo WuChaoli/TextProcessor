@@ -8,11 +8,12 @@ def test_celery_runtime_stack_uses_durable_broker_and_health_checks() -> None:
 
     assert "textprocessor-redis-data:/data" in compose
     assert "--appendonly" in compose
-    assert "celery -A app.core.celery_app:celery_app inspect ping" in compose
+    assert "python" in compose and "app.task_runner.process_manager" in compose
     assert "condition: service_healthy" in compose
-    assert "extraction-worker:" in compose
-    assert "extraction-beat:" in compose
-    assert compose.count("redis:\n        condition: service_healthy") >= 3
+    assert "task-runner:" in compose
+    assert "extraction-worker:" not in compose
+    assert "extraction-beat:" not in compose
+    assert compose.count("redis:\n        condition: service_healthy") >= 2
 
 
 def test_celery_uses_configurable_redis_visibility_timeout() -> None:
@@ -34,10 +35,14 @@ def test_beat_uses_controlled_pid_and_schedule_paths() -> None:
         encoding="utf-8"
     )
 
-    assert "--pidfile=/var/run/celery/beat.pid" in compose
-    assert "--schedule=/var/lib/celery/beat-schedule" in compose
+    process_manager = (
+        REPOSITORY_ROOT / "backend" / "app" / "task_runner" / "process_manager.py"
+    ).read_text(encoding="utf-8")
+
+    assert "--pidfile=/var/run/celery/beat.pid" in process_manager
+    assert "--schedule=/var/lib/celery/beat-schedule" in process_manager
     assert "celery-beat-data:/var/lib/celery" in compose
-    assert "mkdir -p /var/run/celery /var/lib/celery" in dockerfile
+    assert "mkdir -p /var/run/celery /var/run/textprocessor /var/lib/celery" in dockerfile
 
 
 def test_docling_verifier_accepts_explicit_compose_project_and_files() -> None:
@@ -50,39 +55,12 @@ def test_docling_verifier_accepts_explicit_compose_project_and_files() -> None:
     assert "@script:composeArguments" in verifier
 
 
-def test_stack_verifier_observes_real_broker_message_and_running_task_recovery() -> (
-    None
-):
+def test_extraction_verifier_delegates_to_unified_single_node_verifier() -> None:
     verifier = (REPOSITORY_ROOT / "scripts" / "verify-extraction-stack.ps1").read_text(
         encoding="utf-8"
     )
 
-    assert "DEL celery" not in verifier
-    assert "LINDEX celery 0" not in verifier
-    assert "textprocessor-smoke-" in verifier
-    assert "from celery import Celery" in verifier
-    assert (
-        "CeleryExtractionTaskDispatcher(smoke_app).enqueue_submit(task_id)" in verifier
-    )
-    assert "task_default_queue=queue_name" in verifier
-    assert "submit_extraction_task.apply_async(" not in verifier
-    assert "LINDEX $smokeQueue 0" in verifier
-    assert "FromBase64String" in verifier
-    assert "$headers.task" in verifier
-    assert "$kwargs.task_id -ne $smokeTaskId" in verifier
-    assert '$kwargs.task_type -ne "structured_extraction"' in verifier
-    assert "$kwargs.schema_version -ne 1" in verifier
-    assert "--queues" in verifier
-    assert "LLEN $smokeQueue" in verifier
-    assert "docker rm -f $smokeWorkerName" in verifier
-    assert "redis-cli DEL $smokeQueue" in verifier
-    assert "task10-mineru" in verifier
-    assert "--signal=KILL" in verifier
-    assert "running:polling:task10-mineru" in verifier
-    assert "succeeded::task10-mineru" in verifier
-    assert "Get-ChildItem" in verifier
-    assert "EXTRACTION_WORKER__PRODUCTION_FORMATS: '[\"pdf\"]'" in verifier
-    assert "CELERY_BROKER_VISIBILITY_TIMEOUT_SECONDS: 5" in verifier
-    assert "[Text.Encoding]::ASCII.GetBytes" in verifier
-    assert '"up", "-d", "--force-recreate"' in verifier
-    assert '"rm", "-sf", "task10-mineru"' in verifier
+    assert "verify-single-node-stack.ps1" in verifier
+    assert "ComposeProjectName" in verifier
+    assert "ComposeFiles" in verifier
+    assert "SkipFaultInjection" in verifier

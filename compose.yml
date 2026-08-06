@@ -1,5 +1,68 @@
 services:
 
+  classification:
+    image: '${DOCKER_IMAGE_CLASSIFICATION-classification-service}:${TAG-latest}'
+    restart: always
+    build:
+      context: .
+      dockerfile: services/classification_service/Dockerfile
+    environment:
+      - CLASSIFICATION_ENVIRONMENT=${CLASSIFICATION_ENVIRONMENT-development}
+      - CLASSIFICATION_INTERNAL_SERVICE_TOKEN=${CLASSIFICATION_INTERNAL_SERVICE_TOKEN?Variable not set}
+      - CLASSIFICATION_MODEL_ROOT=/models/releases
+      - CLASSIFICATION_MODEL_RELEASE=/models/releases/${CLASSIFICATION_MODEL_RELEASE?Variable not set}
+      - CLASSIFICATION_MODEL_RELEASE_SHA256=${CLASSIFICATION_MODEL_RELEASE_SHA256?Variable not set}
+      - CLASSIFICATION_RELEASE_QUALITY_STATUS=${CLASSIFICATION_RELEASE_QUALITY_STATUS-experimental}
+      - CLASSIFICATION_INPUT_ROOT=/data/textprocessor/classification
+      - HF_HUB_OFFLINE=1
+      - TRANSFORMERS_OFFLINE=1
+      - NVIDIA_VISIBLE_DEVICES=${CLASSIFICATION_NVIDIA_VISIBLE_DEVICES-0}
+    volumes:
+      - ${CLASSIFICATION_MODEL_ROOT?Variable not set}:/models/releases:ro
+      - classification-staging:/data/textprocessor/classification:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+
+  datajuicer:
+    image: '${DOCKER_IMAGE_DATAJUICER-datajuicer-service}:${TAG-latest}'
+    restart: always
+    build:
+      context: .
+      dockerfile: services/datajuicer_service/Dockerfile
+    networks:
+      - default
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+      redis:
+        condition: service_healthy
+        restart: true
+    environment:
+      - DATAJUICER_DATABASE_URL=postgresql+psycopg://${POSTGRES_USER?Variable not set}:${POSTGRES_PASSWORD?Variable not set}@db:5432/${POSTGRES_DB}
+      - DATAJUICER_CELERY_BROKER_URL=redis://redis:6379/2
+      - DATAJUICER_CELERY_QUEUE=datajuicer.jobs
+      - DATAJUICER_WORKER_CONCURRENCY=1
+    volumes:
+      - datajuicer-work:/data/textprocessor/global-deduplication
+    healthcheck:
+      test: ["CMD", "python", "-m", "datajuicer_service.healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
   redis:
     image: redis:7-alpine
     restart: always
@@ -32,63 +95,15 @@ services:
       - POSTGRES_DB=${POSTGRES_DB?Variable not set}
 
   adminer:
+    profiles: [debug]
     image: adminer
     restart: always
-    networks:
-      - traefik-public
-      - default
     depends_on:
       - db
     environment:
       - ADMINER_DESIGN=pepa-linha-dark
-    labels:
-      - traefik.enable=true
-      - traefik.docker.network=traefik-public
-      - traefik.constraint-label=traefik-public
-      - traefik.http.routers.${STACK_NAME?Variable not set}-adminer-http.rule=Host(`adminer.${DOMAIN?Variable not set}`)
-      - traefik.http.routers.${STACK_NAME?Variable not set}-adminer-http.entrypoints=http
-      - traefik.http.routers.${STACK_NAME?Variable not set}-adminer-http.middlewares=https-redirect
-      - traefik.http.routers.${STACK_NAME?Variable not set}-adminer-https.rule=Host(`adminer.${DOMAIN?Variable not set}`)
-      - traefik.http.routers.${STACK_NAME?Variable not set}-adminer-https.entrypoints=https
-      - traefik.http.routers.${STACK_NAME?Variable not set}-adminer-https.tls=true
-      - traefik.http.routers.${STACK_NAME?Variable not set}-adminer-https.tls.certresolver=le
-      - traefik.http.services.${STACK_NAME?Variable not set}-adminer.loadbalancer.server.port=8080
 
-  prestart:
-    image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    networks:
-      - traefik-public
-      - default
-    depends_on:
-      db:
-        condition: service_healthy
-        restart: true
-    command: bash scripts/prestart.sh
-    env_file:
-      - .env
-    environment:
-      - DOMAIN=${DOMAIN}
-      - FRONTEND_HOST=${FRONTEND_HOST?Variable not set}
-      - ENVIRONMENT=${ENVIRONMENT}
-      - BACKEND_CORS_ORIGINS=${BACKEND_CORS_ORIGINS}
-      - SECRET_KEY=${SECRET_KEY?Variable not set}
-      - FIRST_SUPERUSER=${FIRST_SUPERUSER?Variable not set}
-      - FIRST_SUPERUSER_PASSWORD=${FIRST_SUPERUSER_PASSWORD?Variable not set}
-      - SMTP_HOST=${SMTP_HOST}
-      - SMTP_USER=${SMTP_USER}
-      - SMTP_PASSWORD=${SMTP_PASSWORD}
-      - EMAILS_FROM_EMAIL=${EMAILS_FROM_EMAIL}
-      - POSTGRES_SERVER=db
-      - POSTGRES_PORT=${POSTGRES_PORT}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER?Variable not set}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
-      - SENTRY_DSN=${SENTRY_DSN}
-
-  backend:
+  backend-api:
     image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
     restart: always
     networks:
@@ -101,8 +116,6 @@ services:
       redis:
         condition: service_healthy
         restart: true
-      prestart:
-        condition: service_completed_successfully
     env_file:
       - .env
     environment:
@@ -123,9 +136,14 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling-api:5001}
+      - EXTRACTION_INPUT_ROOTS=["/data/textprocessor/input"]
+      - EXTRACTION_OUTPUT_ROOTS=["/data/textprocessor/output"]
+      - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling:5001}
       - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
       - SENTRY_DSN=${SENTRY_DSN}
+    volumes:
+      - processor-input:/data/textprocessor/input
+      - processor-output:/data/textprocessor/output
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/utils/health-check/"]
@@ -154,7 +172,7 @@ services:
       # Enable redirection for HTTP and HTTPS
       - traefik.http.routers.${STACK_NAME?Variable not set}-backend-http.middlewares=https-redirect
 
-  extraction-worker:
+  task-runner:
     image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
     restart: always
     networks:
@@ -166,14 +184,10 @@ services:
       redis:
         condition: service_healthy
         restart: true
-      prestart:
-        condition: service_completed_successfully
     command:
-      - celery
-      - -A
-      - app.core.celery_app:celery_app
-      - worker
-      - --loglevel=INFO
+      - python
+      - -m
+      - app.task_runner.process_manager
     env_file:
       - .env
     environment:
@@ -183,54 +197,23 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling-api:5001}
+      - EXTRACTION_INPUT_ROOTS=["/data/textprocessor/input"]
+      - EXTRACTION_OUTPUT_ROOTS=["/data/textprocessor/output"]
+      - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling:5001}
       - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - celery -A app.core.celery_app:celery_app inspect ping --destination=celery@$$HOSTNAME --timeout=5 | grep -q pong
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-
-  extraction-beat:
-    image: '${DOCKER_IMAGE_BACKEND?Variable not set}:${TAG-latest}'
-    restart: always
-    networks:
-      - default
-    depends_on:
-      db:
-        condition: service_healthy
-        restart: true
-      redis:
-        condition: service_healthy
-        restart: true
-      prestart:
-        condition: service_completed_successfully
-    command:
-      - celery
-      - -A
-      - app.core.celery_app:celery_app
-      - beat
-      - --loglevel=INFO
-      - --pidfile=/var/run/celery/beat.pid
-      - --schedule=/var/lib/celery/beat-schedule
-    env_file:
-      - .env
-    environment:
-      - POSTGRES_SERVER=db
-      - POSTGRES_PORT=${POSTGRES_PORT}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER?Variable not set}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
-      - CELERY_BROKER_URL=redis://redis:6379/0
+      - GLOBAL_DEDUP_WORKER__DATAJUICER_BASE_URL=http://datajuicer:8000
+      - CLASSIFICATION_BASE_URL=http://classification:8000
+      - CLASSIFICATION_API_TOKEN=${CLASSIFICATION_INTERNAL_SERVICE_TOKEN?Variable not set}
+      - CLASSIFICATION_STAGING_ROOT=/data/textprocessor/classification
+      - CLASSIFICATION_INPUT_ROOTS=["/data/textprocessor/input"]
     volumes:
       - celery-beat-data:/var/lib/celery
+      - classification-staging:/data/textprocessor/classification
+      - datajuicer-work:/data/textprocessor/global-deduplication
+      - processor-input:/data/textprocessor/input
+      - processor-output:/data/textprocessor/output
     healthcheck:
-      test:
-        - CMD-SHELL
-        - test -s /var/run/celery/beat.pid && kill -0 "$$(cat /var/run/celery/beat.pid)" && test -e /var/lib/celery/beat-schedule
+      test: ["CMD", "python", "-m", "app.task_runner.healthcheck"]
       interval: 15s
       timeout: 10s
       retries: 5
@@ -268,6 +251,10 @@ services:
 volumes:
   app-db-data:
   celery-beat-data:
+  classification-staging:
+  datajuicer-work:
+  processor-input:
+  processor-output:
   textprocessor-redis-data:
 
 networks:

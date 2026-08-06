@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.core.db import engine, init_db
 from app.features.global_deduplication.task_models import GlobalDeduplicationTask
 from app.features.structured_extraction.models import ExtractionTask, ProcessorSlot
+from app.features.text_classification.models import ClassificationTask
 from app.main import app
 from app.models import Item, User
 from tests.utils.user import authentication_token_from_email
@@ -24,6 +25,7 @@ def db() -> Generator[Session]:
         session.execute(delete(ProcessorSlot))
         session.execute(delete(ExtractionTask))
         session.execute(delete(GlobalDeduplicationTask))
+        session.execute(delete(ClassificationTask))
         statement = delete(User)
         session.execute(statement)
         session.commit()
