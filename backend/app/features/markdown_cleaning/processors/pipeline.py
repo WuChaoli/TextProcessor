@@ -84,7 +84,7 @@ class MarkdownCleaningPipelineLimits:
     max_block_char_span: int = 1_000_000
     max_token_count: int = 10_000
     max_pii_candidate_count: int = 2000
-    processing_timeout_seconds: float = 8.0
+    processing_timeout_seconds: float = 30.0
 
     def __post_init__(self) -> None:
         integer_limits = (
