@@ -72,17 +72,20 @@ def _markdown_cleaning_settings_kwargs(
     }
 
 
-def test_markdown_cleaning_api_roots_cannot_overlap_worker_staging_root(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(ValidationError, match="worker"):
-        Settings(
-            **_markdown_cleaning_settings_kwargs(
-                worker_staging_root=tmp_path / "worker_root",
-                worker_output_roots=(tmp_path / "worker_output",),
-            ),
-            MARKDOWN_CLEANING_INPUT_ROOTS=[tmp_path / "worker_root" / "input"],
-        )
+def test_markdown_cleaning_api_roots_may_overlap_worker_roots(tmp_path: Path) -> None:
+    configured = Settings(
+        **_markdown_cleaning_settings_kwargs(
+            worker_staging_root=tmp_path / "worker_root",
+            worker_output_roots=(tmp_path / "worker_output",),
+        ),
+        MARKDOWN_CLEANING_INPUT_ROOTS=[tmp_path],
+        MARKDOWN_CLEANING_OUTPUT_ROOTS=[tmp_path / "worker_root"],
+    )
+
+    assert configured.MARKDOWN_CLEANING_INPUT_ROOTS == [tmp_path.resolve()]
+    assert configured.MARKDOWN_CLEANING_OUTPUT_ROOTS == [
+        (tmp_path / "worker_root").resolve()
+    ]
 
 
 def test_markdown_cleaning_api_output_may_equal_worker_output_root(
@@ -114,32 +117,16 @@ def test_markdown_cleaning_api_output_child_may_share_worker_output_boundary(
     assert configured.MARKDOWN_CLEANING_OUTPUT_ROOTS == [child.resolve()]
 
 
-@pytest.mark.parametrize("api_output", ["input", "staging", "staging/child"])
-def test_markdown_cleaning_api_output_rejects_input_or_staging_overlap(
-    tmp_path: Path, api_output: str
+def test_markdown_cleaning_api_output_rejects_exact_input_overlap(
+    tmp_path: Path,
 ) -> None:
     input_root = tmp_path / "input"
-    staging_root = tmp_path / "staging"
-    output = input_root if api_output == "input" else tmp_path / api_output
     with pytest.raises(ValidationError, match="Markdown"):
         Settings(
             **_markdown_cleaning_settings_kwargs(
-                worker_staging_root=staging_root,
+                worker_staging_root=tmp_path / "staging",
                 worker_output_roots=(tmp_path / "worker_output",),
             ),
             MARKDOWN_CLEANING_INPUT_ROOTS=[input_root],
-            MARKDOWN_CLEANING_OUTPUT_ROOTS=[output],
-        )
-
-
-def test_markdown_cleaning_api_input_root_overlap_with_worker_root_is_invalid(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(ValidationError, match="worker"):
-        Settings(
-            **_markdown_cleaning_settings_kwargs(
-                worker_staging_root=tmp_path / "worker_root",
-                worker_output_roots=(tmp_path / "worker_output",),
-            ),
-            MARKDOWN_CLEANING_INPUT_ROOTS=[tmp_path / "worker_root"],
+            MARKDOWN_CLEANING_OUTPUT_ROOTS=[input_root],
         )
