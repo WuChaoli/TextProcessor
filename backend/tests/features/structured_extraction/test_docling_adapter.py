@@ -83,6 +83,30 @@ def test_submit_uses_v1_async_file_contract_and_api_key(tmp_path: Path) -> None:
     assert b"do_ocr" not in captured_body
 
 
+def test_submit_explicitly_allows_the_detected_input_format(tmp_path: Path) -> None:
+    source = tmp_path / "sample.epub"
+    source.write_bytes(b"PK")
+    captured_body = b""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_body
+        captured_body = request.read()
+        return httpx.Response(
+            200,
+            json={
+                "task_id": "docling-epub-1",
+                "task_type": "convert",
+                "task_status": "pending",
+            },
+        )
+
+    make_adapter(handler).submit(source, context())
+
+    assert b'name="from_formats"' in captured_body
+    assert b"\r\nepub\r\n" in captured_body
+    assert b"Content-Type: application/epub+zip" in captured_body
+
+
 @pytest.mark.parametrize("status", ["pending", "started"])
 def test_maps_pending_and_started_to_processing(status: str) -> None:
     adapter = make_adapter(

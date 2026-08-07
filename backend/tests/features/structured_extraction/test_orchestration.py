@@ -1,3 +1,4 @@
+import json
 import uuid
 from collections.abc import Callable, Generator
 from datetime import timedelta
@@ -142,6 +143,11 @@ def session() -> Generator[Session]:
         yield value
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """编排单测使用各用例自己的 SQLite session。"""
+
+
 def make_task(
     *,
     source: Path,
@@ -228,6 +234,32 @@ def test_submit_processes_plain_text_without_external_adapter_or_slot(
     assert task.lease_expires_at is None
     assert task.processor_name == ProcessorName.PLAIN_TEXT
     assert target.read_text(encoding="utf-8") == "标题\n\n正文\n"
+    manifest = json.loads((target.parent / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest == {
+        "schemaVersion": 1,
+        "taskId": str(task.id),
+        "detectedFormat": "text",
+        "inputSha256": task.input_sha256,
+        "output": {
+            "path": str(target),
+            "sha256": task.output_sha256,
+            "sizeBytes": target.stat().st_size,
+        },
+        "processor": {
+            "name": "plain_text",
+            "version": "builtin",
+            "profile": "text-pass-through",
+            "profileSha256": task.profile_sha256,
+        },
+        "routing": {"reasons": ["fixed_route=text"]},
+        "publication": {
+            "atomicFilePublish": True,
+            "manifestPath": str(target.parent / "manifest.json"),
+        },
+    }
+    assert task.result_metadata is not None
+    assert task.result_metadata["manifest_path"] == str(target.parent / "manifest.json")
+    assert task.result_metadata["manifest_sha256"]
     assert scheduler.submit_calls == []
     assert scheduler.poll_calls == []
 

@@ -548,6 +548,46 @@ class ExtractionOrchestrator:
             Path(task.target_path),
             allow_recovery=allow_recovery,
         )
+        manifest_path = Path(task.target_path).parent / "manifest.json"
+        manifest_staging_path = layout.output.parent / "manifest.json"
+        manifest_staging_path.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "taskId": str(task.id),
+                    "detectedFormat": task.detected_format,
+                    "inputSha256": task.input_sha256,
+                    "output": {
+                        "path": task.target_path,
+                        "sha256": published.sha256,
+                        "sizeBytes": published.size_bytes,
+                    },
+                    "processor": {
+                        "name": artifact.processor_name.value,
+                        "version": artifact.processor_version,
+                        "profile": artifact.profile_name,
+                        "profileSha256": artifact.profile_sha256,
+                    },
+                    "routing": {"reasons": task.routing_reasons or []},
+                    "publication": {
+                        "atomicFilePublish": True,
+                        "manifestPath": str(manifest_path),
+                    },
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+            newline="",
+        )
+        prepared_manifest = self._publisher.prepare(manifest_staging_path)
+        published_manifest = self._publisher.publish_manifest(
+            prepared_manifest,
+            manifest_path,
+            allow_recovery=allow_recovery,
+        )
         self._repository.transition(
             task.id,
             expected=ExtractionTaskStatus.RUNNING,
@@ -566,6 +606,9 @@ class ExtractionOrchestrator:
             result_metadata={
                 "target_path": task.target_path,
                 "output_size_bytes": published.size_bytes,
+                "manifest_path": str(manifest_path),
+                "manifest_sha256": published_manifest.sha256,
+                "manifest_size_bytes": published_manifest.size_bytes,
             },
         )
 

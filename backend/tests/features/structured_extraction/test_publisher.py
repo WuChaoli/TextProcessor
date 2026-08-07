@@ -11,6 +11,11 @@ from app.features.structured_extraction.errors import (
 from app.features.structured_extraction.processors.publisher import AtomicPublisher
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """发布器单测不依赖 PostgreSQL。"""
+
+
 def test_prepare_validates_utf8_and_computes_digest(tmp_path: Path) -> None:
     source = tmp_path / "result.md"
     content = "# 结果\n".encode()
@@ -115,3 +120,35 @@ def test_publish_uses_only_target_directory_for_temporary_file(
 
     assert not list(source.parent.glob(".publish-*"))
     assert not list(target.parent.glob(".publish-*"))
+
+
+def test_publish_manifest_atomically_and_recovers_same_content(tmp_path: Path) -> None:
+    source = tmp_path / "staging" / "manifest.json"
+    source.parent.mkdir()
+    source.write_text('{"schemaVersion":1}\n', encoding="utf-8")
+    target = tmp_path / "output" / "manifest.json"
+    publisher = AtomicPublisher(
+        max_output_bytes=1024,
+        output_roots=(tmp_path / "output",),
+    )
+    prepared = publisher.prepare(source)
+
+    published = publisher.publish_manifest(prepared, target)
+    recovered = publisher.publish_manifest(prepared, target, allow_recovery=True)
+
+    assert published.recovered is False
+    assert recovered.recovered is True
+    assert target.read_text(encoding="utf-8") == '{"schemaVersion":1}\n'
+    assert not list(target.parent.glob(".publish-*"))
+
+
+def test_target_is_unavailable_when_task_directory_has_manifest(tmp_path: Path) -> None:
+    output = tmp_path / "output"
+    output.mkdir()
+    (output / "manifest.json").write_text("{}\n", encoding="utf-8")
+    publisher = AtomicPublisher(max_output_bytes=1024, output_roots=(output,))
+
+    with pytest.raises(ExtractionProcessingError) as captured:
+        publisher.ensure_target_available(output / "another.md")
+
+    assert captured.value.code is ExtractionErrorCode.OUTPUT_CONFLICT

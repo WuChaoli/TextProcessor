@@ -38,7 +38,7 @@ Docling 使用预期 Redis DB。健康检查只证明可接通，不替代真实
 对已确认的环境文件先创建同目录时间戳备份，再设置：
 
 ```dotenv
-EXTRACTION_WORKER__MINERU_BASE_URL=http://127.0.0.1:9000
+EXTRACTION_WORKER__MINERU_BASE_URL=http://127.0.0.1:8001
 EXTRACTION_WORKER__MINERU_API_KEY=
 EXTRACTION_WORKER__DOCLING_BASE_URL=http://127.0.0.1:5001
 EXTRACTION_WORKER__DOCLING_API_KEY=<runtime-secret>
@@ -62,6 +62,13 @@ EXTRACTION_WORKER__PRODUCTION_FORMATS=["text","markdown","json","xml","yaml","cs
 结果摘要、内容断言和 manifest。PNG/JPG 必须是独立任务；DOCX 必须覆盖两个路由。
 报告不复制完整正文。测试失败保持格式开放，只报告失败阶段和建议，由用户决定是否
 收紧。
+
+每个 `targetPath` 所在目录只承载一个结构化提取任务。成功发布后包含目标 Markdown
+和同目录 `manifest.json`；manifest 记录 task、输入/输出摘要、格式、processor、
+profile、路由理由和发布路径。Markdown 与 manifest 分别通过同目录独占临时文件原子
+发布，恢复时只接受摘要完全一致的已有文件。Docling 提交必须显式携带输入格式及正确
+MIME；EPUB 使用 `application/epub+zip`，且验收 EPUB 的 `mimetype` 必须是 ZIP 中
+首个、不压缩的条目。
 
 ## 观察与回滚
 

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import mimetypes
 from pathlib import Path
 from typing import cast
 
@@ -21,6 +22,7 @@ from app.features.structured_extraction.worker_models import (
 
 _PROCESSING_STATUSES = {"pending", "started"}
 _MAX_SAFE_ERROR_LENGTH = 256
+_CONTENT_TYPES = {".epub": "application/epub+zip"}
 
 
 class DoclingHttpAdapter:
@@ -65,10 +67,12 @@ class DoclingHttpAdapter:
                         "files": (
                             source.name,
                             input_file,
-                            "application/octet-stream",
+                            _CONTENT_TYPES.get(source.suffix.lower())
+                            or mimetypes.guess_type(source.name)[0]
+                            or "application/octet-stream",
                         )
                     },
-                    data=self._profile_form(),
+                    data=self._profile_form(source),
                 )
         except OSError:
             raise ExtractionProcessingError(
@@ -200,8 +204,9 @@ class DoclingHttpAdapter:
             profile_sha256=self._profile_sha256,
         )
 
-    def _profile_form(self) -> dict[str, str]:
+    def _profile_form(self, source: Path) -> dict[str, str]:
         return {
+            "from_formats": source.suffix.lower().lstrip("."),
             "to_formats": self._profile.to_formats[0],
             "image_export_mode": self._profile.image_export_mode,
             "ocr": str(self._profile.do_ocr).lower(),
