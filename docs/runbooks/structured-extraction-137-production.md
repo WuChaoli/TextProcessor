@@ -7,6 +7,93 @@
 Docling 以容器运行，只绑定回环地址或经批准的内网地址。真实凭据只写入生产运行时
 环境文件，不写入 Git、命令行参数或验收报告。
 
+## 当前运行清单与启停入口
+
+以下为 2026-08-07 在 `star-SYS-4029GP-TRT`（137）的已验证快照。服务器项目根目录为
+`/shineData/text_processor`。进程、容器 ID 和监听状态会变化，执行启停前必须先运行本节
+“状态检查”，不得只依据快照操作。
+
+| 组件 | 管理入口 | 当前地址或依赖 | 配置来源 | 生命周期边界 |
+|---|---|---|---|---|
+| TextProcessor API | `textprocessor-api.service` | `0.0.0.0:18100` | `/shineData/text_processor/.env` | 本项目管理 |
+| Task Runner、Celery worker/beat | `textprocessor-task-runner.service` | Redis DB 0；在 API 之后启动 | `/shineData/text_processor/.env` | 本项目管理 |
+| PostgreSQL | 容器 `tp-source-db`，镜像 `postgres:17.6-alpine` | `127.0.0.1:55434 -> 5432` | 既有容器配置 | 本项目数据依赖 |
+| Redis | 容器 `tp-source-redis`，镜像 `redis:8.2.1` | `127.0.0.1:56380 -> 6379`；网络 `bridge`、`tp-processors` | 既有容器配置 | Celery 与 Docling 共用，数据库编号隔离 |
+| Docling API 与 RQ worker | 容器 `tp-docling`，镜像 `textprocessor/docling-service:tp-0.1.1` | `127.0.0.1:5001`；Redis DB 1；网络 `tp-processors` | `runtime/docling.env` | 本项目管理 |
+| MinerU | 容器 `mineru-api`，镜像 `mineru:latest` | `0.0.0.0:8001 -> 8000` | MinerU 独立部署 | 外部服务，默认只检查、不随本项目启停 |
+
+两个 systemd unit 文件分别为
+`/etc/systemd/system/textprocessor-api.service` 和
+`/etc/systemd/system/textprocessor-task-runner.service`，均要求 `/shineData` 已挂载并在
+`docker.service`、`network-online.target` 之后启动。PostgreSQL、Redis 的 restart policy
+为 `unless-stopped`；Docling 为 `always`。restart policy 不替代启停后的健康检查。
+
+### 状态检查
+
+```bash
+cd /shineData/text_processor
+systemctl status textprocessor-api.service textprocessor-task-runner.service --no-pager
+docker ps --filter name=tp-source-db --filter name=tp-source-redis \
+  --filter name=tp-docling --filter name=mineru-api
+docker inspect tp-docling --format '{{.State.Status}} {{.State.Health.Status}} retries={{.RestartCount}}'
+curl --fail --silent --show-error http://127.0.0.1:8001/health >/dev/null
+docling_key=$(sed -n 's/^DOCLING_SERVE_API_KEY=//p' runtime/docling.env)
+printf 'header = "X-API-Key: %s"\n' "$docling_key" | \
+  curl --fail --silent --show-error --config - \
+    http://127.0.0.1:5001/health >/dev/null
+unset docling_key
+```
+
+不得把 `docling_key`、`.env` 内容或 `/proc/<pid>/environ` 输出到终端记录、日志或工单。
+
+### 启动顺序
+
+```bash
+cd /shineData/text_processor
+docker start tp-source-db tp-source-redis
+docker start tp-docling
+systemctl start textprocessor-api.service
+systemctl start textprocessor-task-runner.service
+```
+
+启动后必须执行状态检查，确认两个 unit 为 `active (running)`、Docling 为 `healthy`，
+MinerU 与 Docling 健康请求成功。MinerU 默认不在这组命令内；仅在明确确认其独立部署
+边界并获得对应授权后，才单独执行 `docker start mineru-api`。
+
+### 停止顺序
+
+常规维护只停止应用进程，保留数据库、Redis 和处理器：
+
+```bash
+systemctl stop textprocessor-task-runner.service
+systemctl stop textprocessor-api.service
+```
+
+只有明确要求完整停止 TextProcessor 依赖时，才继续按消费者到依赖的顺序执行：
+
+```bash
+docker stop tp-docling
+docker stop tp-source-redis
+docker stop tp-source-db
+```
+
+MinerU 是外部服务，不随上述命令停止。不要使用 `docker compose down`、
+`down --volumes`，也不要删除数据库、Redis volume、任务记录或已发布结果。
+
+### 重启范围
+
+- 只修改结构化提取 worker 配置或 worker 代码：
+  `systemctl restart textprocessor-task-runner.service`。
+- 修改 API 代码或 API 消费的配置：先重启
+  `textprocessor-api.service`，再重启 `textprocessor-task-runner.service`。
+- 只维护 Docling：`docker restart tp-docling`，等待其恢复 `healthy` 后再接收新任务。
+- PostgreSQL 或 Redis 只在明确诊断需要时单独重启；重启前先检查运行中任务和队列，
+  重启后验证数据库连接、Celery 队列和任务恢复。
+- MinerU 只在单独授权后使用 `docker restart mineru-api`，不纳入 TextProcessor 常规重启。
+
+每次操作都记录操作前后状态、准确目标、时间和失败摘要。不得因健康检查失败自动收紧
+格式 allowlist。
+
 ## 基线与配置来源
 
 修改前必须记录以下只读证据：
