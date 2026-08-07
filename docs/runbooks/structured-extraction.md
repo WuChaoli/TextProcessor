@@ -4,6 +4,11 @@
 
 ## 启动与验证
 
+仓库默认使用统一 Compose 部署。137 当前采用 systemd 运行 TextProcessor、外部
+MinerU 和本机 Docling 的混合形态，其上线、开放格式与回滚步骤见
+`docs/runbooks/structured-extraction-137-production.md`，不得直接用下面的全栈命令
+替换正在运行的 systemd 服务。
+
 部署迁移完成后启动八个生产服务：
 
 ```powershell
