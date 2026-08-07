@@ -70,6 +70,11 @@ def docling_samples() -> dict[str, Path]:
 
 
 @pytest.fixture(scope="module")
+def docling_expectations() -> dict[str, tuple[str, ...]]:
+    return load_expectations("DOCLING_REAL_EXPECTATIONS", _REQUIRED_SAMPLES)
+
+
+@pytest.fixture(scope="module")
 def docling_client(
     worker_settings: ExtractionWorkerSettings,
 ) -> Generator[DoclingHttpAdapter]:
@@ -110,6 +115,7 @@ def test_docling_async_round_trip(
     detected_format: DetectedFormat,
     docling_client: DoclingHttpAdapter,
     docling_samples: dict[str, Path],
+    docling_expectations: dict[str, tuple[str, ...]],
     tmp_path: Path,
     worker_settings: ExtractionWorkerSettings,
 ) -> None:
@@ -154,9 +160,42 @@ def test_docling_async_round_trip(
     )
     result = artifact.markdown_path.read_bytes()
     assert result and not result.startswith(b"\xef\xbb\xbf")
-    assert result.decode("utf-8").strip()
+    markdown = result.decode("utf-8").strip()
+    assert markdown
+    normalized = normalize_text(markdown)
+    for expected in docling_expectations[format_name]:
+        assert normalize_text(expected) in normalized
     assert artifact.profile_name == worker_settings.docling_profile_name
     assert artifact.profile_sha256 == processing_context.profile_sha256
+
+
+def load_expectations(
+    environment_name: str,
+    required_samples: dict[str, DetectedFormat],
+) -> dict[str, tuple[str, ...]]:
+    raw_expectations = os.environ.get(environment_name)
+    if raw_expectations is None:
+        pytest.fail(f"Docling real integration requires {environment_name}")
+    try:
+        parsed_expectations = json.loads(raw_expectations)
+    except json.JSONDecodeError:
+        pytest.fail(f"{environment_name} must be a JSON object")
+    if not isinstance(parsed_expectations, dict):
+        pytest.fail(f"{environment_name} must be a JSON object")
+
+    expectations: dict[str, tuple[str, ...]] = {}
+    for format_name in required_samples:
+        configured = parsed_expectations.get(format_name)
+        if not isinstance(configured, list) or not configured or not all(
+            isinstance(value, str) and value.strip() for value in configured
+        ):
+            pytest.fail(f"Docling {format_name} expectations must be non-empty strings")
+        expectations[format_name] = tuple(configured)
+    return expectations
+
+
+def normalize_text(value: str) -> str:
+    return " ".join(value.casefold().split())
 
 
 def wait_with_test_deadline(

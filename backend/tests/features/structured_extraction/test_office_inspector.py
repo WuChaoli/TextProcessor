@@ -5,6 +5,8 @@ from app.features.structured_extraction.office_inspector import (
     OfficeDocumentInspector,
 )
 
+FIXTURE_ROOT = Path(__file__).parents[2] / "fixtures" / "structured_extraction"
+
 
 def test_docx_inspector_counts_visual_structure_and_reasons(tmp_path: Path) -> None:
     path = tmp_path / "complex.docx"
@@ -57,3 +59,17 @@ def test_plain_docx_has_zero_visual_complexity(tmp_path: Path) -> None:
 
     assert inspection.visual_complexity_score == 0
     assert inspection.reasons == ()
+
+
+def test_synthetic_complex_docx_crosses_production_routing_threshold() -> None:
+    inspection = OfficeDocumentInspector().inspect_docx(
+        FIXTURE_ROOT / "synthetic-complex.docx"
+    )
+
+    assert inspection.visual_complexity_score >= 5
+    assert inspection.reasons == (
+        "drawings=1",
+        "anchored_objects=1",
+        "text_boxes=1",
+        "column_sections=1",
+    )

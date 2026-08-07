@@ -3,6 +3,9 @@ param(
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
     [string[]]$SamplePath,
+    [Parameter(Mandatory)]
+    [ValidateNotNull()]
+    [hashtable]$ExpectedText,
     [string]$BaseUrl = $env:EXTRACTION_WORKER__DOCLING_BASE_URL,
     [string]$ApiKey = $env:EXTRACTION_WORKER__DOCLING_API_KEY,
     [ValidateRange(1, 3600)]
@@ -47,10 +50,18 @@ $requiredFormats = @("docx", "xlsx", "html", "epub")
 if (Compare-Object ($sampleMap.Keys | Sort-Object) $requiredFormats) {
     throw "Docling smoke requires docx, xlsx, html, and epub samples."
 }
+foreach ($format in $requiredFormats) {
+    $values = @($ExpectedText[$format]) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($values.Count -eq 0) {
+        throw "Docling smoke requires expected text for every format."
+    }
+    $ExpectedText[$format] = $values
+}
 
 $environmentNames = @(
     "DOCLING_REAL_INTEGRATION",
     "DOCLING_REAL_SAMPLE_PATHS",
+    "DOCLING_REAL_EXPECTATIONS",
     "EXTRACTION_WORKER__DOCLING_BASE_URL",
     "EXTRACTION_WORKER__DOCLING_API_KEY",
     "EXTRACTION_WORKER__PROCESSING_DEADLINE_SECONDS",
@@ -65,6 +76,7 @@ $pushedLocation = $false
 try {
     $env:DOCLING_REAL_INTEGRATION = "1"
     $env:DOCLING_REAL_SAMPLE_PATHS = $sampleMap | ConvertTo-Json -Compress
+    $env:DOCLING_REAL_EXPECTATIONS = $ExpectedText | ConvertTo-Json -Compress
     $env:EXTRACTION_WORKER__DOCLING_BASE_URL = $BaseUrl
     $env:EXTRACTION_WORKER__DOCLING_API_KEY = $ApiKey
     $env:EXTRACTION_WORKER__PROCESSING_DEADLINE_SECONDS = $TimeoutSeconds.ToString()

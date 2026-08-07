@@ -3,6 +3,9 @@ param(
     [Parameter(Mandatory)]
     [ValidateNotNullOrEmpty()]
     [string[]]$SamplePath,
+    [Parameter(Mandatory)]
+    [ValidateNotNull()]
+    [hashtable]$ExpectedText,
     [string]$BaseUrl = $env:EXTRACTION_WORKER__MINERU_BASE_URL,
     [string]$ApiKey = $env:EXTRACTION_WORKER__MINERU_API_KEY,
     [ValidateRange(1, 3600)]
@@ -18,9 +21,9 @@ function Get-SampleFormat {
 
     switch ([IO.Path]::GetExtension($Path).ToLowerInvariant()) {
         ".pdf" { return "pdf" }
-        ".png" { return "image" }
-        ".jpg" { return "image" }
-        ".jpeg" { return "image" }
+        ".png" { return "png" }
+        ".jpg" { return "jpg" }
+        ".jpeg" { return "jpg" }
         ".doc" { throw "Legacy .doc is unsupported in the first release; use .docx." }
         ".ppt" { throw "Legacy .ppt is unsupported in the first release; use .pptx." }
         ".pptx" { return "pptx" }
@@ -43,14 +46,22 @@ foreach ($path in $SamplePath) {
     }
     $sampleMap[$format] = [IO.Path]::GetFullPath($path)
 }
-$requiredFormats = @("pdf", "image", "pptx")
+$requiredFormats = @("pdf", "png", "jpg", "pptx")
 if (Compare-Object ($sampleMap.Keys | Sort-Object) $requiredFormats) {
-    throw "MinerU smoke requires pdf, image, and pptx samples."
+    throw "MinerU smoke requires pdf, png, jpg, and pptx samples."
+}
+foreach ($format in $requiredFormats) {
+    $values = @($ExpectedText[$format]) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    if ($values.Count -eq 0) {
+        throw "MinerU smoke requires expected text for every format."
+    }
+    $ExpectedText[$format] = $values
 }
 
 $environmentNames = @(
     "MINERU_REAL_INTEGRATION",
     "MINERU_REAL_SAMPLE_PATHS",
+    "MINERU_REAL_EXPECTATIONS",
     "EXTRACTION_WORKER__MINERU_BASE_URL",
     "EXTRACTION_WORKER__MINERU_API_KEY",
     "EXTRACTION_WORKER__PROCESSING_DEADLINE_SECONDS",
@@ -65,6 +76,7 @@ $pushedLocation = $false
 try {
     $env:MINERU_REAL_INTEGRATION = "1"
     $env:MINERU_REAL_SAMPLE_PATHS = $sampleMap | ConvertTo-Json -Compress
+    $env:MINERU_REAL_EXPECTATIONS = $ExpectedText | ConvertTo-Json -Compress
     $env:EXTRACTION_WORKER__MINERU_BASE_URL = $BaseUrl
     if ([string]::IsNullOrWhiteSpace($ApiKey)) {
         Remove-Item Env:EXTRACTION_WORKER__MINERU_API_KEY -ErrorAction SilentlyContinue
