@@ -87,11 +87,17 @@ def _raise_http_error(error: GlobalDeduplicationDomainError) -> NoReturn:
 def task_to_public(
     task: GlobalDeduplicationTask,
 ) -> GlobalDeduplicationTaskPublic:
-    result = (
-        GlobalDeduplicationResultPublic(targetPath=task.target_path)
-        if task.status is GlobalDeduplicationTaskStatus.SUCCEEDED
-        else None
-    )
+    result = None
+    if task.status is GlobalDeduplicationTaskStatus.SUCCEEDED:
+        metadata = task.result_metadata or {}
+        result = GlobalDeduplicationResultPublic.model_validate(
+            {
+                "totalFiles": metadata.get("total_files", 0),
+                "uniqueFiles": metadata.get("unique_files", 0),
+                "movedDuplicates": metadata.get("moved_duplicates", 0),
+                "moveFailures": metadata.get("move_failures", []),
+            }
+        )
     error = (
         GlobalDeduplicationErrorPublic(
             code=task.error_code,

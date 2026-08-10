@@ -52,8 +52,7 @@ class GlobalDeduplicationTaskService:
             task, created = self._repository.create_or_get(
                 caller_id=caller_id,
                 session_id=validated.session_id,
-                input_json_path=validated.input_json_path,
-                target_path=validated.target_path,
+                input_path=validated.input_path,
             )
             if not created:
                 if (

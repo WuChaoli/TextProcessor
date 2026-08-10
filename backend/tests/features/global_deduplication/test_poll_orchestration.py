@@ -1,5 +1,4 @@
 import hashlib
-import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -154,20 +153,16 @@ def test_successful_poll_finalizes_in_same_task(tmp_path: Path) -> None:
 
     orchestrator.poll(task.id)
 
-    target = tmp_path / "published" / "result.json"
-    assert json.loads(target.read_text(encoding="utf-8")) == [
-        {
-            "fileId": "1",
-            "fileStoragePath": str(tmp_path / "input" / "one.md"),
-            "groupId": None,
-            "keep": True,
-        }
-    ]
     saved = GlobalDeduplicationTaskRepository(session).get(task.id)
     assert saved is not None
     assert saved.status is GlobalDeduplicationTaskStatus.SUCCEEDED
     assert saved.processing_phase == "completed"
-    assert saved.output_sha256 is not None
+    assert saved.result_metadata == {
+        "total_files": 1,
+        "unique_files": 1,
+        "moved_duplicates": 0,
+        "move_failures": [],
+    }
 
 
 def test_running_job_updates_progress_and_reschedules(tmp_path: Path) -> None:

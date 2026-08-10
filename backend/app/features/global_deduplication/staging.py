@@ -27,6 +27,7 @@ class GlobalDeduplicationStagingLayout:
     mapping_json: Path
     datajuicer_result: Path
     final_result: Path
+    move_manifest: Path
     manifest: Path
 
     @classmethod
@@ -41,6 +42,7 @@ class GlobalDeduplicationStagingLayout:
             mapping_json=task_root / "mapping.json",
             datajuicer_result=task_root / "datajuicer-result.jsonl",
             final_result=task_root / "final-result.json",
+            move_manifest=task_root / "move-manifest.json",
             manifest=task_root / "manifest.json",
         )
 
@@ -143,9 +145,8 @@ class GlobalDeduplicationStaging:
         layout.assert_safe()
         try:
             manifest = json.loads(layout.manifest.read_text(encoding="utf-8"))
-            if (
-                not isinstance(manifest, dict)
-                or manifest.get("taskId") != str(layout.task_id)
+            if not isinstance(manifest, dict) or manifest.get("taskId") != str(
+                layout.task_id
             ):
                 raise ValueError
             manifest["datajuicerResultSha256"] = datajuicer_result_sha256
@@ -165,7 +166,7 @@ class GlobalDeduplicationStaging:
                 output.flush()
                 os.fsync(output.fileno())
             replacement.replace(layout.manifest)
-        except (OSError, ValueError, json.JSONDecodeError):
+        except OSError, ValueError, json.JSONDecodeError:
             raise GlobalDeduplicationProcessingError(
                 GlobalDeduplicationErrorCode.STAGING_WRITE_FAILED,
                 "无法更新任务 manifest",
@@ -173,6 +174,56 @@ class GlobalDeduplicationStaging:
         finally:
             replacement = layout.manifest.with_name(".manifest.json.part")
             replacement.unlink(missing_ok=True)
+
+    def load_or_create_move_manifest(
+        self,
+        layout: GlobalDeduplicationStagingLayout,
+        *,
+        original_root: Path,
+        duplicate_root: Path,
+        records: list[dict[str, object]],
+    ) -> dict[str, object]:
+        layout.assert_safe()
+        if layout.move_manifest.exists():
+            try:
+                loaded = json.loads(layout.move_manifest.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict) and loaded.get("taskId") == str(
+                    layout.task_id
+                ):
+                    return loaded
+            except OSError, ValueError, json.JSONDecodeError:
+                pass
+            raise GlobalDeduplicationProcessingError(
+                GlobalDeduplicationErrorCode.STAGING_INTEGRITY_FAILED,
+                "迁移清单不完整",
+            )
+        value: dict[str, object] = {
+            "schemaVersion": 1,
+            "taskId": str(layout.task_id),
+            "originalRoot": str(original_root),
+            "duplicateRoot": str(duplicate_root),
+            "records": records,
+        }
+        self._atomic_write(
+            layout.move_manifest,
+            (
+                json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n"
+            ).encode(),
+        )
+        return value
+
+    def save_move_manifest(
+        self,
+        layout: GlobalDeduplicationStagingLayout,
+        value: dict[str, object],
+    ) -> None:
+        layout.assert_safe()
+        self._atomic_write(
+            layout.move_manifest,
+            (
+                json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n"
+            ).encode(),
+        )
 
     @staticmethod
     def _input_content(documents: tuple[NormalizedDocument, ...]) -> bytes:
@@ -200,9 +251,7 @@ class GlobalDeduplicationStaging:
                         {
                             "uid": uid,
                             "fileId": document.reference.file_id,
-                            "fileStoragePath": (
-                                document.reference.file_storage_path
-                            ),
+                            "fileStoragePath": (document.reference.file_storage_path),
                         }
                         for uid, document in enumerate(documents)
                     ],
@@ -243,11 +292,9 @@ class GlobalDeduplicationStaging:
                 layout.input_jsonl.read_bytes() == input_content
                 and layout.mapping_json.read_bytes() == mapping_content
                 and manifest["taskId"] == str(layout.task_id)
-                and manifest["inputDocumentCount"]
-                == prepared.input_document_count
-                and manifest["inputJsonlSha256"]
-                == prepared.input_jsonl_sha256
+                and manifest["inputDocumentCount"] == prepared.input_document_count
+                and manifest["inputJsonlSha256"] == prepared.input_jsonl_sha256
                 and manifest["mappingSha256"] == prepared.mapping_sha256
             )
-        except (OSError, KeyError, json.JSONDecodeError, TypeError):
+        except OSError, KeyError, json.JSONDecodeError, TypeError:
             return False

@@ -1,4 +1,3 @@
-import json
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -86,12 +85,12 @@ def build_task(
     manifest_path: Path,
     target_path: Path,
 ) -> GlobalDeduplicationTask:
+    del target_path
     task = GlobalDeduplicationTask(
         caller_id=uuid.uuid4(),
         session_id=str(uuid.uuid7()),
         request_fingerprint="a" * 64,
-        input_json_path=str(manifest_path),
-        target_path=str(target_path),
+        input_path=str(manifest_path.parent),
         status=GlobalDeduplicationTaskStatus.QUEUED,
         queued_at=NOW,
     )
@@ -130,23 +129,14 @@ def build_orchestrator(
 
 
 def prepare_manifest(tmp_path: Path) -> tuple[Path, Path]:
-    source = tmp_path / "input"
-    source.mkdir()
+    batch = tmp_path / "batch"
+    source = batch / "original"
+    source.mkdir(parents=True)
+    (batch / "duplicate").mkdir()
     document = source / "one.md"
     document.write_bytes(b"\xef\xbb\xbfline\r\n")
-    manifest = source / "manifest.json"
-    manifest.write_text(
-        json.dumps(
-            [
-                {
-                    "fileId": "1",
-                    "fileStoragePath": str(document),
-                    "ignored": True,
-                }
-            ]
-        ),
-        encoding="utf-8",
-    )
+    manifest = batch / "manifest.json"
+    manifest.write_text("[]", encoding="utf-8")
     return source, manifest
 
 
@@ -207,9 +197,11 @@ def test_duplicate_submit_does_not_repeat_external_job(tmp_path: Path) -> None:
 
 def test_input_error_fails_without_external_submission(tmp_path: Path) -> None:
     session = build_session()
-    source = tmp_path / "input"
-    source.mkdir()
-    manifest = source / "manifest.json"
+    batch = tmp_path / "batch"
+    source = batch / "original"
+    source.mkdir(parents=True)
+    (batch / "duplicate").mkdir()
+    manifest = batch / "manifest.json"
     manifest.write_text("[]", encoding="utf-8")
     adapter = FakeAdapter()
     scheduler = FakeScheduler()
@@ -235,7 +227,7 @@ def test_input_error_fails_without_external_submission(tmp_path: Path) -> None:
     assert adapter.submissions == []
 
 
-def test_existing_target_fails_before_loading(tmp_path: Path) -> None:
+def test_existing_unrelated_file_does_not_block_submission(tmp_path: Path) -> None:
     session = build_session()
     source, manifest = prepare_manifest(tmp_path)
     target = tmp_path / "published" / "output.json"
@@ -255,7 +247,7 @@ def test_existing_target_fails_before_loading(tmp_path: Path) -> None:
 
     saved = GlobalDeduplicationTaskRepository(session).get(task.id)
     assert saved is not None
-    assert saved.error_code == GlobalDeduplicationErrorCode.OUTPUT_CONFLICT
+    assert saved.error_code is None
     assert target.read_text(encoding="utf-8") == "sentinel"
 
 
@@ -290,7 +282,9 @@ def test_uncertain_submission_remains_recoverable(tmp_path: Path) -> None:
     assert saved.external_job_id is None
     assert saved.lease_expires_at is not None
     assert saved.lease_expires_at.replace(tzinfo=UTC) == NOW
-    assert saved.error_code == GlobalDeduplicationErrorCode.PROCESSOR_SUBMISSION_UNCERTAIN
+    assert (
+        saved.error_code == GlobalDeduplicationErrorCode.PROCESSOR_SUBMISSION_UNCERTAIN
+    )
 
 
 def test_transient_submission_releases_lease_for_finite_retry(

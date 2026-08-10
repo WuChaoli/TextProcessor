@@ -27,8 +27,7 @@ class GlobalDeduplicationTask(SQLModel, table=True):
     caller_id: uuid.UUID = Field(foreign_key="user.id", index=True)
     session_id: str = Field(max_length=128)
     request_fingerprint: str = Field(max_length=64)
-    input_json_path: str = Field(max_length=4096)
-    target_path: str = Field(max_length=4096)
+    input_path: str = Field(max_length=4096)
     status: GlobalDeduplicationTaskStatus = Field(
         sa_type=Enum(
             GlobalDeduplicationTaskStatus,

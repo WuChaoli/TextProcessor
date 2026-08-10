@@ -42,12 +42,12 @@ def api_context(
     tmp_path: Path,
 ) -> Generator[tuple[TestClient, uuid.UUID, Dispatcher, Path, Path]]:
     caller_id = uuid.uuid7()
-    input_root = tmp_path / "input"
-    output_root = tmp_path / "output"
-    input_root.mkdir()
-    output_root.mkdir()
-    manifest = input_root / "manifest.json"
-    manifest.write_text("[]", encoding="utf-8")
+    input_root = tmp_path / "batch"
+    output_root = tmp_path / "alternative"
+    for batch in (input_root, output_root):
+        (batch / "original").mkdir(parents=True)
+        (batch / "duplicate").mkdir()
+    manifest = input_root
     dispatcher = Dispatcher()
     policy = GlobalDeduplicationRequestPolicy(
         input_roots=(input_root,),
@@ -100,8 +100,7 @@ def test_post_is_idempotent_and_get_has_no_result_body(
     client, _caller_id, dispatcher, manifest, output_root = api_context
     payload = {
         "sessionId": "session-1",
-        "inputJsonPath": str(manifest),
-        "targetPath": str(output_root / "result.json"),
+        "inputPath": str(manifest),
     }
 
     first = client.post("/api/v1/global-deduplication/tasks", json=payload)
@@ -129,8 +128,7 @@ def test_post_conflict_and_queue_failure_have_stable_errors(
     client, _caller_id, dispatcher, manifest, output_root = api_context
     payload = {
         "sessionId": "session-conflict",
-        "inputJsonPath": str(manifest),
-        "targetPath": str(output_root / "first.json"),
+        "inputPath": str(manifest),
     }
     assert client.post(
         "/api/v1/global-deduplication/tasks",
@@ -138,7 +136,7 @@ def test_post_conflict_and_queue_failure_have_stable_errors(
     ).status_code == 202
     conflict = client.post(
         "/api/v1/global-deduplication/tasks",
-        json={**payload, "targetPath": str(output_root / "second.json")},
+        json={**payload, "inputPath": str(output_root)},
     )
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_CONFLICT"
@@ -149,7 +147,6 @@ def test_post_conflict_and_queue_failure_have_stable_errors(
         json={
             **payload,
             "sessionId": "session-unavailable",
-            "targetPath": str(output_root / "unavailable.json"),
         },
     )
     assert unavailable.status_code == 503
@@ -164,8 +161,7 @@ def test_get_hides_tasks_from_other_callers(
         "/api/v1/global-deduplication/tasks",
         json={
             "sessionId": "session-private",
-            "inputJsonPath": str(manifest),
-            "targetPath": str(output_root / "private.json"),
+            "inputPath": str(manifest),
         },
     )
     task_id = created.json()["taskId"]
@@ -190,8 +186,7 @@ def test_running_task_does_not_expose_transient_worker_error() -> None:
         caller_id=uuid.uuid7(),
         session_id="session-transient",
         request_fingerprint="a" * 64,
-        input_json_path="/input.json",
-        target_path="/result.json",
+        input_path="/input/batch",
         status=GlobalDeduplicationTaskStatus.RUNNING,
         processing_phase="submitting",
         error_code="PROCESSOR_UNAVAILABLE",

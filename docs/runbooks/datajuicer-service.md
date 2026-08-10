@@ -97,6 +97,11 @@ Dockerfile 或镜像。
 
 ## 2026-07-31 TextProcessor 三模块合并证据
 
+> 注意：以下为历史 JSON 清单契约的验收记录。当前全局去重接口改为提交
+> `inputPath` 本地批次目录；目录必须含 `original/` 与 `duplicate/`，结果通过
+> GET 的 `totalFiles`、`uniqueFiles`、`movedDuplicates`、`moveFailures` 返回。重复
+> 文件平铺迁入 `duplicate/`，不再发布业务 JSON 文件。
+
 使用同一 PostgreSQL 18 实例中的两个独立 database、同一 Redis 7 实例中的
 隔离队列，以源码进程启动 TextProcessor API/worker 和 Data-Juicer
 API/worker：

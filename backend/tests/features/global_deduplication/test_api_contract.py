@@ -12,27 +12,24 @@ from app.features.global_deduplication.state_machine import (
 )
 
 
-def test_create_schema_uses_camel_case_and_rejects_blank_values() -> None:
+def test_create_schema_uses_directory_input_and_rejects_legacy_fields() -> None:
     request = GlobalDeduplicationTaskCreate.model_validate(
         {
             "sessionId": " session-1 ",
-            "inputJsonPath": " C:/input/manifest.json ",
-            "targetPath": " C:/output/result.json ",
+            "inputPath": " C:/input/batch ",
         }
     )
 
     assert request.session_id == "session-1"
     assert request.model_dump(by_alias=True) == {
         "sessionId": "session-1",
-        "inputJsonPath": "C:/input/manifest.json",
-        "targetPath": "C:/output/result.json",
+        "inputPath": "C:/input/batch",
     }
     with pytest.raises(ValidationError):
         GlobalDeduplicationTaskCreate.model_validate(
             {
                 "sessionId": " ",
-                "inputJsonPath": "C:/input/manifest.json",
-                "targetPath": "C:/output/result.json",
+                "inputPath": "C:/input/batch",
             }
         )
     with pytest.raises(ValidationError):
@@ -40,7 +37,6 @@ def test_create_schema_uses_camel_case_and_rejects_blank_values() -> None:
             {
                 "sessionId": "session-1",
                 "inputJsonPath": "C:/input/manifest.json",
-                "targetPath": "C:/output/result.md",
             }
         )
 
@@ -61,7 +57,12 @@ def test_public_task_result_and_error_are_mutually_exclusive() -> None:
                     "processed": 1,
                     "percent": 100,
                 },
-                "result": {"targetPath": "C:/output/result.json"},
+                "result": {
+                    "totalFiles": 2,
+                    "uniqueFiles": 1,
+                    "movedDuplicates": 1,
+                    "moveFailures": [],
+                },
                 "error": {"code": "FAIL", "message": "failed"},
             }
         )

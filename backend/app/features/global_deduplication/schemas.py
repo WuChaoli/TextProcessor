@@ -7,7 +7,6 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
-    field_validator,
     model_validator,
 )
 
@@ -22,15 +21,7 @@ class GlobalDeduplicationTaskCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     session_id: NonBlank = Field(alias="sessionId", max_length=128)
-    input_json_path: NonBlank = Field(alias="inputJsonPath", max_length=4096)
-    target_path: NonBlank = Field(alias="targetPath", max_length=4096)
-
-    @field_validator("target_path")
-    @classmethod
-    def _target_must_be_json(cls, value: str) -> str:
-        if not value.lower().endswith(".json"):
-            raise ValueError("targetPath 必须以 .json 结尾")
-        return value
+    input_path: NonBlank = Field(alias="inputPath", max_length=4096)
 
 
 class GlobalDeduplicationTaskAccepted(BaseModel):
@@ -48,10 +39,22 @@ class GlobalDeduplicationProgressPublic(BaseModel):
     percent: int
 
 
+class GlobalDeduplicationMoveFailurePublic(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    relative_path: str = Field(alias="relativePath")
+    code: str
+
+
 class GlobalDeduplicationResultPublic(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    target_path: str = Field(alias="targetPath")
+    total_files: int = Field(alias="totalFiles", ge=0)
+    unique_files: int = Field(alias="uniqueFiles", ge=0)
+    moved_duplicates: int = Field(alias="movedDuplicates", ge=0)
+    move_failures: list[GlobalDeduplicationMoveFailurePublic] = Field(
+        alias="moveFailures"
+    )
 
 
 class GlobalDeduplicationErrorPublic(BaseModel):

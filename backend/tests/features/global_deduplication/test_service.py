@@ -43,48 +43,39 @@ def build_service(
     *,
     dispatcher: Dispatcher,
 ) -> tuple[GlobalDeduplicationTaskService, Path, Path]:
-    input_root = tmp_path / "input"
-    output_root = tmp_path / "output"
-    input_root.mkdir()
-    output_root.mkdir()
-    manifest = input_root / "manifest.json"
-    manifest.write_text("[]", encoding="utf-8")
+    batch = tmp_path / "batch"
+    (batch / "original").mkdir(parents=True)
+    (batch / "duplicate").mkdir()
+    alternative = tmp_path / "alternative"
+    (alternative / "original").mkdir(parents=True)
+    (alternative / "duplicate").mkdir()
     session = build_session()
     return (
         GlobalDeduplicationTaskService(
             GlobalDeduplicationTaskRepository(session),
-            GlobalDeduplicationRequestPolicy(
-                input_roots=(input_root,),
-                output_roots=(output_root,),
-                allowed_http_hosts=(),
-                allowed_http_cidrs=(),
-            ),
+            GlobalDeduplicationRequestPolicy(),
             dispatcher,
         ),
-        manifest,
-        output_root,
+        batch,
+        alternative,
     )
 
 
-def create_request(
-    manifest: Path,
-    target: Path,
-) -> GlobalDeduplicationTaskCreate:
+def create_request(batch: Path) -> GlobalDeduplicationTaskCreate:
     return GlobalDeduplicationTaskCreate(
         sessionId="session-1",
-        inputJsonPath=str(manifest),
-        targetPath=str(target),
+        inputPath=str(batch),
     )
 
 
 def test_create_is_idempotent_and_dispatches_only_once(tmp_path: Path) -> None:
     dispatcher = Dispatcher()
-    service, manifest, output_root = build_service(
+    service, batch, _alternative = build_service(
         tmp_path,
         dispatcher=dispatcher,
     )
     caller_id = uuid.uuid7()
-    request = create_request(manifest, output_root / "result.json")
+    request = create_request(batch)
 
     first = service.create_task(caller_id, request)
     repeated = service.create_task(caller_id, request)
@@ -95,20 +86,20 @@ def test_create_is_idempotent_and_dispatches_only_once(tmp_path: Path) -> None:
 
 
 def test_same_session_with_different_path_conflicts(tmp_path: Path) -> None:
-    service, manifest, output_root = build_service(
+    service, batch, alternative = build_service(
         tmp_path,
         dispatcher=Dispatcher(),
     )
     caller_id = uuid.uuid7()
     service.create_task(
         caller_id,
-        create_request(manifest, output_root / "first.json"),
+        create_request(batch),
     )
 
     with pytest.raises(GlobalDeduplicationDomainError) as error:
         service.create_task(
             caller_id,
-            create_request(manifest, output_root / "second.json"),
+            create_request(alternative),
         )
 
     assert error.value.code == "IDEMPOTENCY_CONFLICT"
@@ -117,7 +108,7 @@ def test_same_session_with_different_path_conflicts(tmp_path: Path) -> None:
 def test_queue_failure_is_persisted_and_returned_as_503(
     tmp_path: Path,
 ) -> None:
-    service, manifest, output_root = build_service(
+    service, batch, _alternative = build_service(
         tmp_path,
         dispatcher=Dispatcher(fail=True),
     )
@@ -125,7 +116,7 @@ def test_queue_failure_is_persisted_and_returned_as_503(
     with pytest.raises(GlobalDeduplicationDomainError) as error:
         service.create_task(
             uuid.uuid7(),
-            create_request(manifest, output_root / "result.json"),
+            create_request(batch),
         )
 
     assert error.value.code == "QUEUE_SUBMISSION_FAILED"

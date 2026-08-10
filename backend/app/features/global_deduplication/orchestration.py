@@ -14,16 +14,15 @@ from app.features.global_deduplication.adapters.datajuicer import (
     DataJuicerSubmission,
     DataJuicerSubmitRequest,
 )
+from app.features.global_deduplication.directory_input import (
+    load_scanned_documents,
+    scan_batch,
+)
 from app.features.global_deduplication.errors import (
     GlobalDeduplicationErrorCode,
     GlobalDeduplicationProcessingError,
 )
-from app.features.global_deduplication.input_reader import (
-    BoundedUriReader,
-    load_documents,
-    load_manifest_bytes,
-)
-from app.features.global_deduplication.publisher import FinalResultPublisher
+from app.features.global_deduplication.file_mover import move_file, sha256
 from app.features.global_deduplication.repository import (
     ConditionalGlobalDeduplicationUpdateFailed,
     GlobalDeduplicationTaskRepository,
@@ -78,22 +77,20 @@ class GlobalDeduplicationOrchestrator:
         self,
         *,
         repository: GlobalDeduplicationTaskRepository,
-        reader: BoundedUriReader,
+        reader: object | None = None,
         staging: GlobalDeduplicationStaging,
         adapter: DataJuicerSubmitter | DataJuicerAdapter,
         scheduler: GlobalDeduplicationScheduler,
         settings: GlobalDeduplicationWorkerSettings,
         now: Callable[[], datetime],
-        publisher: FinalResultPublisher | None = None,
     ) -> None:
         self._repository = repository
-        self._reader = reader
+        del reader
         self._staging = staging
         self._adapter = adapter
         self._scheduler = scheduler
         self._settings = settings
         self._now = now
-        self._publisher = publisher or FinalResultPublisher()
 
     def submit(self, task_id: uuid.UUID) -> None:
         now = self._now()
@@ -105,31 +102,22 @@ class GlobalDeduplicationOrchestrator:
         if task is None:
             return
         try:
-            target = self._validated_target(task.target_path)
-            if self._publisher.exists(target):
+            scanned = scan_batch(Path(task.input_path))
+            if len(scanned.documents) > self._settings.max_documents:
                 raise GlobalDeduplicationProcessingError(
-                    GlobalDeduplicationErrorCode.OUTPUT_CONFLICT,
-                    "目标结果文件已存在",
+                    GlobalDeduplicationErrorCode.BATCH_TOO_LARGE,
+                    "批次文档数量超过限制",
                 )
-            manifest_content = self._reader.read_manifest(
-                task.input_json_path,
-                max_bytes=self._settings.max_manifest_bytes,
-            )
-            references = load_manifest_bytes(
-                manifest_content,
-                max_documents=self._settings.max_documents,
-            )
             self._repository.update_running(
                 task.id,
                 processing_phase="loading_documents",
-                progress_total=len(references),
+                progress_total=len(scanned.documents),
                 progress_processed=0,
                 progress_percent=10,
                 updated_at=self._now(),
             )
-            documents = load_documents(
-                references,
-                reader=self._reader,
+            documents = load_scanned_documents(
+                scanned,
                 max_document_bytes=self._settings.max_document_bytes,
                 max_total_bytes=self._settings.max_total_bytes,
             )
@@ -141,7 +129,11 @@ class GlobalDeduplicationOrchestrator:
             if not self._repository.save_prepared_input(
                 task.id,
                 staging_path=str(prepared.layout.root),
-                input_manifest_sha256=hashlib.sha256(manifest_content).hexdigest(),
+                input_manifest_sha256=hashlib.sha256(
+                    "\n".join(
+                        item.relative_path.as_posix() for item in scanned.documents
+                    ).encode()
+                ).hexdigest(),
                 input_jsonl_sha256=prepared.input_jsonl_sha256,
                 mapping_sha256=prepared.mapping_sha256,
                 progress_total=len(documents),
@@ -405,34 +397,77 @@ class GlobalDeduplicationOrchestrator:
             expected_sha256=job.result.output_sha256,
         )
         business_result = map_business_result(task.id, mapping, decisions)
-        prepared = self._publisher.prepare(
-            business_result,
-            layout.final_result,
-        )
-        if not self._repository.save_prepared_output(
-            task.id,
-            external_output_sha256=job.result.output_sha256,
-            prepared_output_sha256=prepared.sha256,
-        ):
-            return
-        published = self._publisher.publish(
-            prepared,
-            self._validated_target(task.target_path),
-            allow_recovery=True,
-        )
-        self._staging.update_result_manifest(
+        batch_root = Path(task.input_path)
+        original_root = batch_root / "original"
+        duplicate_root = batch_root / "duplicate"
+        if not original_root.is_dir() or not duplicate_root.is_dir():
+            raise self._internal_error()
+        records: list[dict[str, object]] = [
+            {
+                "relativePath": item.file_id,
+                "sourcePath": item.file_storage_path,
+                "sha256": sha256(Path(item.file_storage_path)),
+                "state": "pending",
+            }
+            for item in business_result
+            if not item.keep
+        ]
+        move_manifest = self._staging.load_or_create_move_manifest(
             layout,
-            datajuicer_result_sha256=job.result.output_sha256,
-            final_result_sha256=published.sha256,
+            original_root=original_root,
+            duplicate_root=duplicate_root,
+            records=records,
         )
+        failures: list[dict[str, str]] = []
+        moved = 0
+        raw_records = move_manifest.get("records", [])
+        if not isinstance(raw_records, list):
+            raise self._internal_error()
+        for record in raw_records:
+            if not isinstance(record, dict):
+                continue
+            typed_record = cast(dict[str, object], record)
+            if typed_record.get("state") != "pending":
+                if typed_record.get("state") == "moved":
+                    moved += 1
+                elif typed_record.get("state") == "failed":
+                    relative_path = typed_record.get("relativePath")
+                    code = typed_record.get("code")
+                    if isinstance(relative_path, str) and isinstance(code, str):
+                        failures.append({"relative_path": relative_path, "code": code})
+                continue
+            relative_path = typed_record.get("relativePath")
+            source_path = typed_record.get("sourcePath")
+            digest = typed_record.get("sha256")
+            if (
+                not isinstance(relative_path, str)
+                or not isinstance(source_path, str)
+                or not isinstance(digest, str)
+            ):
+                raise self._internal_error()
+            source = Path(source_path).resolve(strict=False)
+            if original_root not in source.parents:
+                raise self._internal_error()
+            failure = move_file(
+                source,
+                duplicate_root,
+                relative_path=relative_path,
+                expected_sha256=digest,
+            )
+            if failure is None:
+                typed_record["state"] = "moved"
+                moved += 1
+            else:
+                typed_record["state"] = "failed"
+                typed_record["code"] = failure.code
+                failures.append(failure.as_dict())
+            self._staging.save_move_manifest(layout, move_manifest)
         finished = self._now()
         self._repository.transition(
             task.id,
             expected=GlobalDeduplicationTaskStatus.RUNNING,
             target=GlobalDeduplicationTaskStatus.SUCCEEDED,
-            output_sha256=published.sha256,
             external_output_sha256=job.result.output_sha256,
-            published_at=finished,
             finished_at=finished,
             lease_expires_at=None,
             poll_lease_expires_at=None,
@@ -443,16 +478,13 @@ class GlobalDeduplicationOrchestrator:
             error_code=None,
             error_message=None,
             result_metadata={
-                "target_path": task.target_path,
-                "output_size_bytes": published.size_bytes,
+                "total_files": len(business_result),
+                "unique_files": len(business_result) - len(records),
+                "moved_duplicates": moved,
+                "move_failures": failures,
             },
             updated_at=finished,
         )
-
-    def _validated_target(self, value: str) -> str | Path:
-        if value.startswith("s3://"):
-            return value
-        return Path(value)
 
     def _fail(
         self,

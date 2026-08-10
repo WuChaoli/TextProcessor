@@ -42,8 +42,7 @@ def make_task(
         caller_id=caller_id or uuid.uuid4(),
         session_id=session_id,
         request_fingerprint="a" * 64,
-        input_json_path="/data/input.json",
-        target_path="/data/output.json",
+        input_path="/data/batch",
         status=status,
         queued_at=NOW,
         max_attempts=3,
@@ -203,8 +202,7 @@ def test_postgresql_concurrent_create_converges_to_one_task(
             ).create_or_get(
                 caller_id=caller.id,
                 session_id=session_id,
-                input_json_path="/data/input.json",
-                target_path="/data/output.json",
+                input_path="/data/batch",
             )
             return task.id, created
 

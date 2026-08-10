@@ -32,10 +32,9 @@ _local_lock_guard = threading.Lock()
 _local_locks: dict[int, threading.Lock] = {}
 
 
-def request_fingerprint(*, input_json_path: str, target_path: str) -> str:
+def request_fingerprint(*, input_path: str) -> str:
     payload = {
-        "input_json_path": input_json_path,
-        "target_path": target_path,
+        "input_path": input_path,
     }
     normalized = json.dumps(
         payload,
@@ -87,12 +86,10 @@ class GlobalDeduplicationTaskRepository:
         *,
         caller_id: uuid.UUID,
         session_id: str,
-        input_json_path: str,
-        target_path: str,
+        input_path: str,
     ) -> tuple[GlobalDeduplicationTask, bool]:
         fingerprint = request_fingerprint(
-            input_json_path=input_json_path,
-            target_path=target_path,
+            input_path=input_path,
         )
         existing = self.get_by_key(caller_id, session_id)
         if existing is not None:
@@ -102,8 +99,7 @@ class GlobalDeduplicationTaskRepository:
             caller_id=caller_id,
             session_id=session_id,
             request_fingerprint=fingerprint,
-            input_json_path=input_json_path,
-            target_path=target_path,
+            input_path=input_path,
             status=GlobalDeduplicationTaskStatus.PENDING,
         )
         self._session.add(task)
@@ -175,14 +171,8 @@ class GlobalDeduplicationTaskRepository:
                             == GlobalDeduplicationTaskStatus.RUNNING
                         )
                         & col(GlobalDeduplicationTask.external_job_id).is_(None)
-                        & (
-                            col(GlobalDeduplicationTask.lease_expires_at)
-                            .is_not(None)
-                        )
-                        & (
-                            col(GlobalDeduplicationTask.lease_expires_at)
-                            <= now
-                        )
+                        & (col(GlobalDeduplicationTask.lease_expires_at).is_not(None))
+                        & (col(GlobalDeduplicationTask.lease_expires_at) <= now)
                     ),
                 ),
             )
@@ -381,14 +371,8 @@ class GlobalDeduplicationTaskRepository:
                             col(GlobalDeduplicationTask.status)
                             == GlobalDeduplicationTaskStatus.RUNNING
                         )
-                        & (
-                            col(GlobalDeduplicationTask.lease_expires_at)
-                            .is_not(None)
-                        )
-                        & (
-                            col(GlobalDeduplicationTask.lease_expires_at)
-                            <= now
-                        )
+                        & (col(GlobalDeduplicationTask.lease_expires_at).is_not(None))
+                        & (col(GlobalDeduplicationTask.lease_expires_at) <= now)
                     ),
                 ),
             )

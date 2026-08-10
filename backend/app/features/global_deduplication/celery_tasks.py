@@ -21,7 +21,6 @@ from app.features.global_deduplication.orchestration import (
     GlobalDeduplicationOrchestrator,
     GlobalDeduplicationScheduler,
 )
-from app.features.global_deduplication.publisher import FinalResultPublisher
 from app.features.global_deduplication.repository import (
     GlobalDeduplicationTaskRepository,
 )
@@ -177,10 +176,6 @@ def build_orchestrator(
         scheduler=scheduler or CeleryGlobalDeduplicationScheduler(),
         settings=configured,
         now=lambda: datetime.now(UTC),
-        publisher=FinalResultPublisher(
-            allowed_s3_buckets=configured.s3_allowed_buckets,
-            s3_storage_options=storage_options,
-        ),
     )
 
 
