@@ -110,7 +110,6 @@ def build_orchestrator(
 ) -> GlobalDeduplicationOrchestrator:
     settings = GlobalDeduplicationWorkerSettings(
         staging_root=staging_root,
-        output_roots=(staging_root.parent / "published",),
         max_documents=10,
         max_manifest_bytes=1024,
         max_document_bytes=1024,

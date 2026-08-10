@@ -38,6 +38,7 @@ dev = [
     "ty>=0.0.25",
     "ruff<1.0.0,>=0.2.2",
     "coverage<8.0.0,>=7.4.3",
+    "testcontainers[postgres]>=4.13,<5",
 ]
 
 [build-system]
@@ -51,6 +52,7 @@ exclude = ["venv", ".venv", "alembic"]
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]
 markers = [
+    "container_integration: requires Docker and Testcontainers",
     "real_integration: requires a reachable explicitly configured external service",
 ]
 

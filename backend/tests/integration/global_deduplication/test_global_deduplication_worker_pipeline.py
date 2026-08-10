@@ -1,14 +1,25 @@
 import hashlib
 import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import httpx
-from sqlmodel import Session, delete
+import pytest
+from sqlmodel import Session, SQLModel, create_engine
+from testcontainers.community.postgres import PostgresContainer
+from testcontainers.community.redis import RedisContainer
+
+os.environ.setdefault("PROJECT_NAME", "TextProcessor test")
+os.environ.setdefault("POSTGRES_SERVER", "localhost")
+os.environ.setdefault("POSTGRES_USER", "test")
+os.environ.setdefault("POSTGRES_PASSWORD", "test")
+os.environ.setdefault("POSTGRES_DB", "test")
+os.environ.setdefault("FIRST_SUPERUSER", "admin@example.com")
+os.environ.setdefault("FIRST_SUPERUSER_PASSWORD", "test-password")
 
 from app.core.config import GlobalDeduplicationWorkerSettings
-from app.core.db import engine
 from app.features.global_deduplication.celery_tasks import (
     build_orchestrator,
     handle_poll_task,
@@ -37,29 +48,22 @@ class RecordingScheduler:
         self.polls.append((task_id, countdown))
 
 
-def test_worker_pipeline_uses_postgres_files_and_fake_http(
+@pytest.mark.container_integration
+def test_worker_pipeline_uses_postgres_and_redis_containers(
     tmp_path: Path,
 ) -> None:
-    input_root = tmp_path / "input"
-    output_root = tmp_path / "output"
+    batch_root = tmp_path / "batch"
+    original_root = batch_root / "original"
+    duplicate_root = batch_root / "duplicate"
     staging_root = tmp_path / "staging"
-    input_root.mkdir()
-    output_root.mkdir()
-    first = input_root / "one.md"
-    second = input_root / "two.txt"
+    original_root.mkdir(parents=True)
+    duplicate_root.mkdir()
+    first = original_root / "one.md"
+    second = original_root / "two.txt"
+    skipped = original_root / "ignored.pdf"
     first.write_text("same content", encoding="utf-8")
     second.write_text("same content", encoding="utf-8")
-    manifest = input_root / "manifest.json"
-    manifest.write_text(
-        json.dumps(
-            [
-                {"fileId": "1", "fileStoragePath": str(first)},
-                {"fileId": "2", "fileStoragePath": str(second)},
-            ]
-        ),
-        encoding="utf-8",
-    )
-    target = output_root / "result.json"
+    skipped.write_bytes(b"not a supported document")
     caller_id = uuid.uuid7()
     task_id = uuid.uuid7()
     job_id = uuid.uuid7()
@@ -114,42 +118,53 @@ def test_worker_pipeline_uses_postgres_files_and_fake_http(
 
     configured = GlobalDeduplicationWorkerSettings(
         staging_root=staging_root,
-        output_roots=(output_root,),
         datajuicer_base_url="http://datajuicer.internal",
         datajuicer_poll_initial_delay_seconds=1,
     )
     with (
-        Session(engine) as session,
-        httpx.Client(transport=httpx.MockTransport(datajuicer)) as client,
+        PostgresContainer("postgres:16-alpine") as postgres,
+        RedisContainer("redis:7-alpine") as redis,
     ):
-        session.add(
-            User(
-                id=caller_id,
-                email=f"global-worker-{caller_id}@example.com",
-                hashed_password="not-used",
-            )
-        )
-        session.commit()
-        session.add(
-            GlobalDeduplicationTask(
-                id=task_id,
-                caller_id=caller_id,
-                session_id=f"session-{task_id}",
-                request_fingerprint="a" * 64,
-                input_json_path=str(manifest),
-                target_path=str(target),
-                status=GlobalDeduplicationTaskStatus.QUEUED,
-            )
-        )
-        session.commit()
-        orchestrator = build_orchestrator(
-            session,
-            http_client=client,
-            worker_settings=configured,
-            input_roots=(input_root,),
-            scheduler=scheduler,
-        )
+        database_url = postgres.get_connection_url().replace(
+            "postgresql+psycopg2", "postgresql+psycopg"
+        ).replace("@localhost:", "@127.0.0.1:")
+        container_engine = create_engine(database_url)
+        SQLModel.metadata.create_all(container_engine)
+        redis_client = redis.get_client()
         try:
+            assert redis_client.ping() is True
+        finally:
+            redis_client.close()
+        with (
+            Session(container_engine) as session,
+            httpx.Client(transport=httpx.MockTransport(datajuicer)) as client,
+        ):
+            session.add(
+                User(
+                    id=caller_id,
+                    email=f"global-worker-{caller_id}@example.com",
+                    hashed_password="not-used",
+                )
+            )
+            session.commit()
+            session.add(
+                GlobalDeduplicationTask(
+                    id=task_id,
+                    caller_id=caller_id,
+                    session_id=f"session-{task_id}",
+                    request_fingerprint="a" * 64,
+                    input_path=str(batch_root),
+                    status=GlobalDeduplicationTaskStatus.QUEUED,
+                )
+            )
+            session.commit()
+            orchestrator = build_orchestrator(
+                session,
+                http_client=client,
+                worker_settings=configured,
+                scheduler=scheduler,
+            )
+
             handle_submit_task(message(task_id), orchestrator=orchestrator)
             saved = GlobalDeduplicationTaskRepository(session).get(task_id)
             assert saved is not None
@@ -164,14 +179,13 @@ def test_worker_pipeline_uses_postgres_files_and_fake_http(
             completed = GlobalDeduplicationTaskRepository(session).get(task_id)
             assert completed is not None
             assert completed.status is GlobalDeduplicationTaskStatus.SUCCEEDED
-            result = json.loads(target.read_text(encoding="utf-8"))
-            assert [record["keep"] for record in result] == [True, False]
-            assert result[0]["groupId"] == result[1]["groupId"]
-        finally:
-            session.exec(
-                delete(GlobalDeduplicationTask).where(
-                    GlobalDeduplicationTask.id == task_id
-                )
-            )
-            session.exec(delete(User).where(User.id == caller_id))
-            session.commit()
+            assert completed.result_metadata == {
+                "total_files": 2,
+                "unique_files": 1,
+                "moved_duplicates": 1,
+                "move_failures": [],
+            }
+    assert first.exists()
+    assert not second.exists()
+    assert (duplicate_root / "two.txt").read_text(encoding="utf-8") == "same content"
+    assert skipped.exists()

@@ -1,16 +1,11 @@
 import uuid
-from pathlib import Path
-from typing import Any, cast
 from unittest.mock import Mock
 
-import httpx
 import pytest
 
 from app.core.celery_app import celery_app
-from app.core.config import GlobalDeduplicationWorkerSettings
 from app.features.global_deduplication.celery_tasks import (
     CeleryGlobalDeduplicationScheduler,
-    build_orchestrator,
     handle_poll_task,
     handle_recover_task,
     handle_submit_task,
@@ -92,26 +87,3 @@ def test_scheduler_emits_only_schema_message(monkeypatch: pytest.MonkeyPatch) ->
 
     submit.assert_called_once_with(kwargs=message(task_id), countdown=1)
     poll.assert_called_once_with(kwargs=message(task_id), countdown=2)
-
-
-def test_worker_wires_remote_policy_and_s3_configuration(tmp_path: Path) -> None:
-    configured = GlobalDeduplicationWorkerSettings(
-        staging_root=tmp_path / "staging",
-        output_roots=(tmp_path / "output",),
-        datajuicer_base_url="http://datajuicer.internal",
-        s3_allowed_buckets=("approved",),
-    )
-    with httpx.Client() as client:
-        orchestrator = build_orchestrator(
-            cast(Any, Mock()),
-            http_client=client,
-            worker_settings=configured,
-            input_roots=(tmp_path / "input",),
-        )
-
-    reader = cast(Any, orchestrator)._reader
-    publisher = cast(Any, orchestrator)._publisher
-    assert reader._remote_url_validator is not None
-    assert reader._http_client is client
-    assert reader._allowed_s3_buckets == {"approved"}
-    assert publisher._allowed_s3_buckets == {"approved"}
