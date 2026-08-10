@@ -112,3 +112,12 @@ def test_preflight_output_rejects_wrong_suffix(tmp_path: Path) -> None:
         )
 
     assert captured.value.reason == "unsupported_suffix"
+
+
+def test_open_regular_input_does_not_remap_consumer_error(tmp_path: Path) -> None:
+    source = tmp_path / "source.md"
+    source.write_text("content", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="consumer failed"):
+        with LocalPathAccessPolicy().open_regular_input(source):
+            raise RuntimeError("consumer failed")

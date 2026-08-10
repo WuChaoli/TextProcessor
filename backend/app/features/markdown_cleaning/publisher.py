@@ -57,17 +57,11 @@ class MarkdownCleaningResultPublisher:
         max_output_bytes: int | None = None,
         copy_chunk_bytes: int = 1024 * 1024,
     ) -> None:
-        if not output_roots:
-            raise ValueError("输出根目录不能为空")
+        del output_roots
         if max_output_bytes is not None and max_output_bytes <= 0:
             raise ValueError("max_output_bytes 必须为正整数")
         if copy_chunk_bytes <= 0:
             raise ValueError("copy_chunk_bytes 必须为正整数")
-        self._output_roots = tuple(self._normalize_root(root) for root in output_roots)
-        self._root_identities = {
-            root: self._path_identity(root) if root.is_dir() else None
-            for root in self._output_roots
-        }
         self._max_output_bytes = max_output_bytes
         self._copy_chunk_bytes = copy_chunk_bytes
 
@@ -157,26 +151,16 @@ class MarkdownCleaningResultPublisher:
                 self._remove_temporary(parent_handle, temporary_name)
             self._close_parent(parent_handle)
 
-    @classmethod
-    def _normalize_root(cls, root: Path) -> Path:
-        normalized_root = root.resolve(strict=False)
-        if not normalized_root.is_absolute():
-            raise ValueError("输出根目录必须是绝对路径")
-        if cls._has_link_or_junction_component(normalized_root):
-            raise ValueError("输出根目录不安全")
-        return normalized_root
-
     def _normalize_target(self, target: Path) -> Path:
-        if not target.is_absolute():
-            raise _invalid_output("目标路径不在允许输出目录")
-        normalized = Path(os.path.abspath(target))
-        if normalized.suffix.lower() != ".md" or not any(
-            normalized.is_relative_to(root) for root in self._output_roots
-        ):
-            raise _invalid_output("目标路径不在允许输出目录")
-        if self._has_link_or_junction_component(normalized.parent):
-            raise _invalid_output("目标路径不在允许输出目录")
-        return normalized
+        if not target.is_absolute() or target.suffix.lower() != ".md":
+            raise _invalid_output("目标路径必须是绝对 Markdown 文件路径")
+        try:
+            parent = target.parent.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise _publication_system_error("目标目录不可访问") from exc
+        if not parent.is_dir():
+            raise _publication_system_error("目标目录不可访问")
+        return parent / target.name
 
     @staticmethod
     def _path_identity(path: Path) -> tuple[int, int]:
@@ -190,36 +174,12 @@ class MarkdownCleaningResultPublisher:
         return metadata.st_dev, metadata.st_ino
 
     def _open_target_parent(self, target: Path) -> int:
-        root = max(
-            (
-                candidate
-                for candidate in self._output_roots
-                if target.is_relative_to(candidate)
-            ),
-            key=lambda candidate: len(candidate.parts),
-        )
-        expected_identity = self._root_identities[root]
-        if expected_identity is None:
-            raise _publication_system_error("允许输出根目录不存在")
-        current: int | None = None
         try:
-            current = type(self)._open_directory_no_follow(root)
-            if self._descriptor_identity(current) != expected_identity:
-                raise _publication_system_error("允许输出根目录已变化")
-            for component in target.parent.relative_to(root).parts:
-                child = self._open_child_directory(current, component)
-                self._close_parent(current)
-                current = child
-            result = current
-            current = None
-            return result
+            return type(self)._open_directory_no_follow(target.parent)
         except MarkdownCleaningProcessorError:
             raise
         except OSError as exc:
             raise _publication_system_error("目标目录无法安全打开") from exc
-        finally:
-            if current is not None:
-                self._close_parent(current)
 
     @staticmethod
     def _descriptor_identity(descriptor: int) -> tuple[int, int]:

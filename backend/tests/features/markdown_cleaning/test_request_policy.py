@@ -8,6 +8,11 @@ from app.features.markdown_cleaning.request_policy import MarkdownCleaningReques
 from app.features.markdown_cleaning.schemas import MarkdownCleaningTaskCreate
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """请求策略单测不依赖 PostgreSQL。"""
+
+
 def build_request(
     *,
     storage_path: str | None = None,
@@ -61,7 +66,7 @@ def test_local_markdown_input_and_target_are_normalized_under_roots(
     assert validated.target_path == str(target.resolve())
 
 
-def test_local_input_outside_allowlist_is_rejected(tmp_path: Path) -> None:
+def test_local_input_outside_configured_root_uses_runtime_access(tmp_path: Path) -> None:
     input_root = tmp_path / "input"
     output_root = tmp_path / "output"
     outside = tmp_path / "outside.md"
@@ -69,19 +74,18 @@ def test_local_input_outside_allowlist_is_rejected(tmp_path: Path) -> None:
     output_root.mkdir()
     outside.write_text("text", encoding="utf-8")
 
-    with pytest.raises(MarkdownCleaningDomainError) as error:
-        build_policy(
-            input_roots=(input_root,), output_roots=(output_root,)
-        ).validate_request(
-            build_request(
-                storage_path=str(outside), target_path=str(output_root / "result.md")
-            )
+    validated = build_policy(
+        input_roots=(input_root,), output_roots=(output_root,)
+    ).validate_request(
+        build_request(
+            storage_path=str(outside), target_path=str(output_root / "result.md")
         )
+    )
 
-    assert error.value.code == "INPUT_PATH_NOT_ALLOWED"
+    assert validated.file_storage_path == str(outside.resolve())
 
 
-def test_symlinked_input_escaping_allowlist_is_rejected(tmp_path: Path) -> None:
+def test_symlinked_input_uses_resolved_runtime_access(tmp_path: Path) -> None:
     input_root = tmp_path / "input"
     output_root = tmp_path / "output"
     outside = tmp_path / "outside"
@@ -96,16 +100,15 @@ def test_symlinked_input_escaping_allowlist_is_rejected(tmp_path: Path) -> None:
     except OSError as exc:
         pytest.skip(f"creating a symlink is unavailable: {exc}")
 
-    with pytest.raises(MarkdownCleaningDomainError) as error:
-        build_policy(
-            input_roots=(input_root,), output_roots=(output_root,)
-        ).validate_request(
-            build_request(
-                storage_path=str(linked), target_path=str(output_root / "result.md")
-            )
+    validated = build_policy(
+        input_roots=(input_root,), output_roots=(output_root,)
+    ).validate_request(
+        build_request(
+            storage_path=str(linked), target_path=str(output_root / "result.md")
         )
+    )
 
-    assert error.value.code == "INPUT_PATH_NOT_ALLOWED"
+    assert validated.file_storage_path == str(source.resolve())
 
 
 @pytest.mark.parametrize(
@@ -245,7 +248,7 @@ def test_existing_target_is_accepted_by_api_policy(tmp_path: Path) -> None:
     assert validated.target_path == str(target.resolve())
 
 
-def test_target_through_symlink_escaping_output_root_is_rejected(
+def test_target_through_symlink_uses_runtime_account_access(
     tmp_path: Path,
 ) -> None:
     input_root = tmp_path / "input"
@@ -262,17 +265,16 @@ def test_target_through_symlink_escaping_output_root_is_rejected(
     except OSError as exc:
         pytest.skip(f"creating an output symlink is unavailable: {exc}")
 
-    with pytest.raises(MarkdownCleaningDomainError) as error:
-        build_policy(
-            input_roots=(input_root,), output_roots=(output_root,)
-        ).validate_request(
-            build_request(
-                storage_path=str(source),
-                target_path=str(linked_output / "result.md"),
-            )
+    validated = build_policy(
+        input_roots=(input_root,), output_roots=(output_root,)
+    ).validate_request(
+        build_request(
+            storage_path=str(source),
+            target_path=str(linked_output / "result.md"),
         )
+    )
 
-    assert error.value.code == "OUTPUT_PATH_NOT_ALLOWED"
+    assert validated.target_path == str((outside / "result.md").resolve(strict=False))
 
 
 def test_input_and_target_resolving_to_same_file_is_rejected(tmp_path: Path) -> None:
@@ -304,7 +306,7 @@ def test_relative_paths_are_rejected_by_policy(tmp_path: Path) -> None:
             )
         )
 
-    assert input_error.value.code == "INPUT_PATH_NOT_ALLOWED"
+    assert input_error.value.code == "INPUT_ACCESS_FAILED"
 
     source = input_root / "source.md"
     source.write_text("text", encoding="utf-8")

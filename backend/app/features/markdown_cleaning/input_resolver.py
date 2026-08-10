@@ -5,7 +5,6 @@ import ipaddress
 import os
 import socket
 import ssl
-import stat
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ from urllib.parse import SplitResult, urljoin, urlsplit, urlunsplit
 import httpcore
 import httpx
 
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.markdown_cleaning.input_validator import (
     MarkdownInputError,
     MarkdownInputErrorCode,
@@ -220,6 +220,7 @@ class InputResolver:
         max_http_redirects: int = 3,
         address_resolver: AddressResolver = _system_resolver,
         transport_factory: PinnedTransportFactory = _default_pinned_transport,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
         if max_input_bytes <= 0 or copy_chunk_bytes <= 0:
             raise ValueError("输入限制必须是正整数")
@@ -227,9 +228,8 @@ class InputResolver:
             raise ValueError("HTTP 超时必须大于零")
         if max_http_redirects < 0:
             raise ValueError("HTTP 重定向次数不能为负数")
-        self._input_roots = tuple(
-            Path(os.path.abspath(root)).resolve(strict=False) for root in input_roots
-        )
+        del input_roots
+        self._local_paths = local_paths or LocalPathAccessPolicy()
         self._allowed_http_hosts = frozenset(
             host.strip().rstrip(".").lower()
             for host in allowed_http_hosts
@@ -257,10 +257,10 @@ class InputResolver:
     ) -> ResolvedMarkdownInput:
         selected = self._selected_value(task)
         suffix = self._source_suffix(selected, task.selected_input_type)
+        reused = self._reuse_existing(task, layout, suffix)
         validated_http = self._validate_selected_policy(
             selected, task.selected_input_type
         )
-        reused = self._reuse_existing(task, layout, suffix)
         if reused is not None:
             return reused
         if task.selected_input_type == "local":
@@ -282,7 +282,10 @@ class InputResolver:
         selected_type: str,
     ) -> ValidatedHttpTarget | None:
         if selected_type == "local":
-            self._validate_local_path(Path(selected), require_exists=False)
+            try:
+                self._local_paths.preflight_input(selected)
+            except LocalPathAccessError:
+                raise self._access_error() from None
             return None
         if selected_type == "remote":
             return self._validate_http_url(selected)
@@ -369,45 +372,19 @@ class InputResolver:
                 return self._copy(source, suffix, layout)
         except MarkdownInputError:
             raise
+        except LocalPathAccessError:
+            raise self._access_error() from None
         except OSError:
             raise self._access_error() from None
 
     @contextmanager
     def _open_local_source(self, source_path: Path) -> Iterator[BinaryIO]:
-        if not source_path.is_absolute():
-            raise self._access_error()
-        lexical = Path(os.path.abspath(source_path))
-        if self._has_link_component(lexical):
-            raise self._access_error()
-        descriptor: int | None = None
-        stream: BinaryIO | None = None
         try:
-            if os.name == "nt":
-                descriptor, final_path = self._open_windows_no_reparse(lexical)
-            else:
-                descriptor, final_path = self._open_posix_no_follow(lexical)
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode) or not self._is_under(
-                final_path, self._input_roots
-            ):
-                raise self._access_error()
-            stream = os.fdopen(descriptor, "rb")
-            descriptor = None
-            yield stream
-        except FileNotFoundError:
-            raise self._error(
-                MarkdownInputErrorCode.INPUT_NOT_FOUND,
-                "输入文件不存在",
-            ) from None
-        except MarkdownInputError:
-            raise
-        except OSError:
+            resolved = self._local_paths.preflight_input(str(source_path))
+            with self._local_paths.open_regular_input(resolved) as stream:
+                yield stream
+        except LocalPathAccessError:
             raise self._access_error() from None
-        finally:
-            if stream is not None:
-                stream.close()
-            if descriptor is not None:
-                os.close(descriptor)
 
     @staticmethod
     def _open_posix_no_follow(path: Path) -> tuple[int, Path]:
@@ -541,25 +518,11 @@ class InputResolver:
         *,
         require_exists: bool,
     ) -> Path:
-        if not source_path.is_absolute():
-            raise self._access_error()
-        lexical = Path(os.path.abspath(source_path))
+        del require_exists
         try:
-            normalized = lexical.resolve(strict=require_exists)
-        except FileNotFoundError:
-            raise self._error(
-                MarkdownInputErrorCode.INPUT_NOT_FOUND,
-                "输入文件不存在",
-            ) from None
-        except OSError:
+            return self._local_paths.preflight_input(str(source_path))
+        except LocalPathAccessError:
             raise self._access_error() from None
-        if (
-            not self._is_under(normalized, self._input_roots)
-            or self._has_link_component(lexical)
-            or (require_exists and not normalized.is_file())
-        ):
-            raise self._access_error()
-        return normalized
 
     def _resolve_http(
         self,
