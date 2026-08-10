@@ -37,6 +37,9 @@
 - 修改前读取真实代码、配置和测试，遵循现有 backend/frontend 分层；不因模板存在而假设业务能力已经实现。
 - 生产代码不得直接依赖 `DatasetTechTest` 等实验项目；可借鉴其已验证实现，但必须经 processor/adapter 边界迁入并补齐项目内测试。
 - 优先小步建设可运行、可观察、可验证的能力，不提前拆分微服务、独立仓库或复杂工作流平台。
+- 工程工具选型与职责遵循 `docs/architecture/decisions/0002-python-quality-toolchain.md`、`0003-testing-strategy.md` 和 `0004-observability-stack.md`；长期执行规则遵循 `docs/architecture/standards/`。
+- 工具版本、参数与实际命令以 `pyproject.toml`、`uv.lock`、专用配置、脚本和 CI 为事实来源。文档中列出的目标工具在未真实配置和运行前不得声称已启用或通过。
+- 访问或部署 137 服务器时，从未提交的 `.env` 读取 `PROD_SSH_IP`、`PROD_SSH_PORT`、`PROD_SSH_USERNAME`、`PROD_SSH_PASSWORD` 与 `PROD_SSH_PROJECT_ROOT`；不得把这些值输出、写入 Git、文档或命令行参数。
 - 按变更范围执行格式化、Lint、类型检查和测试。processor、URI 策略、任务状态机与 manifest 至少具备单元测试。
 - API、PostgreSQL、Redis、Celery 与 `fsspec` 边界使用集成测试；任务相关改动必须覆盖重复消息、入队失败、worker 中断、路径逃逸、输出冲突和恢复。
 - 真实大型模型或外部服务测试与默认快速测试集分离，未实际运行的验证不得声称通过。
