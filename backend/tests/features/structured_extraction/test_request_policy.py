@@ -10,15 +10,18 @@ from app.features.structured_extraction.request_policy import RequestPolicy
 from app.features.structured_extraction.schemas import ExtractionTaskCreate
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """请求策略单测不依赖 PostgreSQL。"""
+
+
 def make_policy(
-    input_root: Path,
-    output_root: Path,
+    _input_root: Path,
+    _output_root: Path,
     *,
     resolved_addresses: tuple[str, ...] = ("10.20.0.8",),
 ) -> RequestPolicy:
     return RequestPolicy(
-        input_roots=(input_root,),
-        output_roots=(output_root,),
         allowed_http_hosts=("files.internal",),
         allowed_http_cidrs=("10.20.0.0/16",),
         max_input_bytes=1024,
@@ -51,17 +54,33 @@ def test_validate_request_prefers_existing_local_input(tmp_path: Path) -> None:
     assert result.target_path == str((output_root / "sample.md").resolve())
 
 
-def test_local_input_must_exist_and_stay_under_allowed_root(tmp_path: Path) -> None:
+def test_local_input_accepts_readable_file_without_root_membership(
+    tmp_path: Path,
+) -> None:
     input_root = tmp_path / "input"
     output_root = tmp_path / "output"
     input_root.mkdir()
     output_root.mkdir()
     policy = make_policy(input_root, output_root)
 
-    for path in (input_root / "missing.txt", tmp_path / "private.txt"):
-        with pytest.raises(ExtractionDomainError) as raised:
-            policy.validate_local_input(str(path))
-        assert raised.value.code is ExtractionErrorCode.INPUT_PATH_NOT_ALLOWED
+    source = tmp_path / "private.txt"
+    source.write_text("readable", encoding="utf-8")
+
+    assert policy.validate_local_input(str(source)) == str(source.resolve())
+
+
+def test_local_input_missing_maps_to_access_failed(tmp_path: Path) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    input_root.mkdir()
+    output_root.mkdir()
+
+    with pytest.raises(ExtractionDomainError) as raised:
+        make_policy(input_root, output_root).validate_local_input(
+            str(input_root / "missing.txt")
+        )
+
+    assert raised.value.code is ExtractionErrorCode.INPUT_ACCESS_FAILED
 
 
 def test_local_input_honors_size_limit(tmp_path: Path) -> None:
@@ -75,10 +94,10 @@ def test_local_input_honors_size_limit(tmp_path: Path) -> None:
     with pytest.raises(ExtractionDomainError) as raised:
         make_policy(input_root, output_root).validate_local_input(str(source))
 
-    assert raised.value.code is ExtractionErrorCode.INPUT_PATH_NOT_ALLOWED
+    assert raised.value.code is ExtractionErrorCode.INPUT_TOO_LARGE
 
 
-def test_output_must_be_absolute_markdown_under_allowed_root(
+def test_output_must_be_absolute_markdown_with_existing_parent(
     tmp_path: Path,
 ) -> None:
     input_root = tmp_path / "input"
@@ -90,15 +109,18 @@ def test_output_must_be_absolute_markdown_under_allowed_root(
     invalid_paths = (
         "relative.md",
         str(output_root / "result.txt"),
-        str(output_root / ".." / "private" / "result.md"),
+        str(tmp_path / "missing" / "result.md"),
     )
     for path in invalid_paths:
         with pytest.raises(ExtractionDomainError) as raised:
             policy.validate_output_path(path)
-        assert raised.value.code is ExtractionErrorCode.OUTPUT_PATH_NOT_ALLOWED
+        assert raised.value.code in {
+            ExtractionErrorCode.INVALID_REQUEST,
+            ExtractionErrorCode.OUTPUT_ACCESS_FAILED,
+        }
 
 
-def test_output_rejects_symlink_escape(tmp_path: Path) -> None:
+def test_output_accepts_symlink_to_writable_directory(tmp_path: Path) -> None:
     input_root = tmp_path / "input"
     output_root = tmp_path / "output"
     private_root = tmp_path / "private"
@@ -111,12 +133,11 @@ def test_output_rejects_symlink_escape(tmp_path: Path) -> None:
     except OSError:
         pytest.skip("当前环境不允许创建目录符号链接")
 
-    with pytest.raises(ExtractionDomainError) as raised:
-        make_policy(input_root, output_root).validate_output_path(
-            str(link / "result.md")
-        )
+    validated = make_policy(input_root, output_root).validate_output_path(
+        str(link / "result.md")
+    )
 
-    assert raised.value.code is ExtractionErrorCode.OUTPUT_PATH_NOT_ALLOWED
+    assert validated == str((private_root / "result.md").resolve(strict=False))
 
 
 @pytest.mark.parametrize(
@@ -188,8 +209,6 @@ def test_remote_url_rejects_loopback_even_if_cidr_was_configured(
     input_root.mkdir()
     output_root.mkdir()
     policy = RequestPolicy(
-        input_roots=(input_root,),
-        output_roots=(output_root,),
         allowed_http_hosts=("files.internal",),
         allowed_http_cidrs=("127.0.0.0/8",),
         max_input_bytes=1024,

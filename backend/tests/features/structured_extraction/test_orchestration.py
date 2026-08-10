@@ -178,6 +178,7 @@ def make_orchestrator(
     slots: ProcessorSlotRepository | ForbiddenSlots | None = None,
     production_formats: tuple[str, ...] = ("pdf", "text"),
 ) -> ExtractionOrchestrator:
+    del input_root
     return ExtractionOrchestrator(
         session,
         worker_settings=ExtractionWorkerSettings(
@@ -189,7 +190,6 @@ def make_orchestrator(
             poll_lease_seconds=20,
             mineru_max_in_flight_tasks=1,
         ),
-        input_roots=(input_root,),
         max_input_bytes=1024 * 1024,
         scheduler=scheduler,
         adapter_factory=adapter_factory,
@@ -374,8 +374,6 @@ def test_worker_stages_remote_http_input_through_request_policy(
     session.add(task)
     session.commit()
     policy = RequestPolicy(
-        input_roots=(),
-        output_roots=(output_root,),
         allowed_http_hosts=("files.internal",),
         allowed_http_cidrs=("10.20.0.0/16",),
         max_input_bytes=1024,
@@ -393,7 +391,6 @@ def test_worker_stages_remote_http_input_through_request_policy(
             output_roots=(output_root,),
             production_formats=("text",),
         ),
-        input_roots=(),
         max_input_bytes=1024,
         remote_url_validator=policy.validate_remote_url,
         http_client=httpx.Client(transport=httpx.MockTransport(response)),
@@ -454,7 +451,6 @@ def test_worker_passes_s3_configuration_to_input_resolver(
             s3_access_key_id="access-key",
             s3_secret_access_key="secret-key",
         ),
-        input_roots=(),
         max_input_bytes=1024,
     )
 
@@ -906,7 +902,6 @@ def test_submit_retry_exhaustion_fails_and_quarantines_slot(
             output_roots=(output_root,),
             production_formats=("pdf",),
         ),
-        input_roots=(input_root,),
         max_input_bytes=1024 * 1024,
     )
 

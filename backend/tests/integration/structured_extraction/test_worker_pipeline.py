@@ -137,8 +137,6 @@ def api_context(tmp_path: Path) -> Generator[ApiContext]:
     output_root.mkdir()
     dispatcher = RecordingDispatcher()
     policy = RequestPolicy(
-        input_roots=(input_root,),
-        output_roots=(output_root,),
         allowed_http_hosts=("files.internal",),
         allowed_http_cidrs=("10.20.0.0/16",),
         max_input_bytes=1024 * 1024,
@@ -221,7 +219,6 @@ def make_orchestrator(
             max_in_flight=max_in_flight,
             quarantine_grace_seconds=quarantine_grace_seconds,
         ),
-        input_roots=(context.input_root,),
         max_input_bytes=1024 * 1024,
         scheduler=scheduler,
         adapter_factory=(lambda _processor: adapter) if adapter is not None else None,
@@ -498,8 +495,6 @@ def test_http_redirect_revalidates_each_hop_against_ssrf_policy(
     input_root.mkdir()
     output_root.mkdir()
     policy = RequestPolicy(
-        input_roots=(input_root,),
-        output_roots=(output_root,),
         allowed_http_hosts=(
             "files.internal",
             "loopback.internal",
@@ -533,7 +528,6 @@ def test_http_redirect_revalidates_each_hop_against_ssrf_policy(
         status=ExtractionTaskStatus.QUEUED,
     )
     resolver = InputResolver(
-        input_roots=(input_root,),
         max_input_bytes=1024,
         remote_url_validator=policy.validate_remote_url,
         http_client=httpx.Client(transport=httpx.MockTransport(redirect)),
@@ -601,7 +595,6 @@ def test_s3_bucket_outside_allowlist_is_rejected_before_access(tmp_path: Path) -
         status=ExtractionTaskStatus.QUEUED,
     )
     resolver = InputResolver(
-        input_roots=(tmp_path,),
         max_input_bytes=1024,
         allowed_s3_buckets=("inside-allowed-bucket",),
     )

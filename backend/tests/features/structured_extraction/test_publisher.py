@@ -23,7 +23,6 @@ def test_prepare_validates_utf8_and_computes_digest(tmp_path: Path) -> None:
 
     prepared = AtomicPublisher(
         max_output_bytes=1024,
-        output_roots=(tmp_path,),
     ).prepare(source)
 
     assert prepared.sha256 == hashlib.sha256(content).hexdigest()
@@ -41,7 +40,6 @@ def test_publish_rejects_preexisting_target_without_overwriting(
     target.write_text("existing", encoding="utf-8")
     publisher = AtomicPublisher(
         max_output_bytes=1024,
-        output_roots=(tmp_path / "output",),
     )
 
     with pytest.raises(ExtractionProcessingError) as captured:
@@ -56,9 +54,9 @@ def test_only_one_concurrent_publish_can_create_target(tmp_path: Path) -> None:
     for index, source in enumerate(sources):
         source.write_text(f"content-{index}", encoding="utf-8")
     target = tmp_path / "output" / "result.md"
+    target.parent.mkdir()
     publisher = AtomicPublisher(
         max_output_bytes=1024,
-        output_roots=(tmp_path / "output",),
     )
     barrier = threading.Barrier(2)
     outcomes: list[str] = []
@@ -91,7 +89,6 @@ def test_recovery_accepts_same_digest_and_rejects_different_digest(
     target.write_text("same", encoding="utf-8")
     publisher = AtomicPublisher(
         max_output_bytes=1024,
-        output_roots=(tmp_path,),
     )
     prepared = publisher.prepare(source)
 
@@ -111,9 +108,9 @@ def test_publish_uses_only_target_directory_for_temporary_file(
     source.parent.mkdir()
     source.write_text("content", encoding="utf-8")
     target = tmp_path / "output" / "result.md"
+    target.parent.mkdir()
     publisher = AtomicPublisher(
         max_output_bytes=1024,
-        output_roots=(tmp_path / "output",),
     )
 
     publisher.publish(publisher.prepare(source), target)
@@ -126,8 +123,21 @@ def test_legacy_manifest_does_not_block_a_different_target(tmp_path: Path) -> No
     output = tmp_path / "output"
     output.mkdir()
     (output / "manifest.json").write_text("{}\n", encoding="utf-8")
-    publisher = AtomicPublisher(max_output_bytes=1024, output_roots=(output,))
+    publisher = AtomicPublisher(max_output_bytes=1024)
 
     target = publisher.ensure_target_available(output / "another.md")
 
     assert target == (output / "another.md").resolve(strict=False)
+
+
+def test_publish_does_not_create_missing_parent(tmp_path: Path) -> None:
+    source = tmp_path / "result.md"
+    source.write_text("content", encoding="utf-8")
+    target = tmp_path / "missing" / "result.md"
+    publisher = AtomicPublisher(max_output_bytes=1024)
+
+    with pytest.raises(ExtractionProcessingError) as captured:
+        publisher.publish(publisher.prepare(source), target)
+
+    assert captured.value.code is ExtractionErrorCode.OUTPUT_ACCESS_FAILED
+    assert not target.parent.exists()

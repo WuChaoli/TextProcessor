@@ -37,8 +37,6 @@ router = APIRouter(
 
 def get_request_policy() -> RequestPolicy:
     return RequestPolicy(
-        input_roots=settings.EXTRACTION_INPUT_ROOTS,
-        output_roots=settings.EXTRACTION_OUTPUT_ROOTS,
         allowed_http_hosts=settings.EXTRACTION_HTTP_ALLOWED_HOSTS,
         allowed_http_cidrs=settings.EXTRACTION_HTTP_ALLOWED_CIDRS,
         max_input_bytes=settings.EXTRACTION_MAX_INPUT_BYTES,

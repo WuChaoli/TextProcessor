@@ -105,7 +105,6 @@ class ExtractionOrchestrator:
         session: Session,
         *,
         worker_settings: ExtractionWorkerSettings,
-        input_roots: tuple[Path, ...],
         max_input_bytes: int,
         scheduler: ExtractionTaskScheduler | None = None,
         adapter_factory: Callable[[ProcessorName], ExternalProcessorAdapter]
@@ -123,15 +122,12 @@ class ExtractionOrchestrator:
         validator = (
             remote_url_validator
             or RequestPolicy(
-                input_roots=input_roots,
-                output_roots=worker_settings.output_roots,
                 allowed_http_hosts=settings.EXTRACTION_HTTP_ALLOWED_HOSTS,
                 allowed_http_cidrs=settings.EXTRACTION_HTTP_ALLOWED_CIDRS,
                 max_input_bytes=max_input_bytes,
             ).validate_remote_url
         )
         self._resolver = InputResolver(
-            input_roots=input_roots,
             max_input_bytes=max_input_bytes,
             copy_chunk_bytes=worker_settings.copy_chunk_bytes,
             remote_url_validator=validator,
@@ -152,7 +148,6 @@ class ExtractionOrchestrator:
         self._normalizer = MarkdownNormalizer()
         self._publisher = AtomicPublisher(
             max_output_bytes=worker_settings.max_output_bytes,
-            output_roots=worker_settings.output_roots,
             copy_chunk_bytes=worker_settings.copy_chunk_bytes,
         )
 
