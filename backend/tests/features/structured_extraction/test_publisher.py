@@ -122,33 +122,12 @@ def test_publish_uses_only_target_directory_for_temporary_file(
     assert not list(target.parent.glob(".publish-*"))
 
 
-def test_publish_manifest_atomically_and_recovers_same_content(tmp_path: Path) -> None:
-    source = tmp_path / "staging" / "manifest.json"
-    source.parent.mkdir()
-    source.write_text('{"schemaVersion":1}\n', encoding="utf-8")
-    target = tmp_path / "output" / "manifest.json"
-    publisher = AtomicPublisher(
-        max_output_bytes=1024,
-        output_roots=(tmp_path / "output",),
-    )
-    prepared = publisher.prepare(source)
-
-    published = publisher.publish_manifest(prepared, target)
-    recovered = publisher.publish_manifest(prepared, target, allow_recovery=True)
-
-    assert published.recovered is False
-    assert recovered.recovered is True
-    assert target.read_text(encoding="utf-8") == '{"schemaVersion":1}\n'
-    assert not list(target.parent.glob(".publish-*"))
-
-
-def test_target_is_unavailable_when_task_directory_has_manifest(tmp_path: Path) -> None:
+def test_legacy_manifest_does_not_block_a_different_target(tmp_path: Path) -> None:
     output = tmp_path / "output"
     output.mkdir()
     (output / "manifest.json").write_text("{}\n", encoding="utf-8")
     publisher = AtomicPublisher(max_output_bytes=1024, output_roots=(output,))
 
-    with pytest.raises(ExtractionProcessingError) as captured:
-        publisher.ensure_target_available(output / "another.md")
+    target = publisher.ensure_target_available(output / "another.md")
 
-    assert captured.value.code is ExtractionErrorCode.OUTPUT_CONFLICT
+    assert target == (output / "another.md").resolve(strict=False)

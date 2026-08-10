@@ -12,6 +12,7 @@ class StagingLayout:
     source: Path
     processor_dir: Path
     output: Path
+    manifest: Path
 
     @classmethod
     def for_task(cls, staging_root: Path, task_id: uuid.UUID) -> StagingLayout:
@@ -24,6 +25,7 @@ class StagingLayout:
             source=task_root / "source" / "original",
             processor_dir=task_root / "processor",
             output=task_root / "output" / "result.md",
+            manifest=task_root / "manifest.json",
         )
 
     def prepare(self) -> None:

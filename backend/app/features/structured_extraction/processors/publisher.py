@@ -62,9 +62,7 @@ class AtomicPublisher:
     def ensure_target_available(self, target: Path) -> Path:
         normalized_target = target.resolve(strict=False)
         self._validate_target(normalized_target)
-        if normalized_target.exists() or (
-            normalized_target.parent / "manifest.json"
-        ).exists():
+        if normalized_target.exists():
             raise output_conflict()
         return normalized_target
 
@@ -80,22 +78,6 @@ class AtomicPublisher:
                 prepared,
                 target,
                 allow_recovery=allow_recovery,
-                manifest=False,
-            )
-
-    def publish_manifest(
-        self,
-        prepared: PreparedOutput,
-        target: Path,
-        *,
-        allow_recovery: bool = False,
-    ) -> PublishedOutput:
-        with self._publish_lock:
-            return self._publish_locked(
-                prepared,
-                target,
-                allow_recovery=allow_recovery,
-                manifest=True,
             )
 
     def _publish_locked(
@@ -104,10 +86,9 @@ class AtomicPublisher:
         target: Path,
         *,
         allow_recovery: bool,
-        manifest: bool,
     ) -> PublishedOutput:
         normalized_target = target.resolve(strict=False)
-        self._validate_target(normalized_target, manifest=manifest)
+        self._validate_target(normalized_target)
         if normalized_target.exists():
             return self._resolve_existing(
                 prepared,
@@ -149,14 +130,10 @@ class AtomicPublisher:
             recovered=False,
         )
 
-    def _validate_target(self, target: Path, *, manifest: bool = False) -> None:
+    def _validate_target(self, target: Path) -> None:
         if (
             not target.is_absolute()
-            or (
-                target.name != "manifest.json"
-                if manifest
-                else target.suffix.lower() != ".md"
-            )
+            or target.suffix.lower() != ".md"
             or not any(
                 target == root or root in target.parents for root in self._output_roots
             )
