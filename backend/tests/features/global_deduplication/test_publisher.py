@@ -1,4 +1,6 @@
+import errno
 import json
+import os
 from pathlib import Path
 
 import fsspec
@@ -66,6 +68,34 @@ def test_publisher_recovers_only_matching_existing_output(tmp_path: Path) -> Non
     with pytest.raises(GlobalDeduplicationProcessingError) as error:
         publisher.publish(prepared, target, allow_recovery=True)
     assert error.value.code is GlobalDeduplicationErrorCode.OUTPUT_CONFLICT
+
+
+def test_publisher_copies_to_target_filesystem_when_hard_link_is_cross_device(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    staging = tmp_path / "staging" / "final-result.json"
+    target = tmp_path / "output" / "result.json"
+    target.parent.mkdir()
+    publisher = FinalResultPublisher()
+    prepared = publisher.prepare(results(), staging)
+    real_link = os.link
+
+    def cross_device_link(source: Path, destination: Path) -> None:
+        if Path(source) == prepared.path:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        real_link(source, destination)
+
+    monkeypatch.setattr(
+        "app.features.global_deduplication.publisher.os.link",
+        cross_device_link,
+    )
+
+    published = publisher.publish(prepared, target, allow_recovery=False)
+
+    assert published.sha256 == prepared.sha256
+    assert target.read_bytes() == prepared.path.read_bytes()
+    assert list(target.parent.glob(".*.part")) == []
 
 
 def test_publisher_supports_allowlisted_s3_without_overwrite(
