@@ -186,3 +186,7 @@ def test_transient_failure_is_retried_only_to_max_attempts(
     assert task.status is TaskStatus.FAILED
     assert task.attempt_count == 3
     assert task.error_code == "CLASSIFICATION_FAILED"
+
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """可靠性单测使用文件内数据库，不依赖全局 PostgreSQL。"""

@@ -68,7 +68,6 @@ def test_minimal_worker_processes_plain_text_to_markdown(tmp_path) -> None:
                 output_roots=(output_root,),
                 production_formats=("text",),
             ),
-            input_roots=(input_root,),
             max_input_bytes=1024,
         )
 
@@ -122,7 +121,6 @@ def test_worker_rejects_existing_target_before_staging(tmp_path) -> None:
                 output_roots=(output_root,),
                 production_formats=("text",),
             ),
-            input_roots=(input_root,),
             max_input_bytes=1024,
         )
 

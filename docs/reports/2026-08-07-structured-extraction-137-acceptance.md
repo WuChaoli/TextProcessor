@@ -8,6 +8,11 @@ production allowlist。处理器直连测试 MinerU 4/4、Docling 4/4 通过；�
 
 本报告只记录必要摘要，不含 API key、生产密码或业务文档正文。
 
+> 历史行为说明：本报告记录的是 2026-08-07 版本，当时生产链路会在输出目录发布
+> `manifest.json`。自私有 manifest 生命周期版本起，表格中的 manifest 证据仅作为历史
+> 验收记录保留；新版本只发布目标 Markdown，并以 PostgreSQL 摘要和终态 staging 清理
+> 作为验收依据。
+
 ## 部署与配置证据
 
 - TextProcessor API 与 Task Runner 继续由 systemd 管理；最终均为 `active`。

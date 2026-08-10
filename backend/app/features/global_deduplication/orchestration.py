@@ -452,16 +452,7 @@ class GlobalDeduplicationOrchestrator:
     def _validated_target(self, value: str) -> str | Path:
         if value.startswith("s3://"):
             return value
-        target = Path(value).resolve(strict=False)
-        if not any(
-            target == root or root in target.parents
-            for root in self._settings.output_roots
-        ):
-            raise GlobalDeduplicationProcessingError(
-                GlobalDeduplicationErrorCode.OUTPUT_PATH_NOT_ALLOWED,
-                "目标结果路径不在允许范围内",
-            )
-        return target
+        return Path(value)
 
     def _fail(
         self,

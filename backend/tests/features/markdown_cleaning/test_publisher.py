@@ -78,7 +78,7 @@ def test_prepare_rejects_invalid_utf8(tmp_path: Path) -> None:
     assert "非法 UTF-8" in error.value.safe_message
 
 
-def test_publish_rejects_target_outside_allowed_output_root(
+def test_publish_accepts_target_outside_configured_output_root(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.md"
@@ -86,12 +86,12 @@ def test_publish_rejects_target_outside_allowed_output_root(
     publisher = MarkdownCleaningResultPublisher(output_roots=(tmp_path / "output",))
     prepared = publisher.prepare(source)
     outside = tmp_path / "outside" / "result.md"
+    outside.parent.mkdir()
 
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
-        publisher.publish(prepared, outside, allow_recovery=False)
+    published = publisher.publish(prepared, outside, allow_recovery=False)
 
-    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
-    assert "outside" not in str(error.value)
+    assert published.path == outside.resolve(strict=False)
+    assert outside.read_text(encoding="utf-8") == "ok"
 
 
 def test_publish_rejects_non_markdown_target_path(
@@ -121,7 +121,7 @@ def test_publish_rejects_relative_target_even_if_filename_is_markdown(
         publisher.publish(prepared, Path("result.md"), allow_recovery=False)
 
     assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
-    assert "路径不在允许输出目录" in error.value.safe_message
+    assert "绝对 Markdown 文件路径" in error.value.safe_message
 
 
 def test_publish_rejects_existing_target_without_recovery(
@@ -411,7 +411,7 @@ def test_publish_calls_fsync_for_output_and_parent(
     assert len(calls) == (1 if os.name == "nt" else 2)
 
 
-def test_publish_rejects_target_escape_via_output_symlink(
+def test_publish_accepts_target_via_accessible_output_symlink(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source.md"
@@ -428,11 +428,9 @@ def test_publish_rejects_target_escape_via_output_symlink(
     except OSError as exc:
         pytest.skip(f"creating an output symlink is unavailable: {exc}")
 
-    with pytest.raises(MarkdownCleaningProcessorError) as error:
-        publisher.publish(prepared, linked / "result.md", allow_recovery=False)
+    publisher.publish(prepared, linked / "result.md", allow_recovery=False)
 
-    assert error.value.code is MarkdownCleaningErrorCode.INVALID_PROCESSOR_OUTPUT
-    assert "不在允许输出目录" in error.value.safe_message
+    assert (outside_root / "result.md").read_text(encoding="utf-8") == "ok"
 
 
 def test_publish_rejects_target_parent_open_failure(
@@ -548,43 +546,18 @@ def test_publish_rejects_source_tampering_after_prepare(
     assert not (output / "result.md").exists()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows junction race regression")
-def test_publish_pins_every_ancestor_during_relative_descent(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import subprocess
-
+def test_publish_requires_existing_caller_parent(tmp_path: Path) -> None:
     source = tmp_path / "source.md"
     source.write_text("safe", encoding="utf-8")
     root = tmp_path / "root"
-    ancestor = root / "a"
-    moved = root / "a-pinned"
-    outside = tmp_path / "outside"
-    ancestor.mkdir(parents=True)
-    outside.mkdir()
+    root.mkdir()
     publisher = MarkdownCleaningResultPublisher(output_roots=(root,))
     prepared = publisher.prepare(source)
-    original_open_child = publisher._open_child_directory
 
-    def _swap_a_before_opening_b(parent_handle: int, name: str) -> int:
-        if name == "b" and not moved.exists():
-            ancestor.rename(moved)
-            completed = subprocess.run(
-                ["cmd", "/c", "mklink", "/J", str(ancestor), str(outside)],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if completed.returncode != 0:
-                pytest.skip("junction creation unavailable")
-        return original_open_child(parent_handle, name)
+    with pytest.raises(PublicationSystemError):
+        publisher.publish(prepared, root / "a" / "result.md", allow_recovery=False)
 
-    monkeypatch.setattr(publisher, "_open_child_directory", _swap_a_before_opening_b)
-    publisher.publish(prepared, root / "a" / "b" / "result.md", allow_recovery=False)
-
-    assert (moved / "b" / "result.md").read_text(encoding="utf-8") == "safe"
-    assert not list(outside.iterdir())
+    assert not (root / "a").exists()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows junction race regression")

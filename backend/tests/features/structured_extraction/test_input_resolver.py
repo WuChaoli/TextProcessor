@@ -18,6 +18,11 @@ from app.features.structured_extraction.models import (
 from app.features.structured_extraction.staging import StagingLayout
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """输入解析单测不依赖 PostgreSQL。"""
+
+
 def make_task(
     *,
     local_path: str | None,
@@ -42,7 +47,6 @@ def test_local_input_is_streamed_and_hashed(tmp_path: Path) -> None:
     source.write_bytes("第一行\r\n第二行".encode())
     layout = StagingLayout.for_task(tmp_path / "staging", uuid.uuid4())
     resolver = InputResolver(
-        input_roots=(source.parent,),
         max_input_bytes=1024,
         copy_chunk_bytes=4,
     )
@@ -59,7 +63,6 @@ def test_local_input_is_streamed_and_hashed(tmp_path: Path) -> None:
 def test_selected_local_input_never_falls_back_to_remote(tmp_path: Path) -> None:
     layout = StagingLayout.for_task(tmp_path / "staging", uuid.uuid4())
     resolver = InputResolver(
-        input_roots=(tmp_path / "input",),
         max_input_bytes=1024,
     )
 
@@ -72,7 +75,7 @@ def test_selected_local_input_never_falls_back_to_remote(tmp_path: Path) -> None
             layout,
         )
 
-    assert captured.value.code is ExtractionErrorCode.INPUT_NOT_FOUND
+    assert captured.value.code is ExtractionErrorCode.INPUT_ACCESS_FAILED
 
 
 def test_input_larger_than_limit_leaves_no_complete_or_partial_source(
@@ -83,7 +86,6 @@ def test_input_larger_than_limit_leaves_no_complete_or_partial_source(
     source.write_bytes(b"12345")
     layout = StagingLayout.for_task(tmp_path / "staging", uuid.uuid4())
     resolver = InputResolver(
-        input_roots=(source.parent,),
         max_input_bytes=4,
         copy_chunk_bytes=2,
     )
@@ -95,20 +97,18 @@ def test_input_larger_than_limit_leaves_no_complete_or_partial_source(
     assert not list(layout.source.parent.glob("*"))
 
 
-def test_local_path_is_revalidated_against_worker_allowlist(tmp_path: Path) -> None:
+def test_local_path_is_revalidated_by_worker_access(tmp_path: Path) -> None:
     source = tmp_path / "outside" / "sample.txt"
     source.parent.mkdir()
     source.write_text("content", encoding="utf-8")
     layout = StagingLayout.for_task(tmp_path / "staging", uuid.uuid4())
     resolver = InputResolver(
-        input_roots=(tmp_path / "allowed",),
         max_input_bytes=1024,
     )
 
-    with pytest.raises(ExtractionProcessingError) as captured:
-        resolver.resolve(make_task(local_path=str(source)), layout)
+    resolved = resolver.resolve(make_task(local_path=str(source)), layout)
 
-    assert captured.value.code is ExtractionErrorCode.INPUT_ACCESS_FAILED
+    assert resolved.path.read_text(encoding="utf-8") == "content"
 
 
 def test_http_redirect_is_revalidated_before_following(tmp_path: Path) -> None:
@@ -128,7 +128,6 @@ def test_http_redirect_is_revalidated_before_following(tmp_path: Path) -> None:
         )
 
     resolver = InputResolver(
-        input_roots=(),
         max_input_bytes=1024,
         remote_url_validator=validate_url,
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
@@ -153,7 +152,6 @@ def test_http_redirect_is_revalidated_before_following(tmp_path: Path) -> None:
 
 def test_s3_bucket_must_be_in_worker_allowlist(tmp_path: Path) -> None:
     resolver = InputResolver(
-        input_roots=(),
         max_input_bytes=1024,
         allowed_s3_buckets=("approved",),
     )
@@ -193,7 +191,6 @@ def test_s3_storage_options_are_passed_to_fsspec(
         filesystem,
     )
     resolver = InputResolver(
-        input_roots=(),
         max_input_bytes=1024,
         allowed_s3_buckets=("approved",),
         s3_storage_options={
@@ -225,7 +222,6 @@ def test_s3_storage_options_are_passed_to_fsspec(
 
 def test_remote_uri_must_not_contain_credentials(tmp_path: Path) -> None:
     resolver = InputResolver(
-        input_roots=(),
         max_input_bytes=1024,
         remote_url_validator=lambda url: url,
     )
@@ -259,7 +255,6 @@ def test_matching_staged_input_is_reused_without_reopening_source(
     staged.write_bytes(content)
     source.unlink()
     resolver = InputResolver(
-        input_roots=(source.parent,),
         max_input_bytes=1024,
     )
 

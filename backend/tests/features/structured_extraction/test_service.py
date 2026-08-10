@@ -79,8 +79,6 @@ def make_request_and_policy(
         targetPath=str(output_root / "sample.md"),
     )
     policy = RequestPolicy(
-        input_roots=(input_root,),
-        output_roots=(output_root,),
         allowed_http_hosts=(),
         allowed_http_cidrs=(),
         max_input_bytes=1024,

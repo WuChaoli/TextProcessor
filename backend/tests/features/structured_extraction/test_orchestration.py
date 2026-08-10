@@ -1,4 +1,3 @@
-import json
 import uuid
 from collections.abc import Callable, Generator
 from datetime import timedelta
@@ -179,6 +178,7 @@ def make_orchestrator(
     slots: ProcessorSlotRepository | ForbiddenSlots | None = None,
     production_formats: tuple[str, ...] = ("pdf", "text"),
 ) -> ExtractionOrchestrator:
+    del input_root
     return ExtractionOrchestrator(
         session,
         worker_settings=ExtractionWorkerSettings(
@@ -190,7 +190,6 @@ def make_orchestrator(
             poll_lease_seconds=20,
             mineru_max_in_flight_tasks=1,
         ),
-        input_roots=(input_root,),
         max_input_bytes=1024 * 1024,
         scheduler=scheduler,
         adapter_factory=adapter_factory,
@@ -234,34 +233,125 @@ def test_submit_processes_plain_text_without_external_adapter_or_slot(
     assert task.lease_expires_at is None
     assert task.processor_name == ProcessorName.PLAIN_TEXT
     assert target.read_text(encoding="utf-8") == "标题\n\n正文\n"
-    manifest = json.loads((target.parent / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest == {
-        "schemaVersion": 1,
-        "taskId": str(task.id),
-        "detectedFormat": "text",
-        "inputSha256": task.input_sha256,
-        "output": {
-            "path": str(target),
-            "sha256": task.output_sha256,
-            "sizeBytes": target.stat().st_size,
-        },
-        "processor": {
-            "name": "plain_text",
-            "version": "builtin",
-            "profile": "text-pass-through",
-            "profileSha256": task.profile_sha256,
-        },
-        "routing": {"reasons": ["fixed_route=text"]},
-        "publication": {
-            "atomicFilePublish": True,
-            "manifestPath": str(target.parent / "manifest.json"),
-        },
-    }
+    assert not (target.parent / "manifest.json").exists()
+    assert not (staging_root / str(task.id)).exists()
     assert task.result_metadata is not None
-    assert task.result_metadata["manifest_path"] == str(target.parent / "manifest.json")
-    assert task.result_metadata["manifest_sha256"]
+    assert task.result_metadata == {
+        "target_path": str(target),
+        "output_size_bytes": target.stat().st_size,
+    }
     assert scheduler.submit_calls == []
     assert scheduler.poll_calls == []
+
+
+def test_two_plain_text_tasks_publish_different_targets_in_same_directory(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    input_root.mkdir()
+    output_root.mkdir()
+    source = input_root / "note.txt"
+    source.write_text("same directory\n", encoding="utf-8")
+    tasks = [
+        make_task(source=source, target=output_root / f"{index}.md")
+        for index in (1, 2)
+    ]
+    session.add_all(tasks)
+    session.commit()
+    orchestrator = make_orchestrator(
+        session,
+        input_root=input_root,
+        output_root=output_root,
+        staging_root=staging_root,
+        scheduler=RecordingScheduler(),
+        adapter_factory=lambda _processor: (_ for _ in ()).throw(AssertionError()),
+        slots=ForbiddenSlots(),
+    )
+
+    for task in tasks:
+        orchestrator.submit(task.id)
+        session.refresh(task)
+
+    assert [task.status for task in tasks] == [
+        ExtractionTaskStatus.SUCCEEDED,
+        ExtractionTaskStatus.SUCCEEDED,
+    ]
+    assert (output_root / "1.md").read_text(encoding="utf-8") == "same directory\n"
+    assert (output_root / "2.md").read_text(encoding="utf-8") == "same directory\n"
+    assert not (output_root / "manifest.json").exists()
+
+
+def test_failed_plain_text_task_cleans_private_staging(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    input_root.mkdir()
+    output_root.mkdir()
+    source = input_root / "empty.txt"
+    source.write_text("", encoding="utf-8")
+    task = make_task(source=source, target=output_root / "empty.md")
+    session.add(task)
+    session.commit()
+
+    make_orchestrator(
+        session,
+        input_root=input_root,
+        output_root=output_root,
+        staging_root=staging_root,
+        scheduler=RecordingScheduler(),
+        adapter_factory=lambda _processor: (_ for _ in ()).throw(AssertionError()),
+        slots=ForbiddenSlots(),
+    ).submit(task.id)
+
+    session.refresh(task)
+    assert task.status is ExtractionTaskStatus.FAILED
+    assert task.staging_path is None
+    assert not (staging_root / str(task.id)).exists()
+
+
+def test_recover_cleans_terminal_staging_left_by_worker_crash(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    input_root = tmp_path / "input"
+    output_root = tmp_path / "output"
+    staging_root = tmp_path / "staging"
+    input_root.mkdir()
+    output_root.mkdir()
+    task = make_task(
+        source=input_root / "unused.txt",
+        target=output_root / "done.md",
+        status=ExtractionTaskStatus.SUCCEEDED,
+        staging_path=str(staging_root / "placeholder"),
+        finished_at=get_datetime_utc(),
+    )
+    task.staging_path = str(staging_root / str(task.id))
+    session.add(task)
+    session.commit()
+    task_root = staging_root / str(task.id)
+    task_root.mkdir(parents=True)
+    (task_root / "manifest.json").write_text("{}\n", encoding="utf-8")
+    orchestrator = make_orchestrator(
+        session,
+        input_root=input_root,
+        output_root=output_root,
+        staging_root=staging_root,
+        scheduler=RecordingScheduler(),
+        adapter_factory=lambda _processor: (_ for _ in ()).throw(AssertionError()),
+    )
+
+    recovered = orchestrator.recover()
+
+    session.refresh(task)
+    assert recovered == 1
+    assert task.staging_path is None
+    assert not task_root.exists()
 
 
 def test_worker_stages_remote_http_input_through_request_policy(
@@ -284,8 +374,6 @@ def test_worker_stages_remote_http_input_through_request_policy(
     session.add(task)
     session.commit()
     policy = RequestPolicy(
-        input_roots=(),
-        output_roots=(output_root,),
         allowed_http_hosts=("files.internal",),
         allowed_http_cidrs=("10.20.0.0/16",),
         max_input_bytes=1024,
@@ -303,7 +391,6 @@ def test_worker_stages_remote_http_input_through_request_policy(
             output_roots=(output_root,),
             production_formats=("text",),
         ),
-        input_roots=(),
         max_input_bytes=1024,
         remote_url_validator=policy.validate_remote_url,
         http_client=httpx.Client(transport=httpx.MockTransport(response)),
@@ -364,7 +451,6 @@ def test_worker_passes_s3_configuration_to_input_resolver(
             s3_access_key_id="access-key",
             s3_secret_access_key="secret-key",
         ),
-        input_roots=(),
         max_input_bytes=1024,
     )
 
@@ -816,7 +902,6 @@ def test_submit_retry_exhaustion_fails_and_quarantines_slot(
             output_roots=(output_root,),
             production_formats=("pdf",),
         ),
-        input_roots=(input_root,),
         max_input_bytes=1024 * 1024,
     )
 

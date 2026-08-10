@@ -1,12 +1,13 @@
 import ipaddress
+import os
 import socket
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from app.core.config import Settings
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.structured_extraction.errors import (
     ExtractionDomainError,
     ExtractionErrorCode,
@@ -41,23 +42,16 @@ def _system_resolver(host: str, port: int) -> tuple[str, ...]:
     )
 
 
-def _is_under(path: Path, roots: Sequence[Path]) -> bool:
-    return any(path.is_relative_to(root) for root in roots)
-
-
 class RequestPolicy:
     def __init__(
         self,
         *,
-        input_roots: Sequence[Path],
-        output_roots: Sequence[Path],
         allowed_http_hosts: Sequence[str],
         allowed_http_cidrs: Sequence[str],
         max_input_bytes: int,
         resolver: AddressResolver = _system_resolver,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
-        self._input_roots = tuple(root.resolve(strict=False) for root in input_roots)
-        self._output_roots = tuple(root.resolve(strict=False) for root in output_roots)
         self._allowed_http_hosts = frozenset(
             host.rstrip(".").lower() for host in allowed_http_hosts
         )
@@ -66,6 +60,7 @@ class RequestPolicy:
         )
         self._max_input_bytes = max_input_bytes
         self._resolver = resolver
+        self._local_paths = local_paths or LocalPathAccessPolicy()
 
     def validate_request(
         self,
@@ -91,56 +86,38 @@ class RequestPolicy:
         )
 
     def validate_local_input(self, raw_path: str) -> str:
-        path = Path(raw_path)
         try:
-            resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError) as exc:
+            resolved = self._local_paths.preflight_input(raw_path)
+            with self._local_paths.open_regular_input(resolved) as source:
+                size_bytes = os.fstat(source.fileno()).st_size
+        except LocalPathAccessError:
             raise self._path_error(
-                ExtractionErrorCode.INPUT_PATH_NOT_ALLOWED,
-                "输入文件不存在或不可访问",
-            ) from exc
-        if (
-            not path.is_absolute()
-            or not resolved.is_file()
-            or not _is_under(resolved, self._input_roots)
-        ):
+                ExtractionErrorCode.INPUT_ACCESS_FAILED,
+                "输入文件访问失败",
+            ) from None
+        if size_bytes > self._max_input_bytes:
             raise self._path_error(
-                ExtractionErrorCode.INPUT_PATH_NOT_ALLOWED,
-                "输入文件不在允许目录内",
-            )
-        try:
-            too_large = resolved.stat().st_size > self._max_input_bytes
-        except OSError as exc:
-            raise self._path_error(
-                ExtractionErrorCode.INPUT_PATH_NOT_ALLOWED,
-                "无法读取输入文件信息",
-            ) from exc
-        if too_large:
-            raise self._path_error(
-                ExtractionErrorCode.INPUT_PATH_NOT_ALLOWED,
+                ExtractionErrorCode.INPUT_TOO_LARGE,
                 "输入文件超过大小限制",
             )
         return str(resolved)
 
     def validate_output_path(self, raw_path: str) -> str:
-        path = Path(raw_path)
-        if not path.is_absolute() or path.suffix.lower() != ".md":
-            raise self._path_error(
-                ExtractionErrorCode.OUTPUT_PATH_NOT_ALLOWED,
-                "目标路径必须是允许目录内的绝对 Markdown 文件路径",
-            )
         try:
-            resolved = path.resolve(strict=False)
-        except (OSError, RuntimeError) as exc:
-            raise self._path_error(
-                ExtractionErrorCode.OUTPUT_PATH_NOT_ALLOWED,
-                "目标路径不可用",
-            ) from exc
-        if not _is_under(resolved, self._output_roots):
-            raise self._path_error(
-                ExtractionErrorCode.OUTPUT_PATH_NOT_ALLOWED,
-                "目标路径不在允许目录内",
+            resolved = self._local_paths.preflight_output(
+                raw_path,
+                suffixes=frozenset({".md"}),
             )
+        except LocalPathAccessError as error:
+            code = (
+                ExtractionErrorCode.INVALID_REQUEST
+                if error.reason in {"not_absolute", "unsupported_suffix"}
+                else ExtractionErrorCode.OUTPUT_ACCESS_FAILED
+            )
+            raise self._path_error(
+                code,
+                "目标路径不可用",
+            ) from None
         return str(resolved)
 
     def validate_remote_url(self, raw_url: str) -> str:
@@ -211,8 +188,6 @@ def validate_request_policy(
     settings: Settings,
 ) -> ValidatedExtractionRequest:
     return RequestPolicy(
-        input_roots=settings.EXTRACTION_INPUT_ROOTS,
-        output_roots=settings.EXTRACTION_OUTPUT_ROOTS,
         allowed_http_hosts=settings.EXTRACTION_HTTP_ALLOWED_HOSTS,
         allowed_http_cidrs=settings.EXTRACTION_HTTP_ALLOWED_CIDRS,
         max_input_bytes=settings.EXTRACTION_MAX_INPUT_BYTES,

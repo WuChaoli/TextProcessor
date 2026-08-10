@@ -260,6 +260,47 @@ class ExtractionTaskRepository:
         )
         return list(self._session.exec(statement).all())
 
+    def list_terminal_with_staging(self, *, limit: int) -> list[ExtractionTask]:
+        statement = (
+            select(ExtractionTask)
+            .where(
+                col(ExtractionTask.status).in_(
+                    (
+                        ExtractionTaskStatus.SUCCEEDED,
+                        ExtractionTaskStatus.FAILED,
+                        ExtractionTaskStatus.CANCELLED,
+                    )
+                ),
+                col(ExtractionTask.staging_path).is_not(None),
+            )
+            .order_by(col(ExtractionTask.finished_at), col(ExtractionTask.id))
+            .limit(limit)
+        )
+        return list(self._session.exec(statement).all())
+
+    def clear_terminal_staging(self, task_id: uuid.UUID) -> bool:
+        statement = (
+            update(ExtractionTask)
+            .where(
+                col(ExtractionTask.id) == task_id,
+                col(ExtractionTask.status).in_(
+                    (
+                        ExtractionTaskStatus.SUCCEEDED,
+                        ExtractionTaskStatus.FAILED,
+                        ExtractionTaskStatus.CANCELLED,
+                    )
+                ),
+                col(ExtractionTask.staging_path).is_not(None),
+            )
+            .values(staging_path=None, updated_at=get_datetime_utc())
+        )
+        result = self._session.exec(statement)
+        if not isinstance(result, CursorResult) or result.rowcount != 1:
+            self._session.rollback()
+            return False
+        self._session.commit()
+        return True
+
     def mark_dispatched(
         self,
         task_id: uuid.UUID,

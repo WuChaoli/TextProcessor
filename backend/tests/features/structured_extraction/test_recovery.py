@@ -88,7 +88,6 @@ def make_orchestrator(
             recovery_batch_size=1,
             slot_quarantine_grace_seconds=slot_quarantine_grace_seconds,
         ),
-        input_roots=(input_root,),
         max_input_bytes=1024,
         scheduler=scheduler,
         adapter_factory=unavailable_adapter,

@@ -7,24 +7,31 @@
 Docling 以容器运行，只绑定回环地址或经批准的内网地址。真实凭据只写入生产运行时
 环境文件，不写入 Git、命令行参数或验收报告。
 
+本地输入和输出不使用应用层 roots allowlist。API 与 Task Runner 必须以同一专用非 root
+账号运行，由文件权限、ACL 以及 systemd 的 `ProtectSystem`、`ProtectHome`、
+`ReadOnlyPaths`、`ReadWritePaths`、`InaccessiblePaths` 决定可访问范围。发布前必须同时
+验证受控业务目录可读写、敏感目录不可访问；不得通过改为 root 或放宽整个文件系统解决
+单个业务目录的权限问题。旧的 `*_INPUT_ROOTS`、`*_OUTPUT_ROOTS` 环境变量应从生产环境
+文件删除，避免形成无效配置的安全错觉。
+
 ## 当前运行清单与启停入口
 
-以下为 2026-08-07 在 `star-SYS-4029GP-TRT`（137）的已验证快照。服务器项目根目录为
+以下为 2026-08-10 在 `star-SYS-4029GP-TRT`（137）的已验证快照。服务器项目根目录为
 `/shineData/text_processor`。进程、容器 ID 和监听状态会变化，执行启停前必须先运行本节
 “状态检查”，不得只依据快照操作。
 
 | 组件 | 管理入口 | 当前地址或依赖 | 配置来源 | 生命周期边界 |
 |---|---|---|---|---|
 | TextProcessor API | `textprocessor-api.service` | `0.0.0.0:18100` | `/shineData/text_processor/.env` | 本项目管理 |
-| Task Runner、Celery worker/beat | `textprocessor-task-runner.service` | Redis DB 0；在 API 之后启动 | `/shineData/text_processor/.env` | 本项目管理 |
+| Task Runner、结构化提取 worker/beat | `textprocessor-task-runner.service` | Redis DB 0；在 API 之后启动 | `/shineData/text_processor/.env` | 本项目管理 |
+| 文本分类 worker | `textprocessor-classification-worker.service` | Redis DB 0；在 API 之后启动 | `/shineData/text_processor/.env` | 本项目管理 |
+| Markdown 清洗 worker | `textprocessor-markdown-worker.service` | Redis DB 0；在 API 之后启动 | `/shineData/text_processor/.env` | 本项目管理 |
 | PostgreSQL | 容器 `tp-source-db`，镜像 `postgres:17.6-alpine` | `127.0.0.1:55434 -> 5432` | 既有容器配置 | 本项目数据依赖 |
 | Redis | 容器 `tp-source-redis`，镜像 `redis:8.2.1` | `127.0.0.1:56380 -> 6379`；网络 `bridge`、`tp-processors` | 既有容器配置 | Celery 与 Docling 共用，数据库编号隔离 |
 | Docling API 与 RQ worker | 容器 `tp-docling`，镜像 `textprocessor/docling-service:tp-0.1.1` | `127.0.0.1:5001`；Redis DB 1；网络 `tp-processors` | `runtime/docling.env` | 本项目管理 |
 | MinerU | 容器 `mineru-api`，镜像 `mineru:latest` | `0.0.0.0:8001 -> 8000` | MinerU 独立部署 | 外部服务，默认只检查、不随本项目启停 |
 
-两个 systemd unit 文件分别为
-`/etc/systemd/system/textprocessor-api.service` 和
-`/etc/systemd/system/textprocessor-task-runner.service`，均要求 `/shineData` 已挂载并在
+四个 systemd unit 文件位于 `/etc/systemd/system/`，名称与上表一致，均要求 `/shineData` 已挂载并在
 `docker.service`、`network-online.target` 之后启动。PostgreSQL、Redis 的 restart policy
 为 `unless-stopped`；Docling 为 `always`。restart policy 不替代启停后的健康检查。
 
@@ -32,7 +39,8 @@ Docling 以容器运行，只绑定回环地址或经批准的内网地址。真
 
 ```bash
 cd /shineData/text_processor
-systemctl status textprocessor-api.service textprocessor-task-runner.service --no-pager
+systemctl status textprocessor-api.service textprocessor-task-runner.service \
+  textprocessor-classification-worker.service textprocessor-markdown-worker.service --no-pager
 docker ps --filter name=tp-source-db --filter name=tp-source-redis \
   --filter name=tp-docling --filter name=mineru-api
 docker inspect tp-docling --format '{{.State.Status}} {{.State.Health.Status}} retries={{.RestartCount}}'
@@ -54,9 +62,11 @@ docker start tp-source-db tp-source-redis
 docker start tp-docling
 systemctl start textprocessor-api.service
 systemctl start textprocessor-task-runner.service
+systemctl start textprocessor-classification-worker.service
+systemctl start textprocessor-markdown-worker.service
 ```
 
-启动后必须执行状态检查，确认两个 unit 为 `active (running)`、Docling 为 `healthy`，
+启动后必须执行状态检查，确认四个 unit 为 `active (running)`、Docling 为 `healthy`，
 MinerU 与 Docling 健康请求成功。MinerU 默认不在这组命令内；仅在明确确认其独立部署
 边界并获得对应授权后，才单独执行 `docker start mineru-api`。
 
@@ -66,6 +76,8 @@ MinerU 与 Docling 健康请求成功。MinerU 默认不在这组命令内；仅
 
 ```bash
 systemctl stop textprocessor-task-runner.service
+systemctl stop textprocessor-classification-worker.service
+systemctl stop textprocessor-markdown-worker.service
 systemctl stop textprocessor-api.service
 ```
 
@@ -84,8 +96,11 @@ MinerU 是外部服务，不随上述命令停止。不要使用 `docker compose
 
 - 只修改结构化提取 worker 配置或 worker 代码：
   `systemctl restart textprocessor-task-runner.service`。
+- 修改文本分类或 Markdown 清洗 worker：分别重启
+  `textprocessor-classification-worker.service` 或 `textprocessor-markdown-worker.service`。
 - 修改 API 代码或 API 消费的配置：先重启
-  `textprocessor-api.service`，再重启 `textprocessor-task-runner.service`。
+  `textprocessor-api.service`，再按变更范围重启对应 worker；共享代码或共享路径策略变化时
+  重启全部三个 worker unit。
 - 只维护 Docling：`docker restart tp-docling`，等待其恢复 `healthy` 后再接收新任务。
 - PostgreSQL 或 Redis 只在明确诊断需要时单独重启；重启前先检查运行中任务和队列，
   重启后验证数据库连接、Celery 队列和任务恢复。
@@ -146,14 +161,14 @@ EXTRACTION_WORKER__PRODUCTION_FORMATS=["text","markdown","json","xml","yaml","cs
 - MinerU：复杂视觉 DOCX。
 
 每项记录 task ID、最终状态、detected format、processor、路由理由、耗时、重试、
-结果摘要、内容断言和 manifest。PNG/JPG 必须是独立任务；DOCX 必须覆盖两个路由。
+结果摘要和内容断言。PNG/JPG 必须是独立任务；DOCX 必须覆盖两个路由。
 报告不复制完整正文。测试失败保持格式开放，只报告失败阶段和建议，由用户决定是否
 收紧。
 
-每个 `targetPath` 所在目录只承载一个结构化提取任务。成功发布后包含目标 Markdown
-和同目录 `manifest.json`；manifest 记录 task、输入/输出摘要、格式、processor、
-profile、路由理由和发布路径。Markdown 与 manifest 分别通过同目录独占临时文件原子
-发布，恢复时只接受摘要完全一致的已有文件。Docling 提交必须显式携带输入格式及正确
+每个任务在内部 staging 中使用独立 `manifest.json`，该文件只服务于非终态恢复，进入
+终态后清理且不发布到 `targetPath` 所在目录。成功时只原子发布目标 Markdown；同一目录
+可承载不同 `targetPath`，只有目标文件本身已存在且摘要不符合本任务恢复条件时才冲突。
+恢复时只接受摘要完全一致的已有文件。Docling 提交必须显式携带输入格式及正确
 MIME；EPUB 使用 `application/epub+zip`，且验收 EPUB 的 `mimetype` 必须是 ZIP 中
 首个、不压缩的条目。
 

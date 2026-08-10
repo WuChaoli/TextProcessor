@@ -44,7 +44,7 @@ text,markdown,json,xml,yaml,csv,tsv,pdf,image,pptx,xlsx,docx,html,epub
                     -> 普通文档 -> Docling
                     -> 复杂视觉文档 -> MinerU
   -> Markdown 规范化和结果校验
-  -> 原子发布 Markdown 与 manifest.json
+  -> 原子发布 Markdown；manifest 仅保留在非终态任务的私有 staging
 ```
 
 MinerU 作为 TextProcessor 之外的既有服务，只消费其 API，不加入 TextProcessor Compose、启停脚本或回滚动作。Docling 使用仓库固定的镜像定义在 137 以容器方式部署，只允许本机或受控内网访问。处理器地址、认证、超时和 profile 通过 137 的 systemd 环境配置注入，不提交真实凭据。
@@ -83,7 +83,7 @@ MinerU 分别执行 PDF、PNG、JPG、PPTX 的提交、轮询、结果下载和�
 - 实际 detected format、processor 和路由理由；
 - 处理耗时与重试次数；
 - `targetPath`、最终 Markdown 摘要和内容断言结果；
-- `manifest.json` 的格式、摘要、processor/profile 和发布信息；
+- PostgreSQL 结果摘要、processor/profile 和发布信息；
 - CPU、GPU、内存、临时磁盘、Celery 队列和 processor slot 的必要观测。
 
 DOCX 必须覆盖普通 Docling 分支和复杂视觉 MinerU 分支。业务层结果必须为 `succeeded`，且结果经过原子发布；只验证外部处理器成功不足以证明生产链路完成。
@@ -115,7 +115,7 @@ Docling 服务回滚仅停止本次部署的 Docling 并恢复对应 TextProcess
 - 完整 production allowlist 已由运行中的 worker 加载；
 - 生产接口开始接受 PDF、PNG、JPG、PPTX、XLSX、DOCX、HTML 和 EPUB；
 - 八种格式以及 DOCX 双路由均有独立任务、处理器、耗时和结果证据；
-- 最终 Markdown 非空且命中预设内容，`manifest.json` 与实际处理一致；
+- 最终 Markdown 非空且命中预设内容，数据库结果摘要与实际文件一致；
 - 验收报告列出每种格式的结果、资源数据、失败阶段和保持开放或建议收紧意见；
 - 测试失败时保持开放，是否收紧由用户决定；
 - 未泄露凭据、完整业务正文或其他敏感信息。

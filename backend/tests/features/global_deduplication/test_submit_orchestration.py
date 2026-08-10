@@ -31,6 +31,12 @@ from app.features.global_deduplication.state_machine import (
 from app.features.global_deduplication.task_models import GlobalDeduplicationTask
 from app.models import User  # noqa: F401
 
+
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """编排单测使用文件内构造的 SQLite，不依赖全局 PostgreSQL。"""
+
+
 NOW = datetime(2026, 7, 31, 10, 0, tzinfo=UTC)
 
 

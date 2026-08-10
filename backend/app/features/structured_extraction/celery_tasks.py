@@ -1,7 +1,6 @@
 import logging
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Protocol
 
 from celery import Task  # type: ignore[import-untyped]
@@ -91,7 +90,6 @@ def handle_submit_task(
     task_type: str,
     schema_version: int,
     worker_settings: ExtractionWorkerSettings | None = None,
-    input_roots: tuple[Path, ...] | None = None,
     max_input_bytes: int | None = None,
     scheduler: ExtractionTaskScheduler | None = None,
 ) -> None:
@@ -99,7 +97,6 @@ def handle_submit_task(
     _orchestrator(
         session,
         worker_settings=worker_settings,
-        input_roots=input_roots,
         max_input_bytes=max_input_bytes,
         scheduler=scheduler,
     ).submit(parsed_task_id)
@@ -113,7 +110,6 @@ def handle_submit_retry_exhausted(
     schema_version: int,
     error: ExtractionProcessingError,
     worker_settings: ExtractionWorkerSettings | None = None,
-    input_roots: tuple[Path, ...] | None = None,
     max_input_bytes: int | None = None,
     scheduler: ExtractionTaskScheduler | None = None,
 ) -> None:
@@ -121,7 +117,6 @@ def handle_submit_retry_exhausted(
     _orchestrator(
         session,
         worker_settings=worker_settings,
-        input_roots=input_roots,
         max_input_bytes=max_input_bytes,
         scheduler=scheduler,
     ).fail_exhausted_submission_retry(parsed_task_id, error)
@@ -134,7 +129,6 @@ def handle_poll_task(
     task_type: str,
     schema_version: int,
     worker_settings: ExtractionWorkerSettings | None = None,
-    input_roots: tuple[Path, ...] | None = None,
     max_input_bytes: int | None = None,
     scheduler: ExtractionTaskScheduler | None = None,
 ) -> None:
@@ -142,7 +136,6 @@ def handle_poll_task(
     _orchestrator(
         session,
         worker_settings=worker_settings,
-        input_roots=input_roots,
         max_input_bytes=max_input_bytes,
         scheduler=scheduler,
     ).poll(parsed_task_id)
@@ -153,14 +146,12 @@ def handle_recover_task(
     *,
     now: datetime | None = None,
     worker_settings: ExtractionWorkerSettings | None = None,
-    input_roots: tuple[Path, ...] | None = None,
     max_input_bytes: int | None = None,
     scheduler: ExtractionTaskScheduler | None = None,
 ) -> int:
     return _orchestrator(
         session,
         worker_settings=worker_settings,
-        input_roots=input_roots,
         max_input_bytes=max_input_bytes,
         scheduler=scheduler,
     ).recover(now=now)
@@ -244,14 +235,12 @@ def _orchestrator(
     session: Session,
     *,
     worker_settings: ExtractionWorkerSettings | None,
-    input_roots: tuple[Path, ...] | None,
     max_input_bytes: int | None,
     scheduler: ExtractionTaskScheduler | None,
 ) -> ExtractionOrchestrator:
     return ExtractionOrchestrator(
         session,
         worker_settings=worker_settings or settings.EXTRACTION_WORKER,
-        input_roots=input_roots or tuple(settings.EXTRACTION_INPUT_ROOTS),
         max_input_bytes=max_input_bytes or settings.EXTRACTION_MAX_INPUT_BYTES,
         scheduler=scheduler or CeleryOrchestrationScheduler(),
     )

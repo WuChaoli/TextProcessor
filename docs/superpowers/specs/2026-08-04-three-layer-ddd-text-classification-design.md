@@ -314,7 +314,7 @@ Content-Type: application/json
 - 两者同时提供时固定使用 `fileStoragePath`。
 - 本地文件失败时不回退到 `fileOssUrl`。
 - 只允许 UTF-8 `.txt`、`.md`。
-- 本地文件必须位于配置的输入根目录 allowlist。
+- 本地文件必须是运行账号实际可打开的普通文件；自 2026-08-10 起不再使用应用层输入 roots allowlist。
 - HTTP URL 必须通过 scheme、host、CIDR、大小和超时 allowlist，且不能携带凭据。
 
 成功分类：

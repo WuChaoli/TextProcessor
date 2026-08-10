@@ -123,7 +123,6 @@ try {
 
     $workerSettings = @{
         staging_root = $stagingRoot
-        output_roots = @($outputRoot)
         queue_lease_seconds = 5
         queue_recovery_interval_seconds = 1
         queue_recovery_batch_size = 20
@@ -142,8 +141,6 @@ try {
     $env:SECRET_KEY = "stack-$runId-secret-key-with-at-least-32-bytes"
     $env:FIRST_SUPERUSER = "stack-$runId@example.com"
     $env:FIRST_SUPERUSER_PASSWORD = "Stack-$runId-Passw0rd!"
-    $env:MARKDOWN_CLEANING_INPUT_ROOTS = ConvertTo-Json -Compress -InputObject @($inputRoot)
-    $env:MARKDOWN_CLEANING_OUTPUT_ROOTS = ConvertTo-Json -Compress -InputObject @($outputRoot)
     $env:MARKDOWN_CLEANING_WORKER = $workerSettings
     $env:ENVIRONMENT = "local"
     $env:PYTHONUTF8 = "1"

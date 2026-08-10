@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlsplit
 import fsspec  # type: ignore[import-untyped]
 import httpx
 
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.structured_extraction.errors import (
     ExtractionErrorCode,
     ExtractionProcessingError,
@@ -27,7 +28,6 @@ class InputResolver:
     def __init__(
         self,
         *,
-        input_roots: tuple[Path, ...],
         max_input_bytes: int,
         copy_chunk_bytes: int = 1024 * 1024,
         remote_url_validator: Callable[[str], str] | None = None,
@@ -35,10 +35,10 @@ class InputResolver:
         s3_storage_options: Mapping[str, object] | None = None,
         http_client: httpx.Client | None = None,
         max_http_redirects: int = 3,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
         if max_input_bytes <= 0 or copy_chunk_bytes <= 0 or max_http_redirects < 0:
             raise ValueError("输入大小和复制块大小必须为正数")
-        self._input_roots = tuple(root.resolve(strict=False) for root in input_roots)
         self._max_input_bytes = max_input_bytes
         self._copy_chunk_bytes = copy_chunk_bytes
         self._remote_url_validator = remote_url_validator
@@ -46,6 +46,7 @@ class InputResolver:
         self._s3_storage_options = dict(s3_storage_options or {})
         self._http_client = http_client or httpx.Client(follow_redirects=False)
         self._max_http_redirects = max_http_redirects
+        self._local_paths = local_paths or LocalPathAccessPolicy()
 
     def resolve(
         self,
@@ -111,21 +112,12 @@ class InputResolver:
         source_path: Path,
         layout: StagingLayout,
     ) -> ResolvedInput:
-        normalized = source_path.resolve(strict=False)
-        if not any(
-            normalized == root or root in normalized.parents
-            for root in self._input_roots
-        ):
-            raise self._access_error()
-        if not normalized.is_file():
-            raise ExtractionProcessingError(
-                ExtractionErrorCode.INPUT_NOT_FOUND,
-                "输入文件不存在",
-            )
-        filesystem = fsspec.filesystem("file")
         try:
-            with filesystem.open(str(normalized), "rb") as source:
+            normalized = self._local_paths.preflight_input(str(source_path))
+            with self._local_paths.open_regular_input(normalized) as source:
                 return self._copy(source, normalized.suffix, layout)
+        except LocalPathAccessError:
+            raise self._access_error() from None
         except ExtractionProcessingError:
             raise
         except OSError:

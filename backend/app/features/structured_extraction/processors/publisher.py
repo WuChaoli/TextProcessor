@@ -5,6 +5,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.structured_extraction.errors import (
     ExtractionErrorCode,
     ExtractionProcessingError,
@@ -31,14 +32,14 @@ class AtomicPublisher:
         self,
         *,
         max_output_bytes: int,
-        output_roots: tuple[Path, ...],
         copy_chunk_bytes: int = 1024 * 1024,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
-        if max_output_bytes <= 0 or copy_chunk_bytes <= 0 or not output_roots:
-            raise ValueError("发布大小、复制块和输出根目录配置无效")
+        if max_output_bytes <= 0 or copy_chunk_bytes <= 0:
+            raise ValueError("发布大小和复制块配置无效")
         self._max_output_bytes = max_output_bytes
         self._copy_chunk_bytes = copy_chunk_bytes
-        self._output_roots = tuple(root.resolve(strict=False) for root in output_roots)
+        self._local_paths = local_paths or LocalPathAccessPolicy()
         self._publish_lock = threading.Lock()
 
     def prepare(self, source: Path) -> PreparedOutput:
@@ -60,11 +61,8 @@ class AtomicPublisher:
         )
 
     def ensure_target_available(self, target: Path) -> Path:
-        normalized_target = target.resolve(strict=False)
-        self._validate_target(normalized_target)
-        if normalized_target.exists() or (
-            normalized_target.parent / "manifest.json"
-        ).exists():
+        normalized_target = self._validate_target(target)
+        if normalized_target.exists():
             raise output_conflict()
         return normalized_target
 
@@ -80,22 +78,6 @@ class AtomicPublisher:
                 prepared,
                 target,
                 allow_recovery=allow_recovery,
-                manifest=False,
-            )
-
-    def publish_manifest(
-        self,
-        prepared: PreparedOutput,
-        target: Path,
-        *,
-        allow_recovery: bool = False,
-    ) -> PublishedOutput:
-        with self._publish_lock:
-            return self._publish_locked(
-                prepared,
-                target,
-                allow_recovery=allow_recovery,
-                manifest=True,
             )
 
     def _publish_locked(
@@ -104,17 +86,14 @@ class AtomicPublisher:
         target: Path,
         *,
         allow_recovery: bool,
-        manifest: bool,
     ) -> PublishedOutput:
-        normalized_target = target.resolve(strict=False)
-        self._validate_target(normalized_target, manifest=manifest)
+        normalized_target = self._validate_target(target)
         if normalized_target.exists():
             return self._resolve_existing(
                 prepared,
                 normalized_target,
                 allow_recovery=allow_recovery,
             )
-        normalized_target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = normalized_target.parent / f".publish-{uuid.uuid4()}.tmp"
         try:
             self._copy_to_exclusive_temporary(prepared.path, temporary)
@@ -136,7 +115,7 @@ class AtomicPublisher:
                     allow_recovery=allow_recovery,
                 )
             raise ExtractionProcessingError(
-                ExtractionErrorCode.OUTPUT_WRITE_FAILED,
+                ExtractionErrorCode.OUTPUT_ACCESS_FAILED,
                 "结构化提取结果发布失败",
                 transient=True,
             ) from None
@@ -149,22 +128,17 @@ class AtomicPublisher:
             recovered=False,
         )
 
-    def _validate_target(self, target: Path, *, manifest: bool = False) -> None:
-        if (
-            not target.is_absolute()
-            or (
-                target.name != "manifest.json"
-                if manifest
-                else target.suffix.lower() != ".md"
+    def _validate_target(self, target: Path) -> Path:
+        try:
+            return self._local_paths.preflight_output(
+                str(target),
+                suffixes=frozenset({".md"}),
             )
-            or not any(
-                target == root or root in target.parents for root in self._output_roots
-            )
-        ):
+        except LocalPathAccessError:
             raise ExtractionProcessingError(
-                ExtractionErrorCode.OUTPUT_WRITE_FAILED,
-                "目标文件不在允许的输出目录",
-            )
+                ExtractionErrorCode.OUTPUT_ACCESS_FAILED,
+                "目标路径不可用",
+            ) from None
 
     def _copy_to_exclusive_temporary(self, source: Path, temporary: Path) -> None:
         descriptor = os.open(

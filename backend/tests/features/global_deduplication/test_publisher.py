@@ -12,6 +12,11 @@ from app.features.global_deduplication.publisher import FinalResultPublisher
 from app.features.global_deduplication.result_mapper import BusinessResult
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """发布器单测不依赖 PostgreSQL。"""
+
+
 def results() -> tuple[BusinessResult, ...]:
     return (
         BusinessResult(
@@ -27,6 +32,7 @@ def test_publisher_writes_clean_json_and_never_overwrites(tmp_path: Path) -> Non
     staging = tmp_path / "staging" / "final-result.json"
     target = tmp_path / "output" / "result.json"
     publisher = FinalResultPublisher()
+    target.parent.mkdir()
 
     prepared = publisher.prepare(results(), staging)
     published = publisher.publish(prepared, target, allow_recovery=False)

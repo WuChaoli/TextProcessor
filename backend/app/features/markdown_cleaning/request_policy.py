@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.markdown_cleaning.api_errors import (
     MarkdownCleaningApiErrorCode,
     MarkdownCleaningDomainError,
@@ -44,14 +45,14 @@ class MarkdownCleaningRequestPolicy:
     def __init__(
         self,
         *,
-        input_roots: Sequence[Path],
-        output_roots: Sequence[Path],
+        input_roots: Sequence[Path] = (),
+        output_roots: Sequence[Path] = (),
         allowed_http_hosts: Sequence[str],
         allowed_http_cidrs: Sequence[str],
         resolver: AddressResolver = _system_resolver,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
-        self._input_roots = tuple(root.resolve(strict=False) for root in input_roots)
-        self._output_roots = tuple(root.resolve(strict=False) for root in output_roots)
+        del input_roots, output_roots
         self._allowed_http_hosts = frozenset(
             host.rstrip(".").lower() for host in allowed_http_hosts
         )
@@ -59,6 +60,7 @@ class MarkdownCleaningRequestPolicy:
             ipaddress.ip_network(cidr) for cidr in allowed_http_cidrs
         )
         self._resolver = resolver
+        self._local_paths = local_paths or LocalPathAccessPolicy()
 
     def validate_request(
         self,
@@ -85,29 +87,22 @@ class MarkdownCleaningRequestPolicy:
         )
 
     def validate_local_input(self, raw_path: str) -> str:
-        path = Path(raw_path)
         try:
-            resolved = path.resolve(strict=True)
-        except OSError, RuntimeError:
-            raise self._input_path_error("输入文件不存在或不可访问") from None
-        if (
-            not path.is_absolute()
-            or not resolved.is_file()
-            or not self._is_under(resolved, self._input_roots)
-        ):
-            raise self._input_path_error("输入文件不在允许目录内")
+            resolved = self._local_paths.preflight_input(raw_path)
+        except LocalPathAccessError:
+            raise self._input_access_error("输入文件访问失败") from None
         return str(resolved)
 
     def validate_output_path(self, raw_path: str) -> str:
-        path = Path(raw_path)
-        if not path.is_absolute() or not self._is_markdown(path):
-            raise self._output_error("目标路径必须是允许目录内的绝对 Markdown 文件路径")
         try:
-            resolved = path.resolve(strict=False)
-        except OSError, RuntimeError:
-            raise self._output_error("目标路径不可用") from None
-        if not self._is_under(resolved, self._output_roots):
-            raise self._output_error("目标路径不在允许目录内")
+            resolved = self._local_paths.preflight_output(
+                raw_path,
+                suffixes=frozenset({".md", ".markdown"}),
+            )
+        except LocalPathAccessError as error:
+            if error.reason in {"not_absolute", "unsupported_suffix"}:
+                raise self._output_error("目标路径必须是绝对 Markdown 文件路径") from None
+            raise self._output_access_error("目标路径不可用") from None
         return str(resolved)
 
     def validate_remote_url(self, raw_url: str) -> str:
@@ -179,8 +174,16 @@ class MarkdownCleaningRequestPolicy:
         return cls._error(MarkdownCleaningApiErrorCode.INPUT_PATH_NOT_ALLOWED, message)
 
     @classmethod
+    def _input_access_error(cls, message: str) -> MarkdownCleaningDomainError:
+        return cls._error(MarkdownCleaningApiErrorCode.INPUT_ACCESS_FAILED, message)
+
+    @classmethod
     def _output_error(cls, message: str) -> MarkdownCleaningDomainError:
         return cls._error(MarkdownCleaningApiErrorCode.OUTPUT_PATH_NOT_ALLOWED, message)
+
+    @classmethod
+    def _output_access_error(cls, message: str) -> MarkdownCleaningDomainError:
+        return cls._error(MarkdownCleaningApiErrorCode.OUTPUT_ACCESS_FAILED, message)
 
     @classmethod
     def _url_error(cls, message: str) -> MarkdownCleaningDomainError:

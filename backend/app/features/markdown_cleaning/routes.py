@@ -37,8 +37,6 @@ router = APIRouter(
 
 def get_markdown_cleaning_request_policy() -> MarkdownCleaningRequestPolicy:
     return MarkdownCleaningRequestPolicy(
-        input_roots=settings.MARKDOWN_CLEANING_INPUT_ROOTS,
-        output_roots=settings.MARKDOWN_CLEANING_OUTPUT_ROOTS,
         allowed_http_hosts=settings.MARKDOWN_CLEANING_HTTP_ALLOWED_HOSTS,
         allowed_http_cidrs=settings.MARKDOWN_CLEANING_HTTP_ALLOWED_CIDRS,
     )

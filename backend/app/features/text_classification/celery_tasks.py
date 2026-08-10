@@ -40,7 +40,10 @@ def execute(session: Session, task_id: uuid.UUID) -> None:
     if task is None:
         return
     try:
-        prepared = ClassificationInputPreparer(staging_root=settings.CLASSIFICATION_STAGING_ROOT, input_roots=tuple(settings.CLASSIFICATION_INPUT_ROOTS), max_input_bytes=settings.CLASSIFICATION_MAX_INPUT_BYTES).prepare(str(task.id), task.input_uri)
+        prepared = ClassificationInputPreparer(
+            staging_root=settings.CLASSIFICATION_STAGING_ROOT,
+            max_input_bytes=settings.CLASSIFICATION_MAX_INPUT_BYTES,
+        ).prepare(str(task.id), task.input_uri)
         result = ClassificationClient(
             base_url=settings.CLASSIFICATION_BASE_URL,
             api_token=settings.CLASSIFICATION_API_TOKEN,

@@ -25,6 +25,11 @@ from app.features.markdown_cleaning.state_machine import MarkdownCleaningTaskSta
 from app.features.markdown_cleaning.task_models import MarkdownCleaningTask
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """输入解析器单测不依赖 PostgreSQL。"""
+
+
 def make_task(
     *,
     local_path: str | None,
@@ -121,27 +126,28 @@ def test_selected_local_failure_never_falls_back_to_remote(tmp_path: Path) -> No
             layout,
         )
 
-    assert captured.value.code is MarkdownInputErrorCode.INPUT_NOT_FOUND
+    assert captured.value.code is MarkdownInputErrorCode.INPUT_ACCESS_FAILED
     assert requested == []
 
 
 @pytest.mark.parametrize("relative", ["../outside.md", "nested/../../outside.md"])
-def test_local_path_escape_is_rejected(tmp_path: Path, relative: str) -> None:
+def test_local_path_outside_configured_root_uses_runtime_access(
+    tmp_path: Path, relative: str
+) -> None:
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "outside.md"
     outside.write_text("outside", encoding="utf-8")
     layout = StagingLayout.for_task(tmp_path / "staging", uuid.uuid4())
 
-    with pytest.raises(MarkdownInputError) as captured:
-        resolver_for(input_roots=(allowed,)).resolve(
-            make_task(local_path=str(allowed / relative)), layout
-        )
+    resolved = resolver_for(input_roots=(allowed,)).resolve(
+        make_task(local_path=str(allowed / relative)), layout
+    )
 
-    assert captured.value.code is MarkdownInputErrorCode.INPUT_ACCESS_FAILED
+    assert resolved.path.read_text(encoding="utf-8") == "outside"
 
 
-def test_symlinked_local_input_escaping_allowlist_is_rejected(tmp_path: Path) -> None:
+def test_symlinked_local_input_uses_resolved_runtime_access(tmp_path: Path) -> None:
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     outside = tmp_path / "outside.md"
@@ -152,13 +158,12 @@ def test_symlinked_local_input_escaping_allowlist_is_rejected(tmp_path: Path) ->
     except OSError:
         pytest.skip("当前环境不允许创建文件符号链接")
 
-    with pytest.raises(MarkdownInputError) as captured:
-        resolver_for(input_roots=(allowed,)).resolve(
-            make_task(local_path=str(link)),
-            StagingLayout.for_task(tmp_path / "staging", uuid.uuid4()),
-        )
+    resolved = resolver_for(input_roots=(allowed,)).resolve(
+        make_task(local_path=str(link)),
+        StagingLayout.for_task(tmp_path / "staging", uuid.uuid4()),
+    )
 
-    assert captured.value.code is MarkdownInputErrorCode.INPUT_ACCESS_FAILED
+    assert resolved.path.read_text(encoding="utf-8") == "outside"
 
 
 @pytest.mark.parametrize("name", ["source.txt", "source.md.exe", "source"])
@@ -550,7 +555,7 @@ def test_local_copy_keeps_reading_the_validated_handle_after_path_replacement(
     assert source.read_bytes() == b"attacker"
 
 
-def test_matching_staged_hash_is_reused_without_reopening_selected_source(
+def test_matching_staged_hash_is_reused_after_selected_source_preflight(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "input" / "source.md"
@@ -561,8 +566,6 @@ def test_matching_staged_hash_is_reused_without_reopening_selected_source(
     layout = StagingLayout.for_task(tmp_path / "staging", uuid.uuid4())
     layout.prepare()
     layout.original_source.write_bytes(content)
-    source.unlink()
-
     resolved = resolver_for(input_roots=(source.parent,)).resolve(
         make_task(local_path=str(source), input_sha256=digest), layout
     )
@@ -627,5 +630,5 @@ def test_stale_staged_hash_is_removed_then_selected_source_failure_is_reported(
             make_task(local_path=str(source), input_sha256="a" * 64), layout
         )
 
-    assert captured.value.code is MarkdownInputErrorCode.INPUT_NOT_FOUND
+    assert captured.value.code is MarkdownInputErrorCode.INPUT_ACCESS_FAILED
     assert not layout.original_source.exists()
