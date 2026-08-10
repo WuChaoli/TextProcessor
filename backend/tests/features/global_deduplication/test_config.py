@@ -6,6 +6,11 @@ from pydantic import ValidationError
 from app.core.config import GlobalDeduplicationWorkerSettings
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """配置单测不依赖 PostgreSQL。"""
+
+
 def test_global_dedup_defaults_are_bounded(tmp_path: Path) -> None:
     value = GlobalDeduplicationWorkerSettings(staging_root=tmp_path)
 

@@ -112,7 +112,7 @@ class BoundedLocalReader:
     def __init__(
         self,
         *,
-        input_roots: tuple[Path, ...],
+        input_roots: tuple[Path, ...] = (),
         chunk_bytes: int,
         local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
@@ -195,7 +195,7 @@ class BoundedUriReader:
     def __init__(
         self,
         *,
-        input_roots: tuple[Path, ...],
+        input_roots: tuple[Path, ...] = (),
         chunk_bytes: int,
         remote_url_validator: Callable[[str], str] | None = None,
         http_client: httpx.Client | None = None,

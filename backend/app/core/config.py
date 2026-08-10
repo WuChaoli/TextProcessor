@@ -51,7 +51,6 @@ class DoclingProfile(BaseModel):
 
 class ExtractionWorkerSettings(BaseModel):
     staging_root: Path = Path("/data/textprocessor/staging")
-    output_roots: tuple[Path, ...] = (Path("/data/textprocessor/output"),)
     copy_chunk_bytes: int = Field(default=1024 * 1024, gt=0)
     max_output_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     connect_timeout_seconds: float = Field(default=10, gt=0)
@@ -90,31 +89,13 @@ class ExtractionWorkerSettings(BaseModel):
     docling_profile: DoclingProfile = Field(default_factory=DoclingProfile)
 
     @model_validator(mode="after")
-    def _normalize_and_validate_roots(self) -> Self:
-        staging_root = self.staging_root.resolve(strict=False)
-        output_roots = tuple(
-            sorted(
-                {path.resolve(strict=False) for path in self.output_roots},
-                key=str,
-            )
-        )
-        if not output_roots:
-            raise ValueError("至少配置一个结构化提取输出根目录")
-        for output_root in output_roots:
-            if (
-                staging_root == output_root
-                or staging_root in output_root.parents
-                or output_root in staging_root.parents
-            ):
-                raise ValueError("结构化提取 staging 与输出根目录不能重叠")
-        self.staging_root = staging_root
-        self.output_roots = output_roots
+    def _normalize_staging_root(self) -> Self:
+        self.staging_root = self.staging_root.resolve(strict=False)
         return self
 
 
 class MarkdownCleaningWorkerSettings(BaseModel):
     staging_root: Path = Path("/data/textprocessor/markdown-cleaning")
-    output_roots: tuple[Path, ...] = (Path("/data/textprocessor/output"),)
     allowed_http_hosts: tuple[str, ...] = ()
     allowed_http_cidrs: tuple[str, ...] = ()
     max_input_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
@@ -135,18 +116,6 @@ class MarkdownCleaningWorkerSettings(BaseModel):
     @model_validator(mode="after")
     def _normalize_and_validate_limits(self) -> Self:
         self.staging_root = self.staging_root.resolve(strict=False)
-        self.output_roots = tuple(
-            sorted({path.resolve(strict=False) for path in self.output_roots}, key=str)
-        )
-        if not self.output_roots:
-            raise ValueError("至少配置一个 Markdown 清洗输出根目录")
-        for output_root in self.output_roots:
-            if (
-                self.staging_root == output_root
-                or self.staging_root in output_root.parents
-                or output_root in self.staging_root.parents
-            ):
-                raise ValueError("Markdown 清洗 staging 与输出根目录不能重叠")
         if self.processing_hard_timeout_seconds <= self.processing_soft_timeout_seconds:
             raise ValueError(
                 "Markdown 清洗 worker 的硬超时必须大于软超时"
@@ -176,7 +145,6 @@ class MarkdownCleaningWorkerSettings(BaseModel):
 
 class GlobalDeduplicationWorkerSettings(BaseModel):
     staging_root: Path = Path("/data/textprocessor/global-deduplication")
-    output_roots: tuple[Path, ...] = (Path("/data/textprocessor/output"),)
     max_documents: int = Field(default=100_000, gt=0)
     max_manifest_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
     max_document_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
@@ -212,21 +180,6 @@ class GlobalDeduplicationWorkerSettings(BaseModel):
         ):
             raise ValueError("最大轮询间隔不能小于初始轮询间隔")
         self.staging_root = self.staging_root.resolve(strict=False)
-        self.output_roots = tuple(
-            sorted(
-                {path.resolve(strict=False) for path in self.output_roots},
-                key=str,
-            )
-        )
-        if not self.output_roots:
-            raise ValueError("至少配置一个全局去重输出根目录")
-        if any(
-            self.staging_root == root
-            or self.staging_root in root.parents
-            or root in self.staging_root.parents
-            for root in self.output_roots
-        ):
-            raise ValueError("全局去重 staging 与输出根目录不能重叠")
         return self
 
 
@@ -263,18 +216,13 @@ class Settings(BaseSettings):
     POSTGRES_USER: str
     POSTGRES_PASSWORD: str = ""
     POSTGRES_DB: str = ""
-    EXTRACTION_INPUT_ROOTS: list[Path] = []
-    EXTRACTION_OUTPUT_ROOTS: list[Path] = []
     EXTRACTION_HTTP_ALLOWED_HOSTS: list[str] = []
     EXTRACTION_HTTP_ALLOWED_CIDRS: list[str] = []
     EXTRACTION_MAX_INPUT_BYTES: int = 100 * 1024 * 1024
     EXTRACTION_QUEUE_RECOVERY_AFTER_SECONDS: int = 60
     EXTRACTION_QUEUE_RECOVERY_INTERVAL_SECONDS: int = 30
-    GLOBAL_DEDUP_INPUT_ROOTS: list[Path] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS: list[str] = []
     GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS: list[str] = []
-    MARKDOWN_CLEANING_INPUT_ROOTS: list[Path] = []
-    MARKDOWN_CLEANING_OUTPUT_ROOTS: list[Path] = []
     MARKDOWN_CLEANING_HTTP_ALLOWED_HOSTS: list[str] = []
     MARKDOWN_CLEANING_HTTP_ALLOWED_CIDRS: list[str] = []
     MARKDOWN_CLEANING_WORKER: MarkdownCleaningWorkerSettings = Field(
@@ -288,7 +236,6 @@ class Settings(BaseSettings):
         default_factory=GlobalDeduplicationWorkerSettings
     )
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
-    CLASSIFICATION_INPUT_ROOTS: list[Path] = []
     CLASSIFICATION_STAGING_ROOT: Path = Path("/data/textprocessor/classification")
     CLASSIFICATION_MAX_INPUT_BYTES: int = Field(default=2_000_000, gt=0)
     CLASSIFICATION_BASE_URL: str = "http://classification:8000"
@@ -355,36 +302,5 @@ class Settings(BaseSettings):
         )
 
         return self
-
-    @model_validator(mode="after")
-    def _validate_extraction_roots(self) -> Self:
-        input_roots = {
-            path.resolve(strict=False) for path in self.EXTRACTION_INPUT_ROOTS
-        }
-        output_roots = {
-            path.resolve(strict=False) for path in self.EXTRACTION_OUTPUT_ROOTS
-        }
-        if input_roots & output_roots:
-            raise ValueError("结构化提取输入根目录和输出根目录不能重叠")
-        self.EXTRACTION_INPUT_ROOTS = sorted(input_roots, key=str)
-        self.EXTRACTION_OUTPUT_ROOTS = sorted(output_roots, key=str)
-        global_input_roots = {
-            path.resolve(strict=False) for path in self.GLOBAL_DEDUP_INPUT_ROOTS
-        }
-        if global_input_roots & set(self.GLOBAL_DEDUP_WORKER.output_roots):
-            raise ValueError("全局去重输入根目录和输出根目录不能重叠")
-        self.GLOBAL_DEDUP_INPUT_ROOTS = sorted(global_input_roots, key=str)
-        markdown_input_roots = {
-            path.resolve(strict=False) for path in self.MARKDOWN_CLEANING_INPUT_ROOTS
-        }
-        markdown_output_roots = {
-            path.resolve(strict=False) for path in self.MARKDOWN_CLEANING_OUTPUT_ROOTS
-        }
-        if markdown_input_roots & markdown_output_roots:
-            raise ValueError("Markdown 清洗输入根目录和输出根目录不能重叠")
-        self.MARKDOWN_CLEANING_INPUT_ROOTS = sorted(markdown_input_roots, key=str)
-        self.MARKDOWN_CLEANING_OUTPUT_ROOTS = sorted(markdown_output_roots, key=str)
-        return self
-
 
 settings = Settings()  # type: ignore

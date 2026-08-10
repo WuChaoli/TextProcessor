@@ -136,8 +136,6 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - EXTRACTION_INPUT_ROOTS=["/data/textprocessor/input"]
-      - EXTRACTION_OUTPUT_ROOTS=["/data/textprocessor/output"]
       - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling:5001}
       - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
       - SENTRY_DSN=${SENTRY_DSN}
@@ -197,15 +195,12 @@ services:
       - POSTGRES_USER=${POSTGRES_USER?Variable not set}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD?Variable not set}
       - CELERY_BROKER_URL=redis://redis:6379/0
-      - EXTRACTION_INPUT_ROOTS=["/data/textprocessor/input"]
-      - EXTRACTION_OUTPUT_ROOTS=["/data/textprocessor/output"]
       - EXTRACTION_WORKER__DOCLING_BASE_URL=${EXTRACTION_DOCLING_BASE_URL-http://docling:5001}
       - EXTRACTION_WORKER__DOCLING_API_KEY=${EXTRACTION_DOCLING_API_KEY-}
       - GLOBAL_DEDUP_WORKER__DATAJUICER_BASE_URL=http://datajuicer:8000
       - CLASSIFICATION_BASE_URL=http://classification:8000
       - CLASSIFICATION_API_TOKEN=${CLASSIFICATION_INTERNAL_SERVICE_TOKEN?Variable not set}
       - CLASSIFICATION_STAGING_ROOT=/data/textprocessor/classification
-      - CLASSIFICATION_INPUT_ROOTS=["/data/textprocessor/input"]
     volumes:
       - celery-beat-data:/var/lib/celery
       - classification-staging:/data/textprocessor/classification

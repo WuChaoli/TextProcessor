@@ -42,8 +42,6 @@ router = APIRouter(
 
 def get_global_deduplication_policy() -> GlobalDeduplicationRequestPolicy:
     return GlobalDeduplicationRequestPolicy(
-        input_roots=settings.GLOBAL_DEDUP_INPUT_ROOTS,
-        output_roots=settings.GLOBAL_DEDUP_WORKER.output_roots,
         allowed_http_hosts=settings.GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS,
         allowed_http_cidrs=settings.GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS,
         allowed_s3_buckets=settings.GLOBAL_DEDUP_WORKER.s3_allowed_buckets,

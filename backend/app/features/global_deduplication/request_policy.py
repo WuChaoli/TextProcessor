@@ -43,8 +43,8 @@ class GlobalDeduplicationRequestPolicy:
     def __init__(
         self,
         *,
-        input_roots: Sequence[Path],
-        output_roots: Sequence[Path],
+        input_roots: Sequence[Path] = (),
+        output_roots: Sequence[Path] = (),
         allowed_http_hosts: Sequence[str],
         allowed_http_cidrs: Sequence[str],
         allowed_s3_buckets: Sequence[str] = (),

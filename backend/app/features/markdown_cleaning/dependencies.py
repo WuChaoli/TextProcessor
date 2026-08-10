@@ -60,7 +60,6 @@ def build_orchestrator(
         resolver=cast(
             Any,
             InputResolver(
-                input_roots=settings.MARKDOWN_CLEANING_INPUT_ROOTS,
                 allowed_http_hosts=worker.allowed_http_hosts,
                 allowed_http_cidrs=worker.allowed_http_cidrs,
                 max_input_bytes=worker.max_input_bytes,
@@ -83,7 +82,6 @@ def build_orchestrator(
         ),
         output_validator=cast(Any, MarkdownCleaningOutputValidator()),
         publisher=MarkdownCleaningResultPublisher(
-            output_roots=worker.output_roots,
             max_output_bytes=worker.max_output_bytes,
             copy_chunk_bytes=worker.copy_chunk_bytes,
         ),
@@ -106,7 +104,6 @@ def build_recovery(
         repository=cast(Any, MarkdownCleaningTaskRepository(session)),
         dispatcher=CeleryMarkdownCleaningTaskDispatcher(),
         publisher=MarkdownCleaningResultPublisher(
-            output_roots=worker.output_roots,
             max_output_bytes=worker.max_output_bytes,
             copy_chunk_bytes=worker.copy_chunk_bytes,
         ),

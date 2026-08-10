@@ -1,7 +1,6 @@
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import Path
 
 import httpx
 from celery import Task  # type: ignore[import-untyped]
@@ -149,16 +148,12 @@ def build_orchestrator(
     *,
     http_client: httpx.Client,
     worker_settings: GlobalDeduplicationWorkerSettings | None = None,
-    input_roots: tuple[Path, ...] | None = None,
     scheduler: GlobalDeduplicationScheduler | None = None,
 ) -> GlobalDeduplicationOrchestrator:
     configured = worker_settings or settings.GLOBAL_DEDUP_WORKER
     if configured.datajuicer_base_url is None:
         raise RuntimeError("未配置 Data-Juicer 服务地址")
-    roots = input_roots or tuple(settings.GLOBAL_DEDUP_INPUT_ROOTS)
     policy = GlobalDeduplicationRequestPolicy(
-        input_roots=roots,
-        output_roots=configured.output_roots,
         allowed_http_hosts=settings.GLOBAL_DEDUP_HTTP_ALLOWED_HOSTS,
         allowed_http_cidrs=settings.GLOBAL_DEDUP_HTTP_ALLOWED_CIDRS,
         allowed_s3_buckets=configured.s3_allowed_buckets,
@@ -167,7 +162,6 @@ def build_orchestrator(
     return GlobalDeduplicationOrchestrator(
         repository=GlobalDeduplicationTaskRepository(session),
         reader=BoundedUriReader(
-            input_roots=roots,
             chunk_bytes=configured.copy_chunk_bytes,
             remote_url_validator=policy.validate_input,
             http_client=http_client,

@@ -7,6 +7,13 @@
 Docling 以容器运行，只绑定回环地址或经批准的内网地址。真实凭据只写入生产运行时
 环境文件，不写入 Git、命令行参数或验收报告。
 
+本地输入和输出不使用应用层 roots allowlist。API 与 Task Runner 必须以同一专用非 root
+账号运行，由文件权限、ACL 以及 systemd 的 `ProtectSystem`、`ProtectHome`、
+`ReadOnlyPaths`、`ReadWritePaths`、`InaccessiblePaths` 决定可访问范围。发布前必须同时
+验证受控业务目录可读写、敏感目录不可访问；不得通过改为 root 或放宽整个文件系统解决
+单个业务目录的权限问题。旧的 `*_INPUT_ROOTS`、`*_OUTPUT_ROOTS` 环境变量应从生产环境
+文件删除，避免形成无效配置的安全错觉。
+
 ## 当前运行清单与启停入口
 
 以下为 2026-08-07 在 `star-SYS-4029GP-TRT`（137）的已验证快照。服务器项目根目录为

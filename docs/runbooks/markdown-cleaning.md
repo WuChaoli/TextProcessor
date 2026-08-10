@@ -38,7 +38,7 @@ pwsh -NoProfile -File scripts/verify-markdown-cleaning-stack.ps1 -TimeoutSeconds
 
 ## 配置说明
 
-脚本为子进程设置独立的 `POSTGRES_*`、`CELERY_BROKER_URL`、`SECRET_KEY`、`FIRST_SUPERUSER*`、`MARKDOWN_CLEANING_INPUT_ROOTS`、`MARKDOWN_CLEANING_OUTPUT_ROOTS` 与 `MARKDOWN_CLEANING_WORKER`。输入、输出和 staging 根互不重叠；输出只允许位于本次 output root。恢复验收将 lease 设为 5 秒、beat recovery interval 设为 1 秒，仅用于缩短本地验收时间，不是生产容量建议。
+脚本为子进程设置独立的 `POSTGRES_*`、`CELERY_BROKER_URL`、`SECRET_KEY`、`FIRST_SUPERUSER*` 与 `MARKDOWN_CLEANING_WORKER`。本地输入和输出不使用应用层 roots allowlist，由子进程运行账号对临时目录的实际权限决定；staging 仍由服务端配置独立控制。恢复验收将 lease 设为 5 秒、beat recovery interval 设为 1 秒，仅用于缩短本地验收时间，不是生产容量建议。
 
 ## 排障
 
@@ -64,4 +64,4 @@ docker rm -f "tp-md-stack-<runId>-db" "tp-md-stack-<runId>-redis"
 
 ## 安全边界
 
-测试凭据和 secret 每次随机生成，只用于临时数据库。请求不会扩大文件、网络或凭据权限；URI allowlist 仍由生产配置校验。脚本不允许任意公网 URL，不覆盖已有目标，不记录原始文档正文，不把 staging 或宿主内部路径作为 API 业务结果。
+测试凭据和 secret 每次随机生成，只用于临时数据库。HTTP/S3 URI allowlist 仍由生产配置校验；本地路径权限由运行账号决定。脚本不允许任意公网 URL，不覆盖已有目标，不记录原始文档正文，不把 staging 或宿主内部路径作为 API 业务结果。

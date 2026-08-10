@@ -17,7 +17,7 @@
 ## 输入、输出与存储
 
 - 使用 `fsspec` 统一访问输入和输出。首版支持受控的 `file://`、局域网 `http(s)://` 与 MinIO `s3://`；其他协议需单独设计和授权。
-- 所有 URI 必须通过服务端配置的协议、根路径、host/CIDR、bucket、大小和超时 allowlist。调用方不得通过请求扩大文件系统、网络或凭据权限，URI 中不得携带凭据。
+- 本地绝对路径由 API/worker 运行账号的 OS 权限、ACL 与 systemd sandbox 决定，不设置应用层 roots allowlist；HTTP/S3 URI 仍须通过协议、host/CIDR、bucket、大小和超时 allowlist。调用方不得通过请求扩大文件系统、网络或凭据权限，URI 中不得携带凭据。
 - `http(s)` 输入只读；本地文件与 MinIO 可作为生产输出。请求可指定经过校验的 `output_uri`。
 - 后台任务使用按 task ID 隔离的内部 staging；`manifest.json` 只在非终态期间用于恢复，任务进入终态后清理，不发布到调用方输出目录。
 - 临时输出与最终输出分离；只有结果校验成功后才原子发布调用方指定的结果文件，避免消费者读取半成品。默认不覆盖已有目标文件。

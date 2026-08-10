@@ -19,6 +19,11 @@ from app.features.structured_extraction.worker_models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """worker 配置单测不依赖 PostgreSQL。"""
+
+
 def test_mineru_profile_requires_markdown_without_images() -> None:
     with pytest.raises(ValidationError):
         MinerUProfile(
@@ -37,32 +42,20 @@ def test_docling_profile_only_produces_markdown_placeholders_without_ocr() -> No
         )
 
 
-def test_processor_roots_must_not_overlap(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError):
-        ExtractionWorkerSettings(
-            staging_root=tmp_path,
-            output_roots=(tmp_path,),
-        )
-
-
-def test_worker_settings_normalize_roots_and_require_positive_limits(
+def test_worker_settings_normalize_staging_and_require_positive_limits(
     tmp_path: Path,
 ) -> None:
     staging_root = tmp_path / "staging"
-    output_root = tmp_path / "output"
-
     configured = ExtractionWorkerSettings(
         staging_root=staging_root,
-        output_roots=(output_root,),
         production_formats=("text", "json"),
     )
 
     assert configured.staging_root == staging_root.resolve()
-    assert configured.output_roots == (output_root.resolve(),)
+    assert "output_roots" not in configured.__class__.model_fields
     with pytest.raises(ValidationError):
         ExtractionWorkerSettings(
             staging_root=staging_root,
-            output_roots=(output_root,),
             copy_chunk_bytes=0,
         )
 
@@ -73,7 +66,6 @@ def test_docx_visual_complexity_threshold_cannot_be_negative(
     with pytest.raises(ValidationError):
         ExtractionWorkerSettings(
             staging_root=tmp_path / "staging",
-            output_roots=(tmp_path / "output",),
             docx_visual_complexity_threshold=-1,
         )
 

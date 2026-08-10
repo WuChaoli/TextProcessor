@@ -53,7 +53,7 @@ class MarkdownCleaningResultPublisher:
     def __init__(
         self,
         *,
-        output_roots: tuple[Path, ...],
+        output_roots: tuple[Path, ...] = (),
         max_output_bytes: int | None = None,
         copy_chunk_bytes: int = 1024 * 1024,
     ) -> None:

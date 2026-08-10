@@ -210,7 +210,7 @@ class InputResolver:
     def __init__(
         self,
         *,
-        input_roots: Sequence[Path],
+        input_roots: Sequence[Path] = (),
         allowed_http_hosts: Sequence[str],
         allowed_http_cidrs: Sequence[str],
         max_input_bytes: int,

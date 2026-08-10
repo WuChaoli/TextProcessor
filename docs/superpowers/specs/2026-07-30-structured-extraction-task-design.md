@@ -212,9 +212,9 @@ updated_at
 
 - POST 和 GET 均使用服务端身份认证。
 - GET 同时匹配 `taskId + callerId`。任务不存在和无权访问统一返回 `404`，避免任务枚举。
-- `fileStoragePath` 必须是规范化后的绝对路径，且位于配置的输入根目录 allowlist 内。
+- `fileStoragePath` 必须是规范化后的绝对路径；自 2026-08-10 起，本地访问边界改由运行账号 OS 权限与 systemd sandbox 决定，不再使用应用层 roots allowlist。
 - 拒绝 `..`、符号链接逃逸和不受控设备路径。
-- `targetPath` 必须位于配置的输出根目录 allowlist 内。首版禁止输入根目录和输出根目录重叠。
+- `targetPath` 必须是已有父目录下的绝对路径，且不得覆盖已有文件；其访问能力由运行账号权限决定。
 - `fileOssUrl` 作为受控只读 URI 处理。禁止 URL 内嵌凭据、重定向逃出 allowlist、访问 loopback、link-local、云元数据地址或任意未授权公网地址。
 - 服务端统一限制协议、host/CIDR、端口、输入大小、下载时长、重定向次数和 worker 处理时限。
 - 请求不能携带或扩大服务端文件、网络、OSS 或其他存储凭据权限。
