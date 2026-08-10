@@ -146,14 +146,14 @@ EXTRACTION_WORKER__PRODUCTION_FORMATS=["text","markdown","json","xml","yaml","cs
 - MinerU：复杂视觉 DOCX。
 
 每项记录 task ID、最终状态、detected format、processor、路由理由、耗时、重试、
-结果摘要、内容断言和 manifest。PNG/JPG 必须是独立任务；DOCX 必须覆盖两个路由。
+结果摘要和内容断言。PNG/JPG 必须是独立任务；DOCX 必须覆盖两个路由。
 报告不复制完整正文。测试失败保持格式开放，只报告失败阶段和建议，由用户决定是否
 收紧。
 
-每个 `targetPath` 所在目录只承载一个结构化提取任务。成功发布后包含目标 Markdown
-和同目录 `manifest.json`；manifest 记录 task、输入/输出摘要、格式、processor、
-profile、路由理由和发布路径。Markdown 与 manifest 分别通过同目录独占临时文件原子
-发布，恢复时只接受摘要完全一致的已有文件。Docling 提交必须显式携带输入格式及正确
+每个任务在内部 staging 中使用独立 `manifest.json`，该文件只服务于非终态恢复，进入
+终态后清理且不发布到 `targetPath` 所在目录。成功时只原子发布目标 Markdown；同一目录
+可承载不同 `targetPath`，只有目标文件本身已存在且摘要不符合本任务恢复条件时才冲突。
+恢复时只接受摘要完全一致的已有文件。Docling 提交必须显式携带输入格式及正确
 MIME；EPUB 使用 `application/epub+zip`，且验收 EPUB 的 `mimetype` 必须是 ZIP 中
 首个、不压缩的条目。
 
