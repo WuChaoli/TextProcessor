@@ -1,6 +1,8 @@
+import errno
 import hashlib
 import json
 import os
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -163,6 +165,14 @@ class FinalResultPublisher:
                         GlobalDeduplicationErrorCode.OUTPUT_CONFLICT,
                         "目标结果文件已存在",
                     ) from None
+            except OSError as error:
+                if error.errno != errno.EXDEV:
+                    raise
+                self._publish_cross_device(
+                    prepared,
+                    local_target,
+                    allow_recovery=allow_recovery,
+                )
             return PublishedFinalResult(
                 path=str(local_target),
                 sha256=prepared.sha256,
@@ -180,6 +190,40 @@ class FinalResultPublisher:
                 GlobalDeduplicationErrorCode.OUTPUT_WRITE_FAILED,
                 "最终结果发布失败",
             ) from None
+
+    @staticmethod
+    def _publish_cross_device(
+        prepared: PreparedFinalResult,
+        target: Path,
+        *,
+        allow_recovery: bool,
+    ) -> None:
+        part = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+        try:
+            descriptor = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with (
+                os.fdopen(descriptor, "wb") as output,
+                prepared.path.open("rb") as source,
+            ):
+                while chunk := source.read(1024 * 1024):
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            if _sha256(part) != prepared.sha256:
+                raise _output_error(
+                    GlobalDeduplicationErrorCode.OUTPUT_INTEGRITY_FAILED,
+                    "跨文件系统临时结果摘要不一致",
+                )
+            try:
+                os.link(part, target)
+            except FileExistsError:
+                if not allow_recovery or _sha256(target) != prepared.sha256:
+                    raise _output_error(
+                        GlobalDeduplicationErrorCode.OUTPUT_CONFLICT,
+                        "目标结果文件已存在",
+                    ) from None
+        finally:
+            part.unlink(missing_ok=True)
 
     def _publish_s3(
         self,
