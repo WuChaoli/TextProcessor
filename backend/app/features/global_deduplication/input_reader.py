@@ -8,6 +8,7 @@ from urllib.parse import SplitResult, unquote, urljoin, urlsplit
 import fsspec  # type: ignore[import-untyped]
 import httpx
 
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.global_deduplication.errors import (
     GlobalDeduplicationErrorCode,
     GlobalDeduplicationProcessingError,
@@ -113,41 +114,28 @@ class BoundedLocalReader:
         *,
         input_roots: tuple[Path, ...],
         chunk_bytes: int,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
-        if not input_roots or chunk_bytes <= 0:
-            raise ValueError("本地输入根目录和读取块大小必须有效")
-        self._input_roots = tuple(
-            root.resolve(strict=False) for root in input_roots
-        )
+        if chunk_bytes <= 0:
+            raise ValueError("读取块大小必须有效")
+        del input_roots
+        self._local_paths = local_paths or LocalPathAccessPolicy()
         self._chunk_bytes = chunk_bytes
 
     def read(self, path: str | Path, *, max_bytes: int) -> bytes:
         if max_bytes <= 0:
             raise ValueError("读取大小限制必须为正数")
-        normalized = Path(path).resolve(strict=False)
-        if not any(
-            normalized == root or root in normalized.parents
-            for root in self._input_roots
-        ):
-            raise _input_error(
-                GlobalDeduplicationErrorCode.DOCUMENT_PATH_NOT_ALLOWED,
-                "文档路径不在允许范围内",
-            )
-        if not normalized.is_file():
-            raise _input_error(
-                GlobalDeduplicationErrorCode.DOCUMENT_NOT_FOUND,
-                "文档不存在",
-            )
         try:
-            if normalized.stat().st_size > max_bytes:
-                raise _input_error(
-                    GlobalDeduplicationErrorCode.DOCUMENT_TOO_LARGE,
-                    "文档超过大小限制",
-                )
-            with normalized.open("rb") as source:
+            normalized = self._local_paths.preflight_input(str(path))
+            with self._local_paths.open_regular_input(normalized) as source:
                 return self._read_bounded(source, max_bytes)
         except GlobalDeduplicationProcessingError:
             raise
+        except LocalPathAccessError:
+            raise _input_error(
+                GlobalDeduplicationErrorCode.DOCUMENT_READ_FAILED,
+                "文档读取失败",
+            ) from None
         except OSError:
             raise _input_error(
                 GlobalDeduplicationErrorCode.DOCUMENT_READ_FAILED,
@@ -214,12 +202,14 @@ class BoundedUriReader:
         max_http_redirects: int = 3,
         allowed_s3_buckets: tuple[str, ...] = (),
         s3_storage_options: Mapping[str, object] | None = None,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
         if max_http_redirects < 0:
             raise ValueError("HTTP 重定向次数不能为负数")
         self._local = BoundedLocalReader(
             input_roots=input_roots,
             chunk_bytes=chunk_bytes,
+            local_paths=local_paths,
         )
         self._chunk_bytes = chunk_bytes
         self._remote_url_validator = remote_url_validator

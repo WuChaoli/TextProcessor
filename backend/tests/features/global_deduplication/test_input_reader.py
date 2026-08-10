@@ -17,6 +17,11 @@ from app.features.global_deduplication.input_reader import (
 from app.features.global_deduplication.models import DocumentReference
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """输入读取单测不依赖 PostgreSQL。"""
+
+
 def assert_error_code(
     error: pytest.ExceptionInfo[GlobalDeduplicationProcessingError],
     code: GlobalDeduplicationErrorCode,
@@ -107,7 +112,7 @@ def test_document_normalization_rejects_format_and_encoding() -> None:
     )
 
 
-def test_local_reader_enforces_root_and_byte_limit(tmp_path: Path) -> None:
+def test_local_reader_uses_runtime_access_and_enforces_byte_limit(tmp_path: Path) -> None:
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     document = allowed / "a.txt"
@@ -122,12 +127,7 @@ def test_local_reader_enforces_root_and_byte_limit(tmp_path: Path) -> None:
 
     outside = tmp_path / "outside.txt"
     outside.write_text("x", encoding="utf-8")
-    with pytest.raises(GlobalDeduplicationProcessingError) as path_error:
-        reader.read(outside, max_bytes=10)
-    assert_error_code(
-        path_error,
-        GlobalDeduplicationErrorCode.DOCUMENT_PATH_NOT_ALLOWED,
-    )
+    assert reader.read(outside, max_bytes=10) == b"x"
 
 
 def test_document_loading_enforces_batch_limit(tmp_path: Path) -> None:

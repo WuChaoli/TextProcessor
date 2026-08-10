@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.global_deduplication.api_errors import (
     GlobalDeduplicationApiErrorCode,
     GlobalDeduplicationDomainError,
@@ -48,9 +49,10 @@ class GlobalDeduplicationRequestPolicy:
         allowed_http_cidrs: Sequence[str],
         allowed_s3_buckets: Sequence[str] = (),
         resolver: AddressResolver = _system_resolver,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
-        self._input_roots = tuple(root.resolve(strict=False) for root in input_roots)
-        self._output_roots = tuple(root.resolve(strict=False) for root in output_roots)
+        del input_roots, output_roots
+        self._local_paths = local_paths or LocalPathAccessPolicy()
         self._allowed_http_hosts = frozenset(
             host.rstrip(".").lower() for host in allowed_http_hosts
         )
@@ -78,23 +80,13 @@ class GlobalDeduplicationRequestPolicy:
             return self._validate_s3(value, output=False)
         if parsed.scheme.lower() == "file":
             value = parsed.path
-        path = Path(value)
         try:
-            resolved = path.resolve(strict=True)
-        except OSError, RuntimeError:
+            resolved = self._local_paths.preflight_input(value)
+        except LocalPathAccessError:
             raise self._error(
-                GlobalDeduplicationApiErrorCode.INPUT_PATH_NOT_ALLOWED,
+                GlobalDeduplicationApiErrorCode.INPUT_ACCESS_FAILED,
                 "输入清单不存在或不可访问",
             ) from None
-        if (
-            not path.is_absolute()
-            or not resolved.is_file()
-            or not any(resolved.is_relative_to(root) for root in self._input_roots)
-        ):
-            raise self._error(
-                GlobalDeduplicationApiErrorCode.INPUT_PATH_NOT_ALLOWED,
-                "输入清单不在允许目录内",
-            )
         return str(resolved)
 
     def validate_output(self, value: str) -> str:
@@ -110,23 +102,20 @@ class GlobalDeduplicationRequestPolicy:
                 GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED,
                 "目标路径协议未获授权",
             )
-        path = Path(value)
         try:
-            resolved = path.resolve(strict=False)
-        except OSError, RuntimeError:
+            resolved = self._local_paths.preflight_output(
+                value, suffixes=frozenset({".json"})
+            )
+        except LocalPathAccessError as error:
+            code = (
+                GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED
+                if error.reason in {"not_absolute", "unsupported_suffix"}
+                else GlobalDeduplicationApiErrorCode.OUTPUT_ACCESS_FAILED
+            )
             raise self._error(
-                GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED,
+                code,
                 "目标路径不可用",
             ) from None
-        if (
-            not path.is_absolute()
-            or resolved.suffix.lower() != ".json"
-            or not any(resolved.is_relative_to(root) for root in self._output_roots)
-        ):
-            raise self._error(
-                GlobalDeduplicationApiErrorCode.OUTPUT_PATH_NOT_ALLOWED,
-                "目标路径必须是允许目录内的绝对 JSON 文件路径",
-            )
         return str(resolved)
 
     def _validate_s3(self, value: str, *, output: bool) -> str:

@@ -9,6 +9,7 @@ from urllib.parse import SplitResult, urlsplit
 
 import fsspec  # type: ignore[import-untyped]
 
+from app.core.local_path_policy import LocalPathAccessError, LocalPathAccessPolicy
 from app.features.global_deduplication.errors import (
     GlobalDeduplicationErrorCode,
     GlobalDeduplicationProcessingError,
@@ -52,9 +53,11 @@ class FinalResultPublisher:
         *,
         allowed_s3_buckets: tuple[str, ...] = (),
         s3_storage_options: Mapping[str, object] | None = None,
+        local_paths: LocalPathAccessPolicy | None = None,
     ) -> None:
         self._allowed_s3_buckets = frozenset(allowed_s3_buckets)
         self._s3_storage_options = dict(s3_storage_options or {})
+        self._local_paths = local_paths or LocalPathAccessPolicy()
 
     def exists(self, target: str | Path) -> bool:
         parsed = urlsplit(str(target))
@@ -149,7 +152,9 @@ class FinalResultPublisher:
                     GlobalDeduplicationErrorCode.OUTPUT_INTEGRITY_FAILED,
                     "prepared 输出摘要不一致",
                 )
-            local_target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            local_target = self._local_paths.preflight_output(
+                str(local_target), suffixes=frozenset({".json"})
+            )
             try:
                 os.link(prepared.path, local_target)
             except FileExistsError:
@@ -165,6 +170,11 @@ class FinalResultPublisher:
             )
         except GlobalDeduplicationProcessingError:
             raise
+        except LocalPathAccessError:
+            raise _output_error(
+                GlobalDeduplicationErrorCode.OUTPUT_WRITE_FAILED,
+                "最终结果发布失败",
+            ) from None
         except OSError:
             raise _output_error(
                 GlobalDeduplicationErrorCode.OUTPUT_WRITE_FAILED,
