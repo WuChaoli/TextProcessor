@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -59,6 +60,7 @@ _TERMINAL_STATUSES = frozenset(
         ExtractionTaskStatus.CANCELLED,
     }
 )
+logger = logging.getLogger(__name__)
 
 
 def is_retryable_processor_http_error(error: ExtractionProcessingError) -> bool:
@@ -282,6 +284,11 @@ class ExtractionOrchestrator:
                 self._repository.rollback()
         recovered += self._reconcile_orphaned_slots()
         recovered += self._reap_quarantined_slots(current_time)
+        for task in self._repository.list_terminal_with_staging(
+            limit=self._settings.recovery_batch_size
+        ):
+            if self._cleanup_terminal_staging(task):
+                recovered += 1
         return recovered
 
     def fail_exhausted_submission_retry(
@@ -381,7 +388,6 @@ class ExtractionOrchestrator:
             source = self._resolver.resolve(running, layout).path
             artifact = self._text_processor.process(source, layout.output)
             self._publish_artifact(running, artifact, layout, allow_recovery=False)
-            layout.cleanup()
         except ExtractionProcessingError as error:
             self._fail_running(running, error)
         except Exception:
@@ -517,7 +523,6 @@ class ExtractionOrchestrator:
             self._publish_artifact(
                 task, normalized_artifact, layout, allow_recovery=True
             )
-            layout.cleanup()
         except ExtractionProcessingError as error:
             if is_retryable_processor_http_error(error):
                 self._schedule_poll_retry(task, now)
@@ -543,14 +548,7 @@ class ExtractionOrchestrator:
     ) -> None:
         self._repository.update_running(task.id, processing_phase="publishing")
         prepared = self._publisher.prepare(artifact.markdown_path)
-        published = self._publisher.publish(
-            prepared,
-            Path(task.target_path),
-            allow_recovery=allow_recovery,
-        )
-        manifest_path = Path(task.target_path).parent / "manifest.json"
-        manifest_staging_path = layout.output.parent / "manifest.json"
-        manifest_staging_path.write_text(
+        layout.manifest.write_text(
             json.dumps(
                 {
                     "schemaVersion": 1,
@@ -559,8 +557,8 @@ class ExtractionOrchestrator:
                     "inputSha256": task.input_sha256,
                     "output": {
                         "path": task.target_path,
-                        "sha256": published.sha256,
-                        "sizeBytes": published.size_bytes,
+                        "sha256": prepared.sha256,
+                        "sizeBytes": prepared.size_bytes,
                     },
                     "processor": {
                         "name": artifact.processor_name.value,
@@ -569,10 +567,7 @@ class ExtractionOrchestrator:
                         "profileSha256": artifact.profile_sha256,
                     },
                     "routing": {"reasons": task.routing_reasons or []},
-                    "publication": {
-                        "atomicFilePublish": True,
-                        "manifestPath": str(manifest_path),
-                    },
+                    "publication": {"atomicFilePublish": True},
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -582,13 +577,12 @@ class ExtractionOrchestrator:
             encoding="utf-8",
             newline="",
         )
-        prepared_manifest = self._publisher.prepare(manifest_staging_path)
-        published_manifest = self._publisher.publish_manifest(
-            prepared_manifest,
-            manifest_path,
+        published = self._publisher.publish(
+            prepared,
+            Path(task.target_path),
             allow_recovery=allow_recovery,
         )
-        self._repository.transition(
+        completed = self._repository.transition(
             task.id,
             expected=ExtractionTaskStatus.RUNNING,
             target=ExtractionTaskStatus.SUCCEEDED,
@@ -606,11 +600,9 @@ class ExtractionOrchestrator:
             result_metadata={
                 "target_path": task.target_path,
                 "output_size_bytes": published.size_bytes,
-                "manifest_path": str(manifest_path),
-                "manifest_sha256": published_manifest.sha256,
-                "manifest_size_bytes": published_manifest.size_bytes,
             },
         )
+        self._cleanup_terminal_staging(completed)
 
     def _schedule_next_poll(self, task: ExtractionTask, now: datetime) -> None:
         if not self._repository.update_running(
@@ -664,7 +656,7 @@ class ExtractionOrchestrator:
         error: ExtractionProcessingError,
     ) -> None:
         try:
-            self._repository.transition(
+            failed = self._repository.transition(
                 task.id,
                 expected=ExtractionTaskStatus.QUEUED,
                 target=ExtractionTaskStatus.FAILED,
@@ -676,6 +668,7 @@ class ExtractionOrchestrator:
             )
         except ConditionalTransitionFailed:
             return
+        self._cleanup_terminal_staging(failed)
 
     def _fail_running(
         self,
@@ -686,7 +679,7 @@ class ExtractionOrchestrator:
         quarantine_slot: bool = False,
     ) -> None:
         try:
-            self._repository.transition(
+            failed = self._repository.transition(
                 task.id,
                 expected=ExtractionTaskStatus.RUNNING,
                 target=ExtractionTaskStatus.FAILED,
@@ -700,10 +693,29 @@ class ExtractionOrchestrator:
             )
         except ConditionalTransitionFailed:
             return
+        self._cleanup_terminal_staging(failed)
         if quarantine_slot:
             self._slots.quarantine(task.id)
         elif release_slot:
             self._slots.release(task.id)
+
+    def _cleanup_terminal_staging(self, task: ExtractionTask) -> bool:
+        if task.status not in _TERMINAL_STATUSES or task.staging_path is None:
+            return False
+        layout = StagingLayout.for_task(self._settings.staging_root, task.id)
+        if Path(task.staging_path).resolve(strict=False) != layout.root:
+            logger.warning("拒绝清理不匹配的任务 staging", extra={"task_id": str(task.id)})
+            return False
+        try:
+            layout.cleanup()
+        except (OSError, ValueError):
+            logger.warning(
+                "清理结构化提取任务 staging 失败",
+                extra={"task_id": str(task.id)},
+                exc_info=True,
+            )
+            return False
+        return self._repository.clear_terminal_staging(task.id)
 
     def _reconcile_orphaned_slots(self) -> int:
         slots = list(

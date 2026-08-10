@@ -20,6 +20,11 @@ from app.features.structured_extraction.repository import (
 from app.models import User  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """repository 单测使用各用例自己的 SQLite session。"""
+
+
 @pytest.fixture
 def session() -> Session:
     engine = create_engine(
@@ -65,6 +70,30 @@ def test_different_caller_can_reuse_session_and_file(session: Session) -> None:
     session.add(make_task(caller_id=uuid.uuid4()))
 
     session.commit()
+
+
+def test_terminal_staging_queries_and_clears_only_terminal_tasks(
+    session: Session,
+) -> None:
+    succeeded = make_task(file_id="succeeded")
+    succeeded.status = ExtractionTaskStatus.SUCCEEDED
+    succeeded.staging_path = "/staging/succeeded"
+    running = make_task(file_id="running")
+    running.status = ExtractionTaskStatus.RUNNING
+    running.staging_path = "/staging/running"
+    session.add_all((succeeded, running))
+    session.commit()
+    repository = ExtractionTaskRepository(session)
+
+    terminal = repository.list_terminal_with_staging(limit=10)
+
+    assert [task.id for task in terminal] == [succeeded.id]
+    assert repository.clear_terminal_staging(succeeded.id) is True
+    assert repository.clear_terminal_staging(running.id) is False
+    session.refresh(succeeded)
+    session.refresh(running)
+    assert succeeded.staging_path is None
+    assert running.staging_path == "/staging/running"
 
 
 def test_create_or_get_returns_existing_for_same_parameters(session: Session) -> None:
