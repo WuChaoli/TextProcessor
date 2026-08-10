@@ -10,6 +10,11 @@ from app.features.text_classification.input_preparer import ClassificationInputP
 from app.features.text_classification.schemas import ClassificationTaskCreate
 
 
+@pytest.fixture(autouse=True)
+def db() -> None:
+    """契约单测不依赖 PostgreSQL。"""
+
+
 def test_create_contract_uses_input_uri_and_camel_case() -> None:
     request = ClassificationTaskCreate.model_validate(
         {"sessionId": "session-1", "fileId": "file-1", "inputUri": "file:///input/a.txt"}
@@ -27,7 +32,6 @@ def test_preparer_copies_to_task_scoped_staging(tmp_path: Path) -> None:
     staging_root = tmp_path / "staging"
     preparer = ClassificationInputPreparer(
         staging_root=staging_root,
-        input_roots=(source_root,),
         max_input_bytes=1024,
     )
 
@@ -41,17 +45,18 @@ def test_preparer_copies_to_task_scoped_staging(tmp_path: Path) -> None:
     assert repeated == prepared
 
 
-def test_preparer_rejects_local_path_outside_allowlist(tmp_path: Path) -> None:
+def test_preparer_accepts_accessible_local_path_without_roots(tmp_path: Path) -> None:
     source = tmp_path / "secret.txt"
     source.write_text("secret", encoding="utf-8")
     preparer = ClassificationInputPreparer(
         staging_root=tmp_path / "staging",
-        input_roots=(tmp_path / "allowed",),
         max_input_bytes=1024,
     )
 
-    with pytest.raises(ValueError, match="not allowed"):
-        preparer.prepare("task-1", source.as_uri())
+    prepared = preparer.prepare("task-1", source.as_uri())
+
+    staged = Path(url2pathname(urlsplit(prepared.local_uri).path))
+    assert staged.read_text(encoding="utf-8") == "secret"
 
 
 def test_adapter_sends_only_internal_uri_contract() -> None:
