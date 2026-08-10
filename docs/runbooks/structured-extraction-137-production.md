@@ -7,12 +7,16 @@
 Docling 以容器运行，只绑定回环地址或经批准的内网地址。真实凭据只写入生产运行时
 环境文件，不写入 Git、命令行参数或验收报告。
 
-本地输入和输出不使用应用层 roots allowlist。API 与 Task Runner 必须以同一专用非 root
-账号运行，由文件权限、ACL 以及 systemd 的 `ProtectSystem`、`ProtectHome`、
-`ReadOnlyPaths`、`ReadWritePaths`、`InaccessiblePaths` 决定可访问范围。发布前必须同时
-验证受控业务目录可读写、敏感目录不可访问；不得通过改为 root 或放宽整个文件系统解决
-单个业务目录的权限问题。旧的 `*_INPUT_ROOTS`、`*_OUTPUT_ROOTS` 环境变量应从生产环境
-文件删除，避免形成无效配置的安全错觉。
+本地输入和输出不使用应用层 roots allowlist。根据 2026-08-10 的最新生产决策，四个
+TextProcessor systemd unit 以 `root` 运行，不配置 `ReadOnlyPaths`、`ReadWritePaths`、
+`ProtectSystem`、`ProtectHome`、`InaccessiblePaths` 或 `NoNewPrivileges`，以允许调用方
+使用宿主机上的全局可读写本地路径。不得在后续部署模板或 unit 更新中静默恢复这些访问
+收缩项。旧的 `*_INPUT_ROOTS`、`*_OUTPUT_ROOTS` 环境变量应从生产环境文件删除，避免形成
+无效配置的安全错觉。
+
+该配置意味着 API 和 worker 拥有宿主机 root 文件访问能力，属于明确接受的生产风险；
+调用方身份认证、路径必须为绝对路径、普通文件检查、格式和大小限制、输出冲突及原子发布
+规则仍然生效。
 
 ## 当前运行清单与启停入口
 
@@ -66,7 +70,8 @@ systemctl start textprocessor-classification-worker.service
 systemctl start textprocessor-markdown-worker.service
 ```
 
-启动后必须执行状态检查，确认四个 unit 为 `active (running)`、Docling 为 `healthy`，
+启动后必须执行状态检查，确认四个 unit 为 `active (running)` 且主进程用户为 `root`、
+Docling 为 `healthy`，
 MinerU 与 Docling 健康请求成功。MinerU 默认不在这组命令内；仅在明确确认其独立部署
 边界并获得对应授权后，才单独执行 `docker start mineru-api`。
 
