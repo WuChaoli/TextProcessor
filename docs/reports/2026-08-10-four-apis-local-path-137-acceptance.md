@@ -7,9 +7,9 @@ Markdown 清洗、全局去重、文本分类四个接口的本地路径访问�
 到达 `succeeded`；结构化提取、Markdown 清洗和全局去重的目标产物真实存在，文本分类
 返回真实分类结果。
 
-本地 roots allowlist 未拦截任何一次请求。不过验收同时发现：全局去重当前通过硬链接
-发布本地结果，staging 与 `targetPath` 位于不同文件系统时会以 `OUTPUT_WRITE_FAILED`
-失败。因此“本地路径访问已开放”成立，但全局去重输出尚不能无条件跨文件系统发布。
+本地 roots allowlist 未拦截任何一次请求。首次验收发现全局去重直接通过硬链接发布本地
+结果，staging 与 `targetPath` 位于不同文件系统时会以 `OUTPUT_WRITE_FAILED` 失败；该
+问题已于同日修复并在 137 重新验收通过，详见“跨文件系统发布修复验收”。
 
 ## 成功验收结果
 
@@ -42,8 +42,23 @@ Markdown 清洗、全局去重、文本分类四个接口的本地路径访问�
 位于不同文件系统时，Linux 硬链接不能完成发布。目标改到与 staging 同文件系统的
 `/shineData/text_processor/runtime/...` 后成功。
 
-该问题应作为全局去重 publisher 的跨文件系统发布缺陷处理，不能通过重新增加 roots
-allowlist、提升为 root 或扩大 systemd 文件权限解决。
+该问题属于全局去重 publisher 的跨文件系统发布缺陷，不能通过重新增加 roots allowlist、
+提升权限或扩大 systemd 文件权限解决。
+
+## 跨文件系统发布修复验收
+
+修复后，全局去重在直接硬链接返回 `EXDEV` 时，改为先把结果复制到目标目录的唯一私有
+临时文件，完成 `fsync` 和摘要校验后，再在目标文件系统内部以不覆盖方式原子发布，并在
+所有路径清理临时文件。
+
+- 输入清单：`/data/shineData/hub/txt/111114-input.json`；
+- staging 文件系统：`/dev/sda1`；目标文件系统：`/dev/nvme0n1p2`；
+- 目标：`/data/shineData/hub/txt/111115.json`；
+- task ID：`019fea64-868d-7126-94de-f5c3334313a1`；
+- 终态：`succeeded`，2/2 文档完成，产物 198 bytes；
+- 产物 SHA-256：`bc649ab2211d5fadd31ceaae95fbfbefc79d614a5ae5e5f0ccdf3a09e7568cd1`；
+- 发布后无 `.111115.json.*.part` 残留；
+- 验收结束后已删除输出 `111115.json`，输入清单保持存在。
 
 ## 验收数据位置
 
