@@ -398,9 +398,9 @@ class GlobalDeduplicationOrchestrator:
         )
         business_result = map_business_result(task.id, mapping, decisions)
         batch_root = Path(task.input_path)
-        original_root = batch_root / "original"
+        extraction_root = batch_root / "extraction"
         duplicate_root = batch_root / "duplicate"
-        if not original_root.is_dir() or not duplicate_root.is_dir():
+        if not extraction_root.is_dir() or not duplicate_root.is_dir():
             raise self._internal_error()
         records: list[dict[str, object]] = [
             {
@@ -414,7 +414,7 @@ class GlobalDeduplicationOrchestrator:
         ]
         move_manifest = self._staging.load_or_create_move_manifest(
             layout,
-            original_root=original_root,
+            extraction_root=extraction_root,
             duplicate_root=duplicate_root,
             records=records,
         )
@@ -446,7 +446,7 @@ class GlobalDeduplicationOrchestrator:
             ):
                 raise self._internal_error()
             source = Path(source_path).resolve(strict=False)
-            if original_root not in source.parents:
+            if extraction_root not in source.parents:
                 raise self._internal_error()
             failure = move_file(
                 source,

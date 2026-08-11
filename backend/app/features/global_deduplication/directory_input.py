@@ -23,23 +23,23 @@ class ScannedDocument:
 @dataclass(frozen=True, slots=True)
 class ScannedBatch:
     root: Path
-    original_root: Path
+    extraction_root: Path
     duplicate_root: Path
     documents: tuple[ScannedDocument, ...]
 
 
 def scan_batch(batch_path: Path) -> ScannedBatch:
     root = batch_path.resolve(strict=True)
-    original = root / "original"
+    extraction = root / "extraction"
     duplicate = root / "duplicate"
     try:
-        if not root.is_dir() or not original.is_dir() or not duplicate.is_dir():
+        if not root.is_dir() or not extraction.is_dir() or not duplicate.is_dir():
             raise OSError
         documents = tuple(
             sorted(
                 (
-                    ScannedDocument(path.relative_to(original), path)
-                    for path in original.rglob("*")
+                    ScannedDocument(path.relative_to(extraction), path)
+                    for path in extraction.rglob("*")
                     if _is_supported_regular_file(path)
                 ),
                 key=lambda item: item.relative_path.as_posix(),
@@ -55,7 +55,7 @@ def scan_batch(batch_path: Path) -> ScannedBatch:
             GlobalDeduplicationErrorCode.EMPTY_DOCUMENT_LIST,
             "输入目录中没有可处理文档",
         )
-    return ScannedBatch(root, original, duplicate, documents)
+    return ScannedBatch(root, extraction, duplicate, documents)
 
 
 def load_scanned_documents(

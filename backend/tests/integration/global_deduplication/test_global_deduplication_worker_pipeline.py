@@ -53,17 +53,21 @@ def test_worker_pipeline_uses_postgres_and_redis_containers(
     tmp_path: Path,
 ) -> None:
     batch_root = tmp_path / "batch"
+    extraction_root = batch_root / "extraction"
     original_root = batch_root / "original"
     duplicate_root = batch_root / "duplicate"
     staging_root = tmp_path / "staging"
+    extraction_root.mkdir(parents=True)
     original_root.mkdir(parents=True)
     duplicate_root.mkdir()
-    first = original_root / "one.md"
-    second = original_root / "two.txt"
-    skipped = original_root / "ignored.pdf"
+    first = extraction_root / "one.md"
+    second = extraction_root / "two.txt"
+    skipped = extraction_root / "ignored.pdf"
+    original = original_root / "unscanned.txt"
     first.write_text("same content", encoding="utf-8")
     second.write_text("same content", encoding="utf-8")
     skipped.write_bytes(b"not a supported document")
+    original.write_text("do not scan or move", encoding="utf-8")
     caller_id = uuid.uuid7()
     task_id = uuid.uuid7()
     job_id = uuid.uuid7()
@@ -189,3 +193,4 @@ def test_worker_pipeline_uses_postgres_and_redis_containers(
     assert not second.exists()
     assert (duplicate_root / "two.txt").read_text(encoding="utf-8") == "same content"
     assert skipped.exists()
+    assert original.read_text(encoding="utf-8") == "do not scan or move"

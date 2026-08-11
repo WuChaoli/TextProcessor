@@ -179,7 +179,7 @@ class GlobalDeduplicationStaging:
         self,
         layout: GlobalDeduplicationStagingLayout,
         *,
-        original_root: Path,
+        extraction_root: Path,
         duplicate_root: Path,
         records: list[dict[str, object]],
     ) -> dict[str, object]:
@@ -200,7 +200,7 @@ class GlobalDeduplicationStaging:
         value: dict[str, object] = {
             "schemaVersion": 1,
             "taskId": str(layout.task_id),
-            "originalRoot": str(original_root),
+            "extractionRoot": str(extraction_root),
             "duplicateRoot": str(duplicate_root),
             "records": records,
         }

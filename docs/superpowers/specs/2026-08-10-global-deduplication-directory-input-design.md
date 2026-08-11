@@ -2,7 +2,7 @@
 
 ## 目标与范围
 
-将现有全局去重的“JSON 清单输入、JSON 结果输出”契约升级为“本地批次目录输入、重复文件迁移”契约。调用方提交一个本地批次目录；worker 从其中的 `original/` 读取文本文件，沿用现有全局近似去重处理器和代表文件选择规则，将被判定为重复的文件迁入 `duplicate/`，并在 `original/` 保留唯一文件。
+将现有全局去重的“JSON 清单输入、JSON 结果输出”契约升级为“本地批次目录输入、重复文件迁移”契约。调用方提交一个本地批次目录；worker 只从其中的 `extraction/` 读取文本文件，沿用现有全局近似去重处理器和代表文件选择规则，将被判定为重复的文件迁入 `duplicate/`，并在 `extraction/` 保留唯一文件。`original/` 不属于全局去重的扫描或迁移范围。
 
 本变更只升级现有 `global-deduplication` 能力，不新增平行接口，也不兼容旧 JSON 清单输入或 JSON 结果文件。FastAPI、PostgreSQL、Redis、Celery、认证、任务状态机、现有去重处理器和异步 POST/GET 交互模式继续复用。
 
@@ -25,7 +25,7 @@ POST 请求体改为：
 ```
 
 - `inputPath` 是本地绝对目录或等价的 `file://` URI；不再接受 HTTP、S3 或 JSON 清单文件。
-- 批次目录必须已有直接子目录 `original/` 与 `duplicate/`。目录不存在、不可访问或二者重叠时，任务失败。
+- 批次目录必须已有直接子目录 `extraction/` 与 `duplicate/`。目录不存在、不可访问或二者重叠时，任务失败；`original/` 不参与此目录契约。
 - 幂等键仍为 `(callerId, sessionId)`，请求指纹由规范化后的 `inputPath` 生成；同一键但目录不同返回 `409 IDEMPOTENCY_CONFLICT`。
 - 数据库将保存批次根目录，不保存扫描清单、文件正文或对外 JSON 结果。
 - 旧请求字段 `inputJsonPath`、`targetPath` 由 API schema 拒绝，不保留兼容分支。
@@ -43,11 +43,11 @@ GET 的成功 `result` 改为任务摘要，不再返回 `targetPath`：
 }
 ```
 
-`relativePath` 相对 `original/`，不得返回宿主机绝对路径。`moveFailures` 只表示单文件迁移问题；扫描、去重完成后，任务仍为 `succeeded`。
+`relativePath` 相对 `extraction/`，不得返回宿主机绝对路径。`moveFailures` 只表示单文件迁移问题；扫描、去重完成后，任务仍为 `succeeded`。
 
 ## 扫描与去重
 
-worker 递归枚举 `original/`，以稳定的相对路径顺序构造内部输入。标准目录布局是扁平的，但递归扫描保留对异常子目录布局的容忍性。
+worker 递归枚举 `extraction/`，以稳定的相对路径顺序构造内部输入。标准目录布局是扁平的，但递归扫描保留对异常子目录布局的容忍性；不扫描 `original/`。
 
 - 仅常规 `.md`、`.txt` 与 `.json` 文件参与处理。
 - 其他文件类型静默跳过：不进入总数、去重处理或失败列表。
@@ -55,15 +55,15 @@ worker 递归枚举 `original/`，以稳定的相对路径顺序构造内部输�
 - 无法读取、超出资源限制或不符合目录契约属于任务级失败，不启动文件迁移。
 - 内部继续使用 staging 将扫描结果适配成既有处理器输入；处理器的近似去重、重复组和 `keep` 决策不改变。
 
-处理器的 `keep=true` 文件留在 `original/`；只有 `keep=false` 文件进入迁移流程。
+处理器的 `keep=true` 文件留在 `extraction/`；只有 `keep=false` 文件进入迁移流程。
 
 ## 扁平迁移与乐观成功
 
-每个重复文件的目标固定为 `duplicate/<文件名>`，不保留来源子目录结构。例如 `original/a/report.txt` 的目标是 `duplicate/report.txt`。
+每个重复文件的目标固定为 `duplicate/<文件名>`，不保留来源子目录结构。例如 `extraction/a/report.txt` 的目标是 `duplicate/report.txt`。
 
 - 优先使用同文件系统的原子 rename。
 - 若因跨设备无法 rename，则执行“复制到目标临时文件、校验、原子落位、删除源文件”的回退流程。
-- 目标同名文件已存在时不得覆盖或改名：源文件保留在 `original/`，记录 `OUTPUT_CONFLICT`，然后继续其他文件。
+- 目标同名文件已存在时不得覆盖或改名：源文件保留在 `extraction/`，记录 `OUTPUT_CONFLICT`，然后继续其他文件。
 - 其他迁移错误同样保留源文件，记录 `MOVE_FAILED`，然后继续。
 - 成功移动的文件保留在 `duplicate/`；本任务不要求批次级回滚。
 
@@ -89,7 +89,7 @@ worker 递归枚举 `original/`，以稳定的相对路径顺序构造内部输�
 至少覆盖以下场景：
 
 - 新 POST/GET schema、旧 JSON 字段拒绝、幂等和调用方隔离。
-- `original/`、`duplicate/` 目录契约，以及递归扫描、稳定排序和符号链接不跟随。
+- `extraction/`、`duplicate/` 目录契约，以及递归扫描、稳定排序和符号链接不跟随；`original/` 不被扫描或迁移。
 - `.md/.txt/.json` 处理与其他类型静默跳过。
 - 保留唯一文件、扁平移动重复文件、既有同名目标冲突与不覆盖。
 - 跨设备迁移回退、单文件移动失败后的乐观成功及安全失败摘要。
