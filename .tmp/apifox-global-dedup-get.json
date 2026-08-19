@@ -1,0 +1,78 @@
+{
+  "description": "根据任务 ID 查询全局去重任务状态、进度和目录迁移汇总。成功结果只返回相对路径，不返回原始文件内容或宿主机绝对路径。",
+  "responses": [
+    {
+      "id": "108656765",
+      "name": "成功",
+      "code": 200,
+      "contentType": "json",
+      "jsonSchema": {
+        "type": "object",
+        "required": ["taskId", "sessionId", "status", "createdAt", "startedAt", "finishedAt", "progress", "result", "error"],
+        "properties": {
+          "taskId": {"type": "string", "format": "uuid", "description": "任务 ID"},
+          "sessionId": {"type": "string", "description": "调用方会话标识"},
+          "status": {"type": "string", "description": "任务状态"},
+          "createdAt": {"type": "string", "format": "date-time"},
+          "startedAt": {"type": ["string", "null"], "format": "date-time"},
+          "finishedAt": {"type": ["string", "null"], "format": "date-time"},
+          "progress": {
+            "type": "object",
+            "required": ["phase", "total", "processed", "percent"],
+            "properties": {
+              "phase": {"type": ["string", "null"]},
+              "total": {"type": ["integer", "null"]},
+              "processed": {"type": "integer"},
+              "percent": {"type": "integer"}
+            }
+          },
+          "result": {
+            "type": ["object", "null"],
+            "description": "仅在 succeeded 时返回。",
+            "properties": {
+              "totalFiles": {"type": "integer", "minimum": 0, "description": "参与去重的支持文件数"},
+              "uniqueFiles": {"type": "integer", "minimum": 0, "description": "保留在 original 的唯一文件数"},
+              "movedDuplicates": {"type": "integer", "minimum": 0, "description": "已移动到 duplicate 的重复文件数"},
+              "moveFailures": {
+                "type": "array",
+                "description": "单文件迁移失败列表；任务仍可成功。",
+                "items": {
+                  "type": "object",
+                  "required": ["relativePath", "code"],
+                  "properties": {
+                    "relativePath": {"type": "string", "description": "original 下的相对路径"},
+                    "code": {"type": "string", "description": "稳定失败码，例如 OUTPUT_CONFLICT"}
+                  }
+                }
+              }
+            }
+          },
+          "error": {
+            "type": ["object", "null"],
+            "properties": {
+              "code": {"type": "string"},
+              "message": {"type": "string"}
+            }
+          }
+        }
+      },
+      "itemSchema": {},
+      "description": "任务状态与去重目录迁移结果。",
+      "mediaType": "application/json",
+      "headers": [],
+      "oasExtensions": "{}"
+    },
+    {
+      "id": "174736050",
+      "name": "参数错误",
+      "code": 422,
+      "contentType": "json",
+      "jsonSchema": {"$ref": "#/definitions/301952134"},
+      "itemSchema": {},
+      "description": "任务 ID 格式不正确。",
+      "mediaType": "application/json",
+      "headers": [],
+      "oasExtensions": "{}"
+    }
+  ]
+}

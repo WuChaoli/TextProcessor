@@ -148,6 +148,17 @@ def test_table_pipe_normalization_only_in_table(
     )
 
 
+def test_real_formatter_table_delimiter_width_change_is_accepted() -> None:
+    markdown = "| 项目 | 很长的检测结果说明 |\n| --- | :---: |\n| 氧气 | 正常 |\n"
+
+    result = MarkdownFormatterAdapter().format(markdown)
+
+    assert result.formatting_changes >= 1
+    assert _collect_visible_signature(markdown) == _collect_visible_signature(
+        result.text
+    )
+
+
 @pytest.mark.parametrize(
     ("prefix", "formatted_prefix"),
     [

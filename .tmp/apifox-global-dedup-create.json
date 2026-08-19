@@ -1,0 +1,64 @@
+{
+  "description": "提交本地批次目录的全局去重任务。inputPath 必须为本地绝对路径（或 file:// URI），目录直接包含 original 与 duplicate 子目录；仅处理 original 下的 .md、.txt、.json 文件。任务异步执行，重复文件会平铺移动到 duplicate；单文件移动失败记录在查询结果中，不使任务整体失败。",
+  "requestBody": {
+    "type": "application/json",
+    "jsonSchema": {
+      "type": "object",
+      "title": "GlobalDeduplicationTaskCreate",
+      "additionalProperties": false,
+      "required": ["sessionId", "inputPath"],
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "调用方幂等会话标识"
+        },
+        "inputPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "description": "本地批次目录路径；必须直接包含 original 与 duplicate 子目录"
+        }
+      }
+    },
+    "parameters": [],
+    "oasExtensions": "{}",
+    "required": true,
+    "additionalContentTypes": []
+  },
+  "responses": [
+    {
+      "id": "185987848",
+      "name": "成功",
+      "code": 202,
+      "contentType": "json",
+      "jsonSchema": {
+        "type": "object",
+        "required": ["taskId", "sessionId", "status"],
+        "properties": {
+          "taskId": {"type": "string", "format": "uuid", "description": "任务 ID"},
+          "sessionId": {"type": "string", "description": "调用方会话标识"},
+          "status": {"type": "string", "description": "初始任务状态"}
+        }
+      },
+      "itemSchema": {},
+      "description": "任务已受理，使用 taskId 查询执行结果。",
+      "mediaType": "application/json",
+      "headers": [],
+      "oasExtensions": "{}"
+    },
+    {
+      "id": "193274567",
+      "name": "参数错误",
+      "code": 422,
+      "contentType": "json",
+      "jsonSchema": {"$ref": "#/definitions/301952134"},
+      "itemSchema": {},
+      "description": "请求字段或批次目录不符合要求。",
+      "mediaType": "application/json",
+      "headers": [],
+      "oasExtensions": "{}"
+    }
+  ]
+}

@@ -1,0 +1,854 @@
+{
+  "description": "登录后依次创建并查询 Markdown 清洗、结构化提取、目录输入的全局去重和文本分类任务。POST 自动提取 taskId，GET 使用对应变量。",
+  "steps": [
+    {
+      "id": "dad3999e-1c39-4bae-be3a-bad629274650",
+      "type": "http",
+      "name": "正向-登录并提取 accessToken",
+      "number": 1,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959962,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365548,
+      "httpApiCase": {
+        "id": 401365548,
+        "path": "/api/v1/login/access-token",
+        "name": "正向-登录并提取 accessToken",
+        "type": "DEBUG_CASE",
+        "method": "post",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [
+            {
+              "id": "s1ErwGGwtU",
+              "relatedId": "s1ErwGGwtU",
+              "relatedName": "grant_type",
+              "name": "grant_type",
+              "value": "",
+              "enable": true,
+              "description": "",
+              "type": "other"
+            },
+            {
+              "id": "I0pAv09cAZ",
+              "relatedId": "I0pAv09cAZ",
+              "relatedName": "username",
+              "name": "username",
+              "value": "{{username}}",
+              "enable": true,
+              "description": "",
+              "type": "string"
+            },
+            {
+              "id": "fjxgEZMCOu",
+              "relatedId": "fjxgEZMCOu",
+              "relatedName": "password",
+              "name": "password",
+              "value": "{{password}}",
+              "enable": true,
+              "description": "",
+              "type": "string"
+            },
+            {
+              "id": "0Eb5e4GFMh",
+              "relatedId": "0Eb5e4GFMh",
+              "relatedName": "scope",
+              "name": "scope",
+              "value": "",
+              "enable": true,
+              "description": "",
+              "type": "string"
+            },
+            {
+              "id": "dlt0njarGT",
+              "relatedId": "dlt0njarGT",
+              "relatedName": "client_id",
+              "name": "client_id",
+              "value": "",
+              "enable": true,
+              "description": "",
+              "type": "other"
+            },
+            {
+              "id": "tRJIKVdZHS",
+              "relatedId": "tRJIKVdZHS",
+              "relatedName": "client_secret",
+              "name": "client_secret",
+              "value": "",
+              "enable": true,
+              "description": "",
+              "type": "other"
+            }
+          ],
+          "type": "application/x-www-form-urlencoded"
+        },
+        "apiDetailId": 497959962,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 200",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "200",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "extractor",
+            "data": {
+              "variableName": "accessToken",
+              "variableType": "environment",
+              "subject": "responseJson",
+              "expression": "$.access_token"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:12.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "bfe7e641-f4cc-4198-8b95-817e3c6e5605",
+      "type": "http",
+      "name": "正向-Markdown-创建任务",
+      "number": 2,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959963,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365556,
+      "httpApiCase": {
+        "id": 401365556,
+        "path": "/api/v1/markdown-cleaning/tasks",
+        "name": "正向-Markdown-创建任务",
+        "type": "DEBUG_CASE",
+        "method": "post",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "application/json",
+          "data": "{\n  \"sessionId\": \"apifox-markdown-{{$guid}}\",\n  \"fileId\": \"apifox-markdown-{{$guid}}\",\n  \"fileStoragePath\": \"{{markdownInputPath}}\",\n  \"fileOssUrl\": \"\",\n  \"targetPath\": \"{{markdownTargetPath}}\"\n}"
+        },
+        "apiDetailId": 497959963,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 202",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "202",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "extractor",
+            "data": {
+              "variableName": "markdownTaskId",
+              "variableType": "environment",
+              "subject": "responseJson",
+              "expression": "$.taskId"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:14.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "825a0c75-c8cd-4b47-b061-0db1e4d48533",
+      "type": "http",
+      "name": "正向-Markdown-查询任务",
+      "number": 3,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959964,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365659,
+      "httpApiCase": {
+        "id": 401365659,
+        "path": "/api/v1/markdown-cleaning/tasks/{task_id}",
+        "name": "正向-Markdown-查询任务",
+        "type": "DEBUG_CASE",
+        "method": "get",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [
+            {
+              "id": "task_id#0",
+              "relatedId": "task_id#0",
+              "name": "task_id",
+              "value": "{{markdownTaskId}}",
+              "enable": true,
+              "description": "",
+              "type": "string",
+              "schema": {
+                "type": "string",
+                "format": "uuid",
+                "title": "Task Id"
+              }
+            }
+          ],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "none",
+          "data": ""
+        },
+        "apiDetailId": 497959964,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 200",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "200",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "assertion",
+            "data": {
+              "name": "响应包含任务状态",
+              "subject": "responseJson",
+              "comparison": "exists",
+              "path": "$.status"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:16.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "0919e7dd-098d-4038-81f5-c4bcbacfab4f",
+      "type": "http",
+      "name": "正向-结构化提取-创建任务",
+      "number": 4,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959965,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365662,
+      "httpApiCase": {
+        "id": 401365662,
+        "path": "/api/v1/structured-extraction/tasks",
+        "name": "正向-结构化提取-创建任务",
+        "type": "DEBUG_CASE",
+        "method": "post",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "application/json",
+          "data": "{\n  \"sessionId\": \"apifox-structured-{{$guid}}\",\n  \"fileId\": \"apifox-structured-{{$guid}}\",\n  \"fileStoragePath\": \"{{structuredInputPath}}\",\n  \"fileOssUrl\": \"\",\n  \"targetPath\": \"{{structuredTargetPath}}\"\n}"
+        },
+        "apiDetailId": 497959965,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 202",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "202",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "extractor",
+            "data": {
+              "variableName": "structuredTaskId",
+              "variableType": "environment",
+              "subject": "responseJson",
+              "expression": "$.taskId"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:18.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "ad94612a-2787-4aa1-b190-64f92df9691c",
+      "type": "http",
+      "name": "正向-结构化提取-查询任务",
+      "number": 5,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959966,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365666,
+      "httpApiCase": {
+        "id": 401365666,
+        "path": "/api/v1/structured-extraction/tasks/{task_id}",
+        "name": "正向-结构化提取-查询任务",
+        "type": "DEBUG_CASE",
+        "method": "get",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [
+            {
+              "id": "task_id#0",
+              "relatedId": "task_id#0",
+              "name": "task_id",
+              "value": "{{structuredTaskId}}",
+              "enable": true,
+              "description": "",
+              "type": "string",
+              "schema": {
+                "type": "string",
+                "format": "uuid",
+                "title": "Task Id"
+              }
+            }
+          ],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "none",
+          "data": ""
+        },
+        "apiDetailId": 497959966,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 200",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "200",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "assertion",
+            "data": {
+              "name": "响应包含任务状态",
+              "subject": "responseJson",
+              "comparison": "exists",
+              "path": "$.status"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:20.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "1d3440f5-8ebe-4acc-87c1-3a7b4dddf40c",
+      "type": "http",
+      "name": "正向-全局去重-创建任务",
+      "number": 6,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959967,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365669,
+      "httpApiCase": {
+        "id": 401365669,
+        "path": "/api/v1/global-deduplication/tasks",
+        "name": "正向-全局去重-创建任务",
+        "type": "DEBUG_CASE",
+        "method": "post",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "application/json",
+          "data": "{\n  \"sessionId\": \"apifox-dedup-{{$guid}}\",\n  \"inputPath\": \"{{dedupBatchPath}}\"\n}"
+        },
+        "apiDetailId": 497959967,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 202",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "202",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "extractor",
+            "data": {
+              "variableName": "dedupTaskId",
+              "variableType": "environment",
+              "subject": "responseJson",
+              "expression": "$.taskId"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:21.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "0fcefd2f-12bc-48c2-b9f3-147381c7402f",
+      "type": "http",
+      "name": "正向-全局去重-查询任务",
+      "number": 7,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959968,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365671,
+      "httpApiCase": {
+        "id": 401365671,
+        "path": "/api/v1/global-deduplication/tasks/{task_id}",
+        "name": "正向-全局去重-查询任务",
+        "type": "DEBUG_CASE",
+        "method": "get",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [
+            {
+              "id": "task_id#0",
+              "relatedId": "task_id#0",
+              "name": "task_id",
+              "value": "{{dedupTaskId}}",
+              "enable": true,
+              "description": "",
+              "type": "string",
+              "schema": {
+                "type": "string",
+                "format": "uuid",
+                "title": "Task Id"
+              }
+            }
+          ],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "none",
+          "data": ""
+        },
+        "apiDetailId": 497959968,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 200",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "200",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "assertion",
+            "data": {
+              "name": "响应包含任务状态",
+              "subject": "responseJson",
+              "comparison": "exists",
+              "path": "$.status"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:23.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "5fa0647f-dbe9-4928-bfa8-e8387debdd05",
+      "type": "http",
+      "name": "正向-文本分类-创建任务",
+      "number": 8,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959969,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365672,
+      "httpApiCase": {
+        "id": 401365672,
+        "path": "/api/v1/text-classification/tasks",
+        "name": "正向-文本分类-创建任务",
+        "type": "DEBUG_CASE",
+        "method": "post",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "application/json",
+          "data": "{\n  \"sessionId\": \"apifox-classification-{{$guid}}\",\n  \"fileId\": \"apifox-classification-{{$guid}}\",\n  \"inputUri\": \"{{classificationInputUri}}\"\n}"
+        },
+        "apiDetailId": 497959969,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 202",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "202",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "extractor",
+            "data": {
+              "variableName": "classificationTaskId",
+              "variableType": "environment",
+              "subject": "responseJson",
+              "expression": "$.taskId"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:25.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    },
+    {
+      "id": "bff04d08-1543-42a0-a663-ae909388c4b6",
+      "type": "http",
+      "name": "正向-文本分类-查询任务",
+      "number": 9,
+      "disable": false,
+      "parameters": {},
+      "bindId": 497959970,
+      "bindType": "API",
+      "syncMode": "MANUAL",
+      "relatedId": 401365675,
+      "httpApiCase": {
+        "id": 401365675,
+        "path": "/api/v1/text-classification/tasks/{task_id}",
+        "name": "正向-文本分类-查询任务",
+        "type": "DEBUG_CASE",
+        "method": "get",
+        "testSuiteId": 8601238,
+        "categoryId": 12642922,
+        "ordering": 10,
+        "parameters": {
+          "path": [
+            {
+              "id": "task_id#0",
+              "relatedId": "task_id#0",
+              "name": "task_id",
+              "value": "{{classificationTaskId}}",
+              "enable": true,
+              "description": "",
+              "type": "string",
+              "schema": {
+                "type": "string",
+                "format": "uuid",
+                "title": "Task Id"
+              }
+            }
+          ],
+          "query": [],
+          "header": [],
+          "cookie": []
+        },
+        "commonParameters": {},
+        "requestBody": {
+          "parameters": [],
+          "type": "none",
+          "data": ""
+        },
+        "apiDetailId": 497959970,
+        "responseId": "0",
+        "projectId": 8681977,
+        "moduleId": 8338938,
+        "creatorId": 3353021,
+        "editorId": 3353021,
+        "preProcessors": [],
+        "postProcessors": [
+          {
+            "type": "assertion",
+            "data": {
+              "name": "HTTP 状态码为 200",
+              "subject": "httpCode",
+              "comparison": "equal",
+              "value": "200",
+              "path": ""
+            },
+            "defaultEnable": true,
+            "enable": true
+          },
+          {
+            "type": "assertion",
+            "data": {
+              "name": "响应包含任务状态",
+              "subject": "responseJson",
+              "comparison": "exists",
+              "path": "$.status"
+            },
+            "defaultEnable": true,
+            "enable": true
+          }
+        ],
+        "inheritPreProcessors": {},
+        "inheritPostProcessors": {},
+        "createdAt": "2026-08-06T06:55:27.000Z",
+        "updatedAt": "2026-08-06T07:12:18.000Z",
+        "auth": {},
+        "advancedSettings": {
+          "disabledSystemHeaders": {},
+          "timeout": 300000,
+          "followRedirect": true,
+          "SSLValidate": true
+        },
+        "options": {},
+        "inheritPreProcessorsSnapshot": null,
+        "inheritPostProcessorsSnapshot": null,
+        "securityScheme": {}
+      }
+    }
+  ]
+}

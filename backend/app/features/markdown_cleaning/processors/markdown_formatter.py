@@ -147,6 +147,11 @@ class MarkdownFormatterAdapter:
                 table_spans=table_spans,
                 base_offset=table_base_offset,
             )
+            normalized = MarkdownFormatterAdapter._normalize_table_delimiter_rows(
+                normalized,
+                table_spans=table_spans,
+                base_offset=table_base_offset,
+            )
 
         normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
         normalized = re.sub(r"\\\s*\n", " ", normalized)
@@ -211,6 +216,48 @@ class MarkdownFormatterAdapter:
                 output.append(" ")
             else:
                 output.append(char)
+
+        return "".join(output)
+
+    @staticmethod
+    def _normalize_table_delimiter_rows(
+        markdown: str,
+        table_spans: tuple[tuple[int, int], ...],
+        base_offset: int = 0,
+    ) -> str:
+        output: list[str] = []
+        offset = 0
+
+        for line in markdown.splitlines(keepends=True):
+            content = line.rstrip("\r\n")
+            line_ending = line[len(content) :]
+            absolute_start = base_offset + offset
+            absolute_end = absolute_start + len(content)
+            in_table = any(
+                absolute_start < table_end and absolute_end > table_start
+                for table_start, table_end in table_spans
+            )
+
+            delimiter_cells = re.findall(r":?-{1,}:?", content) if in_table else []
+            delimiter_only = bool(delimiter_cells) and re.fullmatch(
+                r"[\s:-]+",
+                content,
+            )
+            if delimiter_only:
+                alignments = []
+                for cell in delimiter_cells:
+                    if cell.startswith(":") and cell.endswith(":"):
+                        alignments.append("center")
+                    elif cell.startswith(":"):
+                        alignments.append("left")
+                    elif cell.endswith(":"):
+                        alignments.append("right")
+                    else:
+                        alignments.append("default")
+                content = " TABLE_DELIMITER:" + ",".join(alignments)
+
+            output.append(content + line_ending)
+            offset += len(line)
 
         return "".join(output)
 
